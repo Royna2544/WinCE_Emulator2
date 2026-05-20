@@ -1,0 +1,8 @@
+{
+  "name": "inavi-unicorn-emulator-v2",
+  "version-string": "0.1.0",
+  "dependencies": [
+    "unicorn",
+    "spdlog"
+  ]
+}

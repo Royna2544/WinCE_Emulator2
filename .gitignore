@@ -1,0 +1,18 @@
+# Build outputs
+x64/
+iNavi_Un.B62DB654/
+vcpkg_installed/
+
+# Runtime/generated diagnostics
+*.log
+frame_*.ppm
+fakece_*.ppm
+fakece_*.bmp
+*.ilk
+*.pdb
+*.obj
+*.tlog
+
+# User/IDE
+*.user
+.vs/
