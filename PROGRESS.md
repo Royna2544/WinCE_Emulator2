@@ -23,6 +23,6 @@
 
 ## Latest Verification
 
-- MSBuild succeeded after adding recursive DLL PE loading and eager DLL preload.
+- MSBuild succeeded after adding recursive DLL PE loading, eager DLL preload, and CLI-provided DLL search directories.
 - `git diff --check` passed.
-- Smoke run stopped after entering mapped SDK DLL code at `PC=0x5004f714`, not at the old import-stub page.
+- Smoke run with explicit SDK DLL directory arguments loaded 12 PE modules and stopped after entering mapped SDK DLL code at `PC=0x5004f714`, not at the old import-stub page.

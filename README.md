@@ -22,5 +22,5 @@ powershell.exe -NoProfile -Command "& 'C:\Program Files\Microsoft Visual Studio\
 Run smoke test:
 
 ```bash
-cmd.exe /C ".\x64\Debug\iNavi_Unicorn_Emulator.exe C:\Users\royna\Downloads\INAVI\INavi\INavi.exe \"C:\Program Files (x86)\Windows CE Tools\wce420\STANDARDSDK_420\Mfc\Lib\Mipsii\" \"C:\Program Files (x86)\Windows CE Tools\wce420\STANDARDSDK_420\Mfc\Lib\Mipsii\L.kor\" \"C:\Program Files (x86)\Windows CE Tools\wce420\STANDARDSDK_420\Atl\Lib\Mipsii\""
+powershell.exe -NoProfile -Command "& .\x64\Debug\iNavi_Unicorn_Emulator.exe 'C:\Users\royna\Downloads\INAVI\INavi\INavi.exe' 'C:\Program Files (x86)\Windows CE Tools\wce420\STANDARDSDK_420\Mfc\Lib\Mipsii' 'C:\Program Files (x86)\Windows CE Tools\wce420\STANDARDSDK_420\Mfc\Lib\Mipsii\L.kor' 'C:\Program Files (x86)\Windows CE Tools\wce420\STANDARDSDK_420\Atl\Lib\Mipsii'"
 ```
