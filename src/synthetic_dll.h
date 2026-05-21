@@ -2,11 +2,13 @@
 
 #include <unicorn/unicorn.h>
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <map>
 #include <optional>
 #include <string>
+#include <vector>
 
 struct SyntheticModule {
     std::string moduleName;
@@ -40,11 +42,20 @@ private:
         uint32_t ra{};
     };
     struct GuestHandle {
-        enum class Kind { HostFile, HostFind, HostEvent, HostMutex, Pseudo };
+        enum class Kind { HostFile, HostFind, HostWaveIn, HostEvent, HostMutex, Pseudo };
 
         Kind kind{Kind::Pseudo};
         uintptr_t hostValue{};
         uint32_t filePointer{};
+    };
+    struct GuestWindowClass {
+        std::array<uint8_t, 40> bytes{};
+        std::string name;
+        uint16_t atom{};
+    };
+    struct HostWaveBuffer {
+        std::vector<uint8_t> data;
+        std::array<uint8_t, 64> header{};
     };
 
     uc_engine* uc_{};
@@ -63,6 +74,9 @@ private:
     std::map<uint32_t, uint32_t> tlsValues_;
     std::map<uint32_t, uint32_t> syntheticHandleValues_;
     std::map<uint32_t, GuestHandle> guestHandles_;
+    std::map<std::string, GuestWindowClass> windowClassesByName_;
+    std::map<uint16_t, std::string> windowClassNamesByAtom_;
+    std::map<uint32_t, HostWaveBuffer> hostWaveBuffers_;
     std::map<std::string, uint16_t> atomsByName_;
     std::map<uint16_t, std::string> atomNames_;
 
