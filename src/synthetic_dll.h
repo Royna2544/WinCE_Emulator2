@@ -63,6 +63,7 @@ private:
             HostBitmap,
             HostSocket,
             HostComInterface,
+            GuestFileMapping,
             GuestPropertySheetPage,
             GuestHeap,
             GuestResource,
@@ -153,6 +154,17 @@ private:
         uint16_t language{};
         std::vector<uint8_t> data;
     };
+    struct GuestFileMapping {
+        uint32_t fileHandle{};
+        uint64_t size{};
+        uint32_t protect{};
+        std::string name;
+    };
+    struct GuestMappedView {
+        uint32_t mappingHandle{};
+        uint64_t offset{};
+        uint32_t size{};
+    };
 
     uc_engine* uc_{};
     uint32_t nextModuleBase_ = 0x70000000;
@@ -191,6 +203,8 @@ private:
     std::map<uint32_t, std::string> fileHandleDebugNames_;
     std::map<uint32_t, uint32_t> fileReadCounts_;
     std::map<uint32_t, uint32_t> fileSeekCounts_;
+    std::map<uint32_t, GuestFileMapping> fileMappings_;
+    std::map<uint32_t, GuestMappedView> mappedViews_;
     std::deque<GuestMessage> guestMessages_;
     std::vector<uintptr_t> retainedHostWindows_;
     std::vector<ResourceEntry> mainResources_;
@@ -220,6 +234,14 @@ private:
     uint32_t handleWaveInGetID(uint32_t waveInHandle, uint32_t deviceIdPtr);
     uint32_t handleWaveInBuffer(const std::string& name, uint32_t waveInHandle, uint32_t headerPtr);
     uint32_t handleSystemParametersInfoW(uint32_t action, uint32_t uiParam, uint32_t pvParam, uint32_t flags);
+    uint32_t handleLoadCursorW(uint32_t instance, uint32_t cursorName);
+    uint32_t handleGetSysColorBrush(uint32_t colorIndex);
+    uint32_t handleGetDeviceCaps(uint32_t dc, uint32_t index);
+    uint32_t handleWideCharToMultiByte(uint32_t codePage, uint32_t flags, uint32_t widePtr, uint32_t wideChars);
+    uint32_t handleCreateFileMappingW(uint32_t fileHandle, uint32_t security, uint32_t protect, uint32_t sizeHigh);
+    uint32_t handleMapViewOfFile(uint32_t mappingHandle, uint32_t desiredAccess, uint32_t offsetHigh, uint32_t offsetLow);
+    uint32_t handleUnmapViewOfFile(uint32_t baseAddress);
+    uint32_t handleFlushViewOfFile(uint32_t baseAddress, uint32_t bytesToFlush);
 
     uint32_t makeGuestHandle(GuestHandle handle);
     GuestHandle* lookupGuestHandle(uint32_t guestHandle);

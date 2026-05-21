@@ -654,6 +654,7 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x00C0, "IsDBCSLeadByteEx");
     registerExport(module, 0x00C1, "iswctype");
     registerExport(module, 0x00C4, "MultiByteToWideChar");
+    registerExport(module, 0x00C5, "WideCharToMultiByte");
     registerExport(module, 0x00E5, "_wcsnicmp");
     registerExport(module, 0x00EA, "FormatMessageW");
     registerExport(module, 0x00F6, "CreateWindowExW");
@@ -712,10 +713,16 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x021A, "QueryPerformanceCounter");
     registerExport(module, 0x021B, "QueryPerformanceFrequency");
     registerExport(module, 0x021D, "OutputDebugStringW");
+    registerExport(module, 0x0224, "CreateFileMappingW");
+    registerExport(module, 0x0225, "MapViewOfFile");
+    registerExport(module, 0x0226, "UnmapViewOfFile");
+    registerExport(module, 0x0227, "FlushViewOfFile");
+    registerExport(module, 0x0228, "CreateFileForMapping");
     registerExport(module, 0x0229, "CloseHandle");
     registerExport(module, 0x022B, "CreateMutexW");
     registerExport(module, 0x022C, "ReleaseMutex");
     registerExport(module, 0x022D, "KernelIoControl");
+    registerExport(module, 0x0280, "GetProcessIndexFromID");
     registerExport(module, 0x02AA, "SetCursor");
     registerExport(module, 0x02AB, "LoadCursorW");
     registerExport(module, 0x02B4, "GetDlgItem");
@@ -772,6 +779,8 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x0448, "_snwprintf");
     registerExport(module, 0x0449, "swprintf");
     registerExport(module, 0x044B, "vswprintf");
+    registerExport(module, 0x044E, "printf");
+    registerExport(module, 0x046C, "_vsnwprintf");
     registerExport(module, 0x01C7, "RegCloseKey");
     registerExport(module, 0x01CD, "RegOpenKeyExW");
     registerExport(module, 0x01CF, "RegQueryValueExW");
@@ -984,6 +993,8 @@ uint32_t SyntheticDllRuntime::closeGuestHandle(uint32_t guestHandle) {
         fileHandleDebugNames_.erase(guestHandle);
         fileReadCounts_.erase(guestHandle);
         fileSeekCounts_.erase(guestHandle);
+    } else if (it->second.kind == GuestHandle::Kind::GuestFileMapping) {
+        fileMappings_.erase(guestHandle);
     }
     if (it->second.kind == GuestHandle::Kind::GuestHeap) {
         lastError_ = 6; // ERROR_INVALID_HANDLE; heaps are destroyed via HeapDestroy.
@@ -1861,6 +1872,236 @@ uint32_t SyntheticDllRuntime::handleSystemParametersInfoW(uint32_t action,
     return result;
 }
 
+uint32_t SyntheticDllRuntime::handleLoadCursorW(uint32_t, uint32_t cursorName) {
+#if defined(_WIN32)
+    HCURSOR cursor = nullptr;
+    if (cursorName && cursorName < 0x10000) cursor = ::LoadCursorW(nullptr, MAKEINTRESOURCEW(cursorName));
+    else cursor = ::LoadCursorW(nullptr, IDC_ARROW);
+    const uint32_t result = cursor
+        ? makeGuestHandle({GuestHandle::Kind::HostCursor, reinterpret_cast<uintptr_t>(cursor), 0})
+        : 0;
+    lastError_ = result ? 0 : GetLastError();
+    return result;
+#else
+    lastError_ = 0;
+    return makeGuestHandle({GuestHandle::Kind::HostCursor, 0, 0});
+#endif
+}
+
+uint32_t SyntheticDllRuntime::handleGetSysColorBrush(uint32_t colorIndex) {
+    const int index = int(colorIndex & 0xffu);
+#if defined(_WIN32)
+    return makeGuestBrush(uint32_t(GetSysColor(index)), true);
+#else
+    return makeGuestBrush(0x00ffffffu, true);
+#endif
+}
+
+uint32_t SyntheticDllRuntime::handleGetDeviceCaps(uint32_t, uint32_t index) {
+    switch (index) {
+    case 8: return 32; // BITSPIXEL
+    case 10: return 0xffffffffu; // NUMCOLORS
+    case 12:
+    case 14:
+        return 1;
+    case 88: return framebufferWidth_ > 0 ? uint32_t(framebufferWidth_) : 800;
+    case 90: return framebufferHeight_ > 0 ? uint32_t(framebufferHeight_) : 480;
+    default:
+#if defined(_WIN32)
+        HDC dc = ::GetDC(nullptr);
+        const uint32_t result = dc ? uint32_t(::GetDeviceCaps(dc, int(index))) : 0;
+        if (dc) ::ReleaseDC(nullptr, dc);
+        return result;
+#else
+        return 0;
+#endif
+    }
+}
+
+uint32_t SyntheticDllRuntime::handleWideCharToMultiByte(uint32_t codePageArg, uint32_t flags,
+                                                        uint32_t widePtr, uint32_t wideCharsArg) {
+    const uint32_t multiOut = stackArg(4);
+    const uint32_t multiCapacity = stackArg(5);
+    const int32_t wideChars = int32_t(wideCharsArg);
+    if (!widePtr) {
+        lastError_ = 87;
+        return 0;
+    }
+    std::vector<uint16_t> units;
+    if (wideChars < 0) {
+        for (uint32_t i = 0; i < 1024 * 1024; ++i) {
+            uint16_t ch = 0;
+            if (uc_mem_read(uc_, widePtr + i * 2, &ch, sizeof(ch)) != UC_ERR_OK) break;
+            units.push_back(ch);
+            if (!ch) break;
+        }
+    } else {
+        units.resize(uint32_t(wideChars));
+        if (!units.empty() &&
+            uc_mem_read(uc_, widePtr, units.data(), units.size() * sizeof(uint16_t)) != UC_ERR_OK) {
+            units.clear();
+        }
+    }
+#if defined(_WIN32)
+    const uint32_t codePage = guestAnsiCodePage(codePageArg);
+    const int inputChars = wideChars < 0 ? -1 : int(units.size());
+    const auto* wideData = reinterpret_cast<const wchar_t*>(units.data());
+    const int needed = units.empty()
+        ? 0
+        : ::WideCharToMultiByte(codePage, flags, wideData, inputChars, nullptr, 0, nullptr, nullptr);
+    if (!needed) {
+        lastError_ = GetLastError();
+        return 0;
+    }
+    if (!multiOut || !multiCapacity) {
+        lastError_ = 0;
+        return uint32_t(needed);
+    }
+    std::vector<char> bytes(static_cast<size_t>(multiCapacity));
+    const int written = ::WideCharToMultiByte(codePage, flags, wideData, inputChars,
+                                             bytes.data(), int(bytes.size()), nullptr, nullptr);
+    if (!written) {
+        lastError_ = GetLastError();
+        return 0;
+    }
+    uc_mem_write(uc_, multiOut, bytes.data(), size_t(written));
+    lastError_ = 0;
+    return uint32_t(written);
+#else
+    const std::string text = utf16ToUtf8(units);
+    if (multiOut && multiCapacity) {
+        const uint32_t count = std::min<uint32_t>(uint32_t(text.size()), multiCapacity);
+        if (count) uc_mem_write(uc_, multiOut, text.data(), count);
+        return count;
+    }
+    return uint32_t(text.size());
+#endif
+}
+
+uint32_t SyntheticDllRuntime::handleCreateFileMappingW(uint32_t fileHandle, uint32_t, uint32_t protect,
+                                                       uint32_t sizeHigh) {
+    const uint32_t sizeLow = stackArg(4);
+    const uint32_t namePtr = stackArg(5);
+    uint64_t mappingSize = (uint64_t(sizeHigh) << 32) | sizeLow;
+    if (fileHandle != 0xffffffffu) {
+        auto* file = lookupGuestHandle(fileHandle);
+        if (!file || file->kind != GuestHandle::Kind::HostFile || !file->hostValue) {
+            lastError_ = 6;
+            return 0;
+        }
+#if defined(_WIN32)
+        if (!mappingSize) {
+            LARGE_INTEGER size{};
+            if (GetFileSizeEx(reinterpret_cast<HANDLE>(file->hostValue), &size)) {
+                mappingSize = uint64_t(size.QuadPart);
+            }
+        }
+#endif
+    }
+    if (!mappingSize) {
+        lastError_ = 87;
+        return 0;
+    }
+    const uint32_t handle = makeGuestHandle({GuestHandle::Kind::GuestFileMapping, 0, 0});
+    fileMappings_[handle] = GuestFileMapping{fileHandle, mappingSize, protect, readUtf16(namePtr, 260)};
+    lastError_ = 0;
+    return handle;
+}
+
+uint32_t SyntheticDllRuntime::handleMapViewOfFile(uint32_t mappingHandle, uint32_t, uint32_t offsetHigh,
+                                                  uint32_t offsetLow) {
+    const uint32_t bytesToMap = stackArg(4);
+    auto mapping = fileMappings_.find(mappingHandle);
+    if (mapping == fileMappings_.end()) {
+        lastError_ = 6;
+        return 0;
+    }
+    const uint64_t offset = (uint64_t(offsetHigh) << 32) | offsetLow;
+    if (offset >= mapping->second.size) {
+        lastError_ = 87;
+        return 0;
+    }
+    const uint64_t viewSize64 = bytesToMap ? bytesToMap : mapping->second.size - offset;
+    if (!viewSize64 || viewSize64 > 0x02000000u) {
+        lastError_ = 87;
+        return 0;
+    }
+    const uint32_t viewSize = uint32_t(viewSize64);
+    const uint32_t base = allocate(viewSize, true);
+    if (!base) return 0;
+    mappedViews_[base] = GuestMappedView{mappingHandle, offset, viewSize};
+#if defined(_WIN32)
+    auto* file = lookupGuestHandle(mapping->second.fileHandle);
+    if (file && file->kind == GuestHandle::Kind::HostFile && file->hostValue) {
+        HANDLE host = reinterpret_cast<HANDLE>(file->hostValue);
+        LARGE_INTEGER oldPos{};
+        LARGE_INTEGER wanted{};
+        wanted.QuadPart = LONGLONG(offset);
+        SetFilePointerEx(host, {}, &oldPos, FILE_CURRENT);
+        if (SetFilePointerEx(host, wanted, nullptr, FILE_BEGIN)) {
+            std::vector<uint8_t> bytes(viewSize);
+            DWORD read = 0;
+            if (ReadFile(host, bytes.data(), viewSize, &read, nullptr) && read) {
+                uc_mem_write(uc_, base, bytes.data(), read);
+            }
+        }
+        SetFilePointerEx(host, oldPos, nullptr, FILE_BEGIN);
+    }
+#endif
+    lastError_ = 0;
+    return base;
+}
+
+uint32_t SyntheticDllRuntime::handleUnmapViewOfFile(uint32_t baseAddress) {
+    auto view = mappedViews_.find(baseAddress);
+    if (view == mappedViews_.end()) {
+        lastError_ = 487;
+        return 0;
+    }
+    mappedViews_.erase(view);
+    lastError_ = 0;
+    return 1;
+}
+
+uint32_t SyntheticDllRuntime::handleFlushViewOfFile(uint32_t baseAddress, uint32_t bytesToFlush) {
+    auto view = mappedViews_.find(baseAddress);
+    if (view == mappedViews_.end()) {
+        lastError_ = 487;
+        return 0;
+    }
+    const auto mapping = fileMappings_.find(view->second.mappingHandle);
+    const uint32_t bytes = bytesToFlush ? std::min(bytesToFlush, view->second.size) : view->second.size;
+    if (mapping == fileMappings_.end() || !bytes) {
+        lastError_ = 0;
+        return 1;
+    }
+#if defined(_WIN32)
+    auto* file = lookupGuestHandle(mapping->second.fileHandle);
+    if (file && file->kind == GuestHandle::Kind::HostFile && file->hostValue) {
+        std::vector<uint8_t> buffer(bytes);
+        if (uc_mem_read(uc_, baseAddress, buffer.data(), buffer.size()) != UC_ERR_OK) {
+            lastError_ = 487;
+            return 0;
+        }
+        HANDLE host = reinterpret_cast<HANDLE>(file->hostValue);
+        LARGE_INTEGER oldPos{};
+        LARGE_INTEGER wanted{};
+        wanted.QuadPart = LONGLONG(view->second.offset);
+        SetFilePointerEx(host, {}, &oldPos, FILE_CURRENT);
+        BOOL ok = FALSE;
+        if (SetFilePointerEx(host, wanted, nullptr, FILE_BEGIN)) {
+            DWORD written = 0;
+            ok = WriteFile(host, buffer.data(), bytes, &written, nullptr) && written == bytes;
+        }
+        SetFilePointerEx(host, oldPos, nullptr, FILE_BEGIN);
+        lastError_ = ok ? 0 : GetLastError();
+        return ok ? 1 : 0;
+    }
+#endif
+    lastError_ = 0;
+    return 1;
+}
+
 bool SyntheticDllRuntime::writeGuestMessage(uint32_t address, const GuestMessage& message) const {
     if (!address) return false;
     writeU32(address, message.hwnd);
@@ -2023,11 +2264,15 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(const std::string& name,
     } else if (name == "memset") {
         fillGuest(a0, uint8_t(a1 & 0xffu), a2);
         ret = a0;
-    } else if (name == "swprintf" || name == "wsprintfW" || name == "vswprintf" || name == "_snwprintf") {
+    } else if (name == "swprintf" || name == "wsprintfW" || name == "vswprintf" ||
+               name == "_snwprintf" || name == "_vsnwprintf") {
         std::vector<uint32_t> values;
         if (name == "vswprintf") {
             values.reserve(16);
             for (uint32_t i = 0; i < 16; ++i) values.push_back(readU32(a2 + i * 4));
+        } else if (name == "_vsnwprintf") {
+            values.reserve(16);
+            for (uint32_t i = 0; i < 16; ++i) values.push_back(readU32(a3 + i * 4));
         } else if (name == "_snwprintf") {
             values = {a3};
             for (uint32_t i = 4; i < 16; ++i) values.push_back(stackArg(i));
@@ -2039,7 +2284,7 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(const std::string& name,
         auto nextArg = [&]() -> uint32_t {
             return argIndex < values.size() ? values[argIndex++] : 0;
         };
-        const std::string format = readUtf16(name == "_snwprintf" ? a2 : a1, 2048);
+        const std::string format = readUtf16((name == "_snwprintf" || name == "_vsnwprintf") ? a2 : a1, 2048);
         std::string out;
         for (size_t i = 0; i < format.size(); ++i) {
             if (format[i] != '%' || i + 1 >= format.size()) {
@@ -2102,12 +2347,91 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(const std::string& name,
                 break;
             }
         }
-        ret = writeUtf16(a0, out, name == "_snwprintf" ? a1 : uint32_t(out.size() + 1));
+        ret = writeUtf16(a0, out, (name == "_snwprintf" || name == "_vsnwprintf") ? a1 : uint32_t(out.size() + 1));
         if (out.find(".db") != std::string::npos || out.find(".bin") != std::string::npos ||
             out.find("\\") != std::string::npos || out.find("/") != std::string::npos) {
             spdlog::info("synthetic coredll.dll!{} formatted \"{}\" -> 0x{:08x}",
                          name, out, a0);
         }
+    } else if (name == "printf") {
+        std::vector<uint32_t> values = {a1, a2, a3};
+        for (uint32_t i = 4; i < 16; ++i) values.push_back(stackArg(i));
+        size_t argIndex = 0;
+        auto nextArg = [&]() -> uint32_t {
+            return argIndex < values.size() ? values[argIndex++] : 0;
+        };
+        const std::string format = readAscii(a0, 2048);
+        std::string out;
+        for (size_t i = 0; i < format.size(); ++i) {
+            if (format[i] != '%' || i + 1 >= format.size()) {
+                out.push_back(format[i]);
+                continue;
+            }
+            if (format[i + 1] == '%') {
+                out.push_back('%');
+                ++i;
+                continue;
+            }
+            ++i;
+            bool zeroPad = false;
+            if (format[i] == '0') {
+                zeroPad = true;
+                ++i;
+            }
+            int width = 0;
+            while (i < format.size() && std::isdigit(static_cast<unsigned char>(format[i]))) {
+                width = width * 10 + (format[i++] - '0');
+            }
+            if (i < format.size() && (format[i] == 'l' || format[i] == 'h')) ++i;
+            if (i >= format.size()) break;
+            const char spec = format[i];
+            const uint32_t value = spec == 'c' || spec == 'C' || spec == 'd' ||
+                                   spec == 'i' || spec == 'u' || spec == 'x' ||
+                                   spec == 'X' || spec == 'p' || spec == 's' ||
+                                   spec == 'S'
+                ? nextArg()
+                : 0;
+            char buffer[64]{};
+            switch (spec) {
+            case 's':
+                out += readAscii(value, 2048);
+                break;
+            case 'S':
+                out += readUtf16(value, 2048);
+                break;
+            case 'c':
+            case 'C':
+                out.push_back(char(value & 0xffu));
+                break;
+            case 'd':
+            case 'i':
+                if (width) std::snprintf(buffer, sizeof(buffer), zeroPad ? "%0*d" : "%*d", width, int32_t(value));
+                else std::snprintf(buffer, sizeof(buffer), "%d", int32_t(value));
+                out += buffer;
+                break;
+            case 'u':
+                if (width) std::snprintf(buffer, sizeof(buffer), zeroPad ? "%0*u" : "%*u", width, value);
+                else std::snprintf(buffer, sizeof(buffer), "%u", value);
+                out += buffer;
+                break;
+            case 'p':
+                std::snprintf(buffer, sizeof(buffer), "0x%08x", value);
+                out += buffer;
+                break;
+            case 'x':
+            case 'X':
+                if (width) std::snprintf(buffer, sizeof(buffer), zeroPad ? "%0*x" : "%*x", width, value);
+                else std::snprintf(buffer, sizeof(buffer), "%x", value);
+                out += buffer;
+                break;
+            default:
+                out.push_back('%');
+                out.push_back(spec);
+                break;
+            }
+        }
+        if (!out.empty()) spdlog::info("printf: {}", out);
+        ret = uint32_t(out.size());
     } else if (name == "_wtol") {
         const std::string value = readUtf16(a0, 128);
         char* end = nullptr;
@@ -2557,6 +2881,44 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
     const uint32_t a3 = args.a3;
     if (name == "SystemParametersInfoW") {
         ret = handleSystemParametersInfoW(a0, a1, a2, a3);
+        return true;
+    }
+    if (name == "LoadCursorW") {
+        ret = handleLoadCursorW(a0, a1);
+        return true;
+    }
+    if (name == "GetSysColorBrush") {
+        ret = handleGetSysColorBrush(a0);
+        return true;
+    }
+    if (name == "GetDeviceCaps") {
+        ret = handleGetDeviceCaps(a0, a1);
+        return true;
+    }
+    if (name == "WideCharToMultiByte") {
+        ret = handleWideCharToMultiByte(a0, a1, a2, a3);
+        return true;
+    }
+    if (name == "CreateFileMappingW") {
+        ret = handleCreateFileMappingW(a0, a1, a2, a3);
+        return true;
+    }
+    if (name == "MapViewOfFile") {
+        ret = handleMapViewOfFile(a0, a1, a2, a3);
+        return true;
+    }
+    if (name == "UnmapViewOfFile") {
+        ret = handleUnmapViewOfFile(a0);
+        return true;
+    }
+    if (name == "FlushViewOfFile") {
+        ret = handleFlushViewOfFile(a0, a1);
+        return true;
+    }
+    if (name == "GetProcessIndexFromID") {
+        // Windows CE process IDs are process handles; runtime evidence and CE
+        // docs show the low six bits identify the process slot.
+        ret = a0 & 0x3fu;
         return true;
     }
     auto getWindowLongValue = [](const GuestWindow& window, int32_t index) -> uint32_t {
@@ -3094,8 +3456,9 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
         else ret = 0;
 #endif
     } else if (name == "GetSysColor") {
+        const int colorIndex = int(a0 & 0xffu);
 #if defined(_WIN32)
-        ret = uint32_t(GetSysColor(int(a0)));
+        ret = uint32_t(GetSysColor(colorIndex));
 #else
         ret = 0x00ffffffu;
 #endif
@@ -5070,6 +5433,15 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
             setReg(UC_MIPS_REG_V0, ret);
             pumpHostMessages();
             return;
+        }
+        constexpr uint32_t kCeProcessSlotSize = 0x02000000u;
+        if (!isGuestRangeReadable(wndProc, 4)) {
+            const uint32_t activeSlotProc = wndProc & (kCeProcessSlotSize - 1);
+            if (activeSlotProc != wndProc && isGuestRangeReadable(activeSlotProc, 4)) {
+                spdlog::info("synthetic coredll.dll!{} translated slot WNDPROC 0x{:08x} -> 0x{:08x}",
+                             name, wndProc, activeSlotProc);
+                wndProc = activeSlotProc;
+            }
         }
         if (mutableEntry.calls <= 128) {
             spdlog::info("synthetic coredll.dll!{} transfer wndproc=0x{:08x} hwnd=0x{:08x} msg=0x{:08x} wparam=0x{:08x} lparam=0x{:08x}",

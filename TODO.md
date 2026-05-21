@@ -19,10 +19,12 @@
 - COREDLL `#255=ScreenToClient` is confirmed by SDK COFF import-object headers and implemented. Runtime also shows loaded MFC calling COREDLL `#256` with the same `ScreenToClient(HWND, POINT*)` shape; keep the compatibility mapping documented and do not silently convert that runtime path to `SetWindowTextW` without stronger target evidence.
 - COREDLL `#682=SetCursor`, `#693=GetDlgCtrlID`, `#887=AdjustWindowRectEx`, and `#97=EqualRect` are confirmed by SDK COFF import-object headers and are implemented in the translate layer.
 - COREDLL `#89=SystemParametersInfoW` is confirmed by SDK COFF import-object headers and runtime call shape. The stale `#89=wcslen` label is rejected; `wcslen` remains at SDK-confirmed `#63`.
+- COREDLL `#1875` is imported by `iSearch.exe` and called once at CRT startup with `a0=0x00010000 a1=0 a2=1 a3=1`, but it was not found in the installed Windows CE 4.2 Standard SDK MIPSII `coredll.lib`. Keep it unresolved until confirmed by a real SDK/export source, disassembly, or stronger runtime evidence.
 
 ## Next
 
 - Add targeted `values.dat`/HWInfoDB parser tracing or reverse the record lookup enough to identify which real registry fields are required. Keep this as diagnostics, not app-specific acceptance logic.
+- Continue using `iSearch.exe` as a second launch target. Next useful bridge work is host input/event delivery into the blocked `GetMessageW` loop and any file-mapping view paths if `MapViewOfFile` appears beyond the initial `CreateFileMappingW`.
 - Audit remaining called coredll paths that are still minimal guest-side implementations, especially `_setjmp`/`longjmp`, `__ehvec_ctor`, and locale/NLS APIs. Do not invent ABI layouts; preserve SDK names and fail closed or document evidence when exact behavior is not known.
 - Extend COM proxying only from real callers: current bridge supports host COM creation and `IUnknown` proxy stubs, but arbitrary interface methods require per-interface guest vtables and dispatch methods.
 - Extend `commctrl.dll` only from real callers. Command bar/status/toolbar/updown creation and menu attachment are guest-side/host-menu backed; property sheet display currently fails closed, and DSA/DPA/list/tree/header details should be implemented when runtime calls prove the needed ABI.
