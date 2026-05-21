@@ -267,6 +267,12 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createModule(const std::stri
             registerExport(*module, 0x0026, "WriteClassStm");
             registerExport(*module, 0x0027, "OleDraw");
             registerExport(*module, 0x0028, "OleSetContainedObject");
+            registerExport(*module, 0x01F0, "__ComQueryInterface");
+            registerExport(*module, 0x01F1, "__ComAddRef");
+            registerExport(*module, 0x01F2, "__ComRelease");
+            comQueryInterfaceStub_ = module->imageBase + module->exportsByOrdinal[0x01F0];
+            comAddRefStub_ = module->imageBase + module->exportsByOrdinal[0x01F1];
+            comReleaseStub_ = module->imageBase + module->exportsByOrdinal[0x01F2];
         }
         return module;
     }
@@ -644,6 +650,8 @@ uint32_t SyntheticDllRuntime::closeGuestHandle(uint32_t guestHandle) {
             DestroyIcon(reinterpret_cast<HICON>(it->second.hostValue));
         } else if (it->second.kind == GuestHandle::Kind::HostBitmap) {
             DeleteObject(reinterpret_cast<HGDIOBJ>(it->second.hostValue));
+        } else if (it->second.kind == GuestHandle::Kind::HostComInterface) {
+            reinterpret_cast<IUnknown*>(it->second.hostValue)->Release();
         } else {
             CloseHandle(reinterpret_cast<HANDLE>(it->second.hostValue));
         }
@@ -805,6 +813,21 @@ uint32_t SyntheticDllRuntime::makeGuestFont(const std::array<uint8_t, 92>& logFo
     const uint32_t handle = makeGuestHandle({GuestHandle::Kind::GuestFont, 0, stock ? 1u : 0u});
     fonts_[handle] = GuestFont{logFont, stock};
     return handle;
+}
+
+uint32_t SyntheticDllRuntime::makeGuestComProxy(uintptr_t hostInterface) {
+    if (!hostInterface || !comQueryInterfaceStub_ || !comAddRefStub_ || !comReleaseStub_) return 0;
+    if (!comProxyVtable_) {
+        comProxyVtable_ = allocate(12, true);
+        writeU32(comProxyVtable_, comQueryInterfaceStub_);
+        writeU32(comProxyVtable_ + 4, comAddRefStub_);
+        writeU32(comProxyVtable_ + 8, comReleaseStub_);
+    }
+    const uint32_t guestHandle = makeGuestHandle({GuestHandle::Kind::HostComInterface, hostInterface, 0});
+    const uint32_t object = allocate(8, true);
+    writeU32(object, comProxyVtable_);
+    writeU32(object + 4, guestHandle);
+    return object;
 }
 
 uint32_t SyntheticDllRuntime::makeStockObject(int32_t index) {
@@ -3870,7 +3893,40 @@ bool SyntheticDllRuntime::dispatchOle32(const std::string& name,
         for (const wchar_t* p = text; p && *p; ++p) out.push_back(*p < 0x80 ? char(*p) : '?');
         return out;
     };
-    if (name == "CoInitializeEx") {
+    auto comHandleFromThis = [&](uint32_t thisPtr) -> std::pair<uint32_t, GuestHandle*> {
+        if (!thisPtr) return {0, nullptr};
+        const uint32_t guestHandle = readU32(thisPtr + 4);
+        GuestHandle* handle = lookupGuestHandle(guestHandle);
+        if (!handle || handle->kind != GuestHandle::Kind::HostComInterface || !handle->hostValue) {
+            return {guestHandle, nullptr};
+        }
+        return {guestHandle, handle};
+    };
+    if (name == "__ComQueryInterface") {
+        auto [guestHandle, handle] = comHandleFromThis(a0);
+        (void)guestHandle;
+        GUID iid{};
+        IUnknown* out = nullptr;
+        HRESULT hr = E_POINTER;
+        if (a2) writeU32(a2, 0);
+        if (handle && readGuid(a1, iid) && a2) {
+            hr = reinterpret_cast<IUnknown*>(handle->hostValue)->QueryInterface(iid, reinterpret_cast<void**>(&out));
+            if (SUCCEEDED(hr) && out) writeU32(a2, makeGuestComProxy(reinterpret_cast<uintptr_t>(out)));
+        }
+        ret = uint32_t(hr);
+    } else if (name == "__ComAddRef") {
+        auto [guestHandle, handle] = comHandleFromThis(a0);
+        (void)guestHandle;
+        ret = handle ? reinterpret_cast<IUnknown*>(handle->hostValue)->AddRef() : 0;
+    } else if (name == "__ComRelease") {
+        auto [guestHandle, handle] = comHandleFromThis(a0);
+        if (!handle) {
+            ret = 0;
+        } else {
+            ret = reinterpret_cast<IUnknown*>(handle->hostValue)->Release();
+            if (!ret) guestHandles_.erase(guestHandle);
+        }
+    } else if (name == "CoInitializeEx") {
         ret = uint32_t(::CoInitializeEx(nullptr, a1));
     } else if (name == "CoUninitialize") {
         ::CoUninitialize();
@@ -3927,9 +3983,26 @@ bool SyntheticDllRuntime::dispatchOle32(const std::string& name,
             ::CoTaskMemFree(hostText);
         }
         ret = uint32_t(hr);
-    } else if (name == "CoCreateInstance" || name == "OleCreate") {
-        if (name == "CoCreateInstance" && stackArg(4)) writeU32(stackArg(4), 0);
-        ret = 0x80004002u; // E_NOINTERFACE: host COM pointers cannot be executed as guest vtables.
+    } else if (name == "CoCreateInstance") {
+        const uint32_t outPtr = stackArg(4);
+        if (outPtr) writeU32(outPtr, 0);
+        GUID clsid{};
+        GUID iid{};
+        IUnknown* out = nullptr;
+        HRESULT hr = E_INVALIDARG;
+        if (!outPtr) {
+            hr = E_POINTER;
+        } else if (a1) {
+            hr = CLASS_E_NOAGGREGATION;
+        } else if (readGuid(a0, clsid) && readGuid(a3, iid)) {
+            const DWORD context = a2 ? a2 : CLSCTX_INPROC_SERVER;
+            hr = ::CoCreateInstance(clsid, nullptr, context, iid, reinterpret_cast<void**>(&out));
+            if (SUCCEEDED(hr) && out) writeU32(outPtr, makeGuestComProxy(reinterpret_cast<uintptr_t>(out)));
+        }
+        ret = uint32_t(hr);
+    } else if (name == "OleCreate") {
+        if (stackArg(6)) writeU32(stackArg(6), 0);
+        ret = 0x80004001u;
     } else if (name == "OleRun" || name == "OleSave" || name == "OleSetMenuDescriptor" ||
                name == "OleDraw" || name == "OleSetContainedObject" ||
                name == "CreateOleAdviseHolder" || name == "ReadClassStm" || name == "WriteClassStm") {

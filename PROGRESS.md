@@ -33,10 +33,15 @@
 - Guest window visibility is tracked. `ShowWindow` updates visibility and queues `WM_SHOWWINDOW`; `UpdateWindow` queues `WM_PAINT`; `IsWindowVisible` returns guest window state.
 - Empty blocking `GetMessageW` no longer fabricates `WM_NULL`; it stops Unicorn with an explicit "blocking with empty guest queue" log entry so the emulator reports the honest idle state.
 - Guest heaps and critical sections are tracked as guest-side objects instead of pseudo handles/no-op returns. `WNetGetUserW` is host-backed via `GetUserNameW` and copies through guest memory with Win32-style length/error handling.
+- Module dispatch is now module-scoped after DLL name resolution. Synthetic module calls no longer fall through to stale name-only comparisons after the coredll path; `WINSOCK.dll`, `ole32.dll`, and `OLEAUT32.dll` each have their own dispatch path.
+- Synthetic `WINSOCK.dll` now bridges directly to host Winsock for startup/cleanup, socket lifecycle, connect/bind/listen/accept, send/recv, select, socket options/ioctls, byte-order helpers, and basic name lookup. Guest socket handles map to host `SOCKET` values.
+- Synthetic `ole32.dll` now bridges host-compatible COM helpers through host COM: `CoInitializeEx`, `CoUninitialize`, GUID/CLSID/ProgID conversion, `CoCreateGuid`, and `CoCreateInstance`. Successful host COM interfaces are exposed to the guest as translated proxy objects with guest-side `IUnknown::QueryInterface/AddRef/Release` stubs; host COM pointers are not passed directly into guest memory.
+- Synthetic `OLEAUT32.dll` implements guest BSTR allocation/free/length helpers and minimal Variant conversion/clear paths in guest memory.
+- Additional coredll window/GDI helpers reached by the current smoke are now implemented with SDK-confirmed or runtime-confirmed behavior: `SetCursor`, `GetDlgCtrlID`, `AdjustWindowRectEx`, `EqualRect`, `CreatePen`, `GetWindowRect`, `ScreenToClient`, `SetForegroundWindow`, `GetActiveWindow`, `IsWindowEnabled`, and `MessageBoxW`.
 
 ## Latest Verification
 
-- MSBuild succeeded after resource/icon, heap, critical-section, WNet, and message-blocking bridge changes.
-- Smoke `v2_synth_system_smoke36.log` with explicit SDK DLL directory arguments parsed 18 resources from `INavi.exe`, resolved `FindResourceW(128, RT_GROUP_ICON)`, returned mapped host icon handles from `LoadIconW(128)` and `LoadImageW(128, IMAGE_ICON, 16, ...)`, ran through window creation, `ShowWindow`, `UpdateWindow`, delivered a queued `WM_PAINT`, and dispatched guest WNDPROC calls through MFC.
-- The previous `pc=0x00000000 ra=0x0048fa98` shutdown is no longer reproduced. The latest smoke stops cleanly at a blocking empty guest message queue: `UC_ERR_OK pc=0x70002ae8 ra=0x500245c8`.
-- Resource misses in the latest smoke match parsed-resource evidence: no `RT_STRING`, no `RT_ACCELERATOR`, and no `RT_GROUP_ICON` id `0x7a02` in `INavi.exe`.
+- MSBuild succeeded after the COM proxy bridge and the latest coredll window/GDI ordinal additions.
+- Smoke `v2_synth_system_smoke48.log` with explicit SDK DLL directory arguments and `--registry C:\Users\royna\Downloads\INAVI\regs.json` parsed resources, loaded the real SDK/user DLL set where present, mapped synthetic `WINSOCK.dll`, `ole32.dll`, and `OLEAUT32.dll`, and reached the same honest idle stop: `GetMessageW blocking with empty guest queue`, `UC_ERR_OK pc=0x70002ae8 ra=0x500245c8`.
+- Smoke48 has no remaining `unsupported by translate layer` calls before the idle stop. It verifies `WINSOCK.dll!WSAStartup -> 0`, the host-backed/guest-side coredll window helpers above, and framebuffer capture `frame_001_after_unicorn.ppm`.
+- The target still shows an app-level message box, `This system does not support Korean language.`, before entering the idle message loop. This is app behavior, not an emulator-forced screenshot path.

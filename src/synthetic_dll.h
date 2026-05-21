@@ -59,6 +59,7 @@ private:
             HostIcon,
             HostBitmap,
             HostSocket,
+            HostComInterface,
             GuestHeap,
             GuestResource,
             GuestRegistryKey,
@@ -159,6 +160,10 @@ private:
     uint64_t tick_ = 0;
     bool quitPosted_ = false;
     uint32_t currentCursor_ = 0;
+    uint32_t comProxyVtable_ = 0;
+    uint32_t comQueryInterfaceStub_ = 0;
+    uint32_t comAddRefStub_ = 0;
+    uint32_t comReleaseStub_ = 0;
     std::string mainModulePath_ = "\\INavi\\INavi.exe";
     std::filesystem::path hostBaseDir_;
     uint16_t nextAtom_ = 0xc000;
@@ -210,6 +215,7 @@ private:
     uint32_t makeGuestBrush(uint32_t colorRef, bool stock = false);
     uint32_t makeGuestPen(uint32_t style, uint32_t width, uint32_t colorRef, bool stock = false);
     uint32_t makeGuestFont(const std::array<uint8_t, 92>& logFont, bool stock = false);
+    uint32_t makeGuestComProxy(uintptr_t hostInterface);
     uint32_t makeStockObject(int32_t index);
     uint32_t colorRefToPixel(uint32_t colorRef) const;
     bool readGuestRect(uint32_t address, int32_t& left, int32_t& top, int32_t& right, int32_t& bottom) const;
