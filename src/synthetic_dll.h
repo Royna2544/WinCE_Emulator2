@@ -110,6 +110,7 @@ private:
         uint32_t param{};
         uint32_t wndProc{};
         uint32_t userData{};
+        uint32_t createStruct{};
         int32_t x{};
         int32_t y{};
         int32_t width{800};
@@ -214,6 +215,18 @@ private:
         uint32_t originalRa{};
         uint32_t stage{};
     };
+    struct PendingCreateWindow {
+        uint32_t hwnd{};
+        uint32_t wndProc{};
+        uint32_t originalRa{};
+        uint32_t createStruct{};
+        uint32_t stage{};
+    };
+    struct PendingBlockingApi {
+        std::string name;
+        GuestCallArgs args;
+        uint32_t paintDispatches{};
+    };
 
     uc_engine* uc_{};
     uint32_t nextModuleBase_ = 0x70000000;
@@ -235,6 +248,8 @@ private:
     uint32_t comAddRefStub_ = 0;
     uint32_t comReleaseStub_ = 0;
     uint32_t destroyWindowContinuationStub_ = 0;
+    uint32_t createWindowContinuationStub_ = 0;
+    uint32_t blockingApiContinuationStub_ = 0;
     std::string mainModulePath_ = "\\INavi\\INavi.exe";
     uint32_t mainModuleBase_ = 0;
     std::filesystem::path hostBaseDir_;
@@ -267,6 +282,8 @@ private:
     std::map<uint32_t, GuestMappedView> mappedViews_;
     std::map<uint64_t, GuestTimer> timers_;
     std::vector<PendingDestroyWindow> pendingDestroyWindows_;
+    std::vector<PendingCreateWindow> pendingCreateWindows_;
+    std::vector<PendingBlockingApi> pendingBlockingApis_;
     std::deque<GuestMessage> guestMessages_;
     std::vector<uintptr_t> retainedHostWindows_;
     std::vector<ResourceEntry> mainResources_;
@@ -279,6 +296,11 @@ private:
     uint32_t* framebuffer_{};
     int32_t framebufferWidth_{};
     int32_t framebufferHeight_{};
+    uint32_t splashBlitDumpCounter_{};
+    uint32_t splashCompositeBitmap_{};
+    bool splashTopBlitDumped_{};
+    bool splashBottomBlitDumped_{};
+    bool splashFramebufferDumped_{};
     std::filesystem::path registryPath_;
     nlohmann::json registry_;
     bool registryDirty_{};
@@ -345,10 +367,20 @@ private:
     void writeGuestRect(uint32_t address, int32_t left, int32_t top, int32_t right, int32_t bottom) const;
     void fillFramebufferRect(const GuestDc& dc, int32_t left, int32_t top, int32_t right, int32_t bottom, uint32_t pixel);
     void drawFramebufferLine(const GuestDc& dc, int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint32_t pixel);
+    bool handleCreateBitmap(const GuestCallArgs& args, uint32_t& ret);
+    bool handleGetObjectW(const GuestCallArgs& args, uint32_t& ret);
+    bool handleSetDIBColorTable(const GuestCallArgs& args, uint32_t& ret);
+    bool handleSetBitmapBits(const GuestCallArgs& args, uint32_t& ret);
+    bool handleSetDIBitsToDevice(const GuestCallArgs& args, uint32_t& ret);
+    bool drawHostTextToDc(const GuestDc& dc, int32_t x, int32_t y, uint32_t options,
+                          uint32_t rectPtr, uint32_t textPtr, int32_t textChars,
+                          uint32_t drawTextFormat, bool drawTextCall);
     bool readBitmapPixel(const GuestBitmap& bitmap, const std::vector<uint8_t>& bits,
                          int32_t height, int32_t x, int32_t y, uint32_t& pixel) const;
     bool writeBitmapPixel(const GuestBitmap& bitmap, std::vector<uint8_t>& bits,
                           int32_t height, int32_t x, int32_t y, uint32_t pixel) const;
+    void dumpGuestBitmapPpm(uint32_t bitmapHandle, const GuestBitmap& bitmap, const std::string& tag);
+    void dumpFramebufferPpm(const std::string& tag);
     bool stretchDibToFramebuffer(const GuestDc& dc, int32_t dstX, int32_t dstY, int32_t dstW, int32_t dstH,
                                  int32_t srcX, int32_t srcY, int32_t srcW, int32_t srcH,
                                  uint32_t bitsPtr, uint32_t infoPtr);

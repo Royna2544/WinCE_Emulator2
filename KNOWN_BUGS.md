@@ -54,8 +54,14 @@
 ### Host presenter is not the full CE GUI yet
 
 - Status: Open.
-- Evidence: GUI smoke52 logs `created host presenter HWND=... for guest HWND=0x00010007 800x480`, then `entering host GUI message loop` after the guest destroys the HWND. The retained presenter is an inspection surface over the emulator framebuffer, not a replacement guest window.
-- Limitation: Child common controls are guest HWND records, command-bar menus can attach to host `HMENU`, and the framebuffer can be painted by implemented GDI paths, but there is no full host child-control hierarchy or host input-to-guest event translation yet.
+- Evidence: GUI smoke52 logs `created host presenter HWND=... for guest HWND=0x00010007 800x480`, then `entering host GUI message loop` after the guest destroys the HWND. Splash-frame probes confirmed the real two-slice splash bitmap is decoded and blitted into the framebuffer, but an interactive report still saw delayed splash presentation.
+- Limitation: Child common controls are guest HWND records, command-bar menus can attach to host `HMENU`, and the framebuffer can be painted by implemented GDI paths, but there is no full host child-control hierarchy or complete host input-to-guest event translation yet.
+
+### Possible remaining bitmap color-format mismatch
+
+- Status: Investigating.
+- Evidence: The settings/menu UI can show a green cast in interactive runs. The bridge previously decoded all 16-bit bitmaps as RGB565; the current build uses RGB555 for 16-bit BI_RGB-style bitmap paths. A synchronous `UpdateWindow` experiment was reverted separately because it caused black startup/icon glitches.
+- Constraint: Do not add an app-specific color correction. If the green cast persists, identify the exact source bitmap path and header (`BI_RGB` vs `BI_BITFIELDS`, palette vs direct color, guest DIB section vs resource/host bitmap) before changing the conversion again.
 
 ### COM bridge is IUnknown-only beyond creation
 
