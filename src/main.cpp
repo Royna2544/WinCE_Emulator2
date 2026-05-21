@@ -357,7 +357,10 @@ struct ModuleLoader {
         PeImage& pe = it->second;
         mapImage(pe, mainModule);
         bindImports(pe);
-        if (synthetic) synthetic->registerLoadedModule(pe.moduleKey, pe.path, pe.loadBase);
+        if (synthetic) {
+            synthetic->registerLoadedModule(pe.moduleKey, pe.path, pe.loadBase,
+                                            pe.exportsByName, pe.exportsByOrdinal);
+        }
         return &pe;
     }
 
@@ -401,7 +404,8 @@ struct ModuleLoader {
                     pe.mapped = true;
                     pe.importsBound = true;
                     auto [it, inserted] = modules.emplace(key, std::move(pe));
-                    synthetic->registerLoadedModule(it->second.moduleKey, it->second.path, it->second.loadBase);
+                    synthetic->registerLoadedModule(it->second.moduleKey, it->second.path, it->second.loadBase,
+                                                    it->second.exportsByName, it->second.exportsByOrdinal);
                     spdlog::warn("using synthetic {} because no real DLL was found in search paths", key);
                     return &it->second;
                 }

@@ -17,6 +17,13 @@
 - Effect: It is currently a warning, not a launch blocker.
 - Constraint: Do not assign a guessed name or behavior until confirmed by SDK/export evidence or disassembly.
 
+### CE_MANAGER missing `WININET.dll`
+
+- Status: Open.
+- Evidence: `v2_synth_cemanager_smoke01.log` maps `C:\Users\royna\Downloads\INAVI\CE_MANAGER\CE_Manager.exe`, parses 20 resources, then fails before `starting Unicorn` with `required DLL not found: WININET.dll`. A local search found only Standard SDK `wininet.lib/.exp` import libraries, not a real MIPS `WININET.dll` PE.
+- Effect: `CE_Manager.exe` cannot reach guest code with the current available DLL set.
+- Constraint: Keep fail-fast DLL binding. Do not add a fake `WININET.dll` just to pass import binding unless explicitly requested.
+
 ### App reports unsupported Korean language
 
 - Status: Superseded by the current HWInfoDB failure.

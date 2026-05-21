@@ -30,7 +30,9 @@ public:
     void setMainModuleBase(uint32_t base);
     void setFramebuffer(uint32_t* bgra, int width, int height);
     void setRegistryPath(const std::filesystem::path& path);
-    void registerLoadedModule(const std::string& moduleName, const std::filesystem::path& path, uint32_t base);
+    void registerLoadedModule(const std::string& moduleName, const std::filesystem::path& path, uint32_t base,
+                              const std::map<std::string, uint32_t>& exportsByName = {},
+                              const std::map<uint16_t, uint32_t>& exportsByOrdinal = {});
     void flushRegistry();
     bool hasHostWindows() const;
     void runHostMessageLoopUntilClosed();
@@ -160,6 +162,8 @@ private:
         std::string name;
         std::filesystem::path path;
         uint32_t base{};
+        std::map<std::string, uint32_t> exportsByName;
+        std::map<uint16_t, uint32_t> exportsByOrdinal;
     };
     struct GuestFileMapping {
         uint32_t fileHandle{};
@@ -218,6 +222,7 @@ private:
     std::vector<ResourceEntry> mainResources_;
     std::map<std::string, LoadedModuleInfo> loadedModulesByName_;
     std::map<std::string, LoadedModuleInfo> loadedModulesByPath_;
+    std::map<uint32_t, LoadedModuleInfo> loadedModulesByBase_;
     std::map<uint32_t, uint32_t> loadedResourceMemory_;
     std::map<std::string, uint16_t> atomsByName_;
     std::map<uint16_t, std::string> atomNames_;

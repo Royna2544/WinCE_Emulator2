@@ -408,10 +408,6 @@ void SyntheticDllRuntime::setMainModulePath(std::string path) {
 
 void SyntheticDllRuntime::setMainModuleBase(uint32_t base) {
     mainModuleBase_ = base;
-    if (!mainModulePath_.empty()) {
-        registerLoadedModule(std::filesystem::path(mainModulePath_).filename().string(),
-                             mainModulePath_, mainModuleBase_);
-    }
 }
 
 void SyntheticDllRuntime::setFramebuffer(uint32_t* bgra, int width, int height) {
@@ -422,13 +418,16 @@ void SyntheticDllRuntime::setFramebuffer(uint32_t* bgra, int width, int height) 
 
 void SyntheticDllRuntime::registerLoadedModule(const std::string& moduleName,
                                                const std::filesystem::path& path,
-                                               uint32_t base) {
+                                               uint32_t base,
+                                               const std::map<std::string, uint32_t>& exportsByName,
+                                               const std::map<uint16_t, uint32_t>& exportsByOrdinal) {
     if (!base) return;
     std::string nameKey = lowerAscii(std::filesystem::path(moduleName).filename().string());
     if (nameKey.empty() && !path.empty()) nameKey = lowerAscii(path.filename().string());
-    LoadedModuleInfo info{nameKey, path, base};
+    LoadedModuleInfo info{nameKey, path, base, exportsByName, exportsByOrdinal};
     if (!nameKey.empty()) loadedModulesByName_[nameKey] = info;
     if (!path.empty()) loadedModulesByPath_[lowerAscii(path.string())] = info;
+    loadedModulesByBase_[base] = info;
 }
 
 void SyntheticDllRuntime::setRegistryPath(const std::filesystem::path& path) {
@@ -3015,9 +3014,93 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
         const uint32_t method = a0 & 0x3u;
         const uint32_t device = (a0 >> 16) & 0xffffu;
         const uint32_t access = (a0 >> 14) & 0x3u;
+        auto registryString = [&](const std::string& path, const std::string& valueName) -> std::string {
+            const nlohmann::json* configured = registryValue(path, valueName);
+            if (!configured) return {};
+            const auto data = configured->find("data");
+            return data != configured->end() && data->is_string() ? data->get<std::string>() : std::string{};
+        };
+        auto registryData = [](const nlohmann::json* value) -> const nlohmann::json* {
+            if (!value) return nullptr;
+            const auto data = value->find("data");
+            return data != value->end() ? &*data : nullptr;
+        };
+        auto parseIoctlCmd = [&](const nlohmann::json* value, uint32_t& command) -> bool {
+            const nlohmann::json* data = registryData(value);
+            if (!data) return false;
+            if (data->is_number_unsigned()) {
+                const uint64_t raw = data->get<uint64_t>();
+                if (raw > 0xffffffffull) return false;
+                command = uint32_t(raw);
+                return true;
+            }
+            if (data->is_number_integer()) {
+                const int64_t raw = data->get<int64_t>();
+                if (raw < 0 || raw > 0xffffffffll) return false;
+                command = uint32_t(raw);
+                return true;
+            }
+            if (!data->is_string()) return false;
+            std::string text = lowerAscii(data->get<std::string>());
+            if (text.rfind("0x", 0) == 0) text.erase(0, 2);
+            if (text.empty()) return false;
+            char* end = nullptr;
+            const unsigned long raw = std::strtoul(text.c_str(), &end, 16);
+            if (!end || *end || raw > 0xfffffffful) return false;
+            command = uint32_t(raw);
+            return true;
+        };
+        auto configuredIoctlReturn = [&]() -> const nlohmann::json* {
+            const std::string base = "hklm\\system\\emulator\\kernelioctl";
+            std::vector<std::string> paths{base};
+            for (const std::string& child : registryChildNames(base)) {
+                paths.push_back(base + "\\" + child);
+            }
+            for (const std::string& path : paths) {
+                uint32_t command = 0;
+                if (!parseIoctlCmd(registryValue(path, "ioctlcmd"), command) || command != a0) continue;
+                if (const nlohmann::json* value = registryValue(path, "return")) return value;
+            }
+            return nullptr;
+        };
+        auto writeConfiguredIoctlReturn = [&](const nlohmann::json& configured) -> bool {
+            const nlohmann::json* data = registryData(&configured);
+            if (!data || !outPtr) return false;
+            if ((data->is_number_unsigned() || data->is_number_integer()) && outSize >= 4) {
+                uint32_t value = 0;
+                if (data->is_number_unsigned()) {
+                    const uint64_t raw = data->get<uint64_t>();
+                    if (raw > 0xffffffffull) return false;
+                    value = uint32_t(raw);
+                } else {
+                    const int64_t raw = data->get<int64_t>();
+                    if (raw < 0 || raw > 0xffffffffll) return false;
+                    value = uint32_t(raw);
+                }
+                writeU32(outPtr, value);
+                if (bytesReturnedPtr) writeU32(bytesReturnedPtr, 4);
+                spdlog::info("KernelIoControl registry return cmd=0x{:08x} dword=0x{:08x}", a0, value);
+                return true;
+            }
+            if (data->is_string()) {
+                const std::string value = data->get<std::string>();
+                const uint32_t capacityChars = outSize ? std::max<uint32_t>(1, outSize / 2) : uint32_t(value.size() + 1);
+                const uint32_t writtenChars = writeUtf16(outPtr, value, capacityChars);
+                if (bytesReturnedPtr) writeU32(bytesReturnedPtr, (writtenChars + 1) * 2);
+                spdlog::info("KernelIoControl registry return cmd=0x{:08x} string=\"{}\" chars={} capacityChars={}",
+                             a0, value, writtenChars, capacityChars);
+                return true;
+            }
+            return false;
+        };
         ret = 0;
         lastError_ = 120;
-        if (a0 == 0x0101207cu && outPtr && outSize >= 4) {
+        if (const nlohmann::json* configured = configuredIoctlReturn()) {
+            if (writeConfiguredIoctlReturn(*configured)) {
+                lastError_ = 0;
+                ret = 1;
+            }
+        } else if (a0 == 0x0101207cu && outPtr && outSize >= 4) {
             uint32_t value = 0;
             if (const nlohmann::json* configured =
                     registryValue("hklm\\system\\emulator\\kernelioctl", "0101207c")) {
@@ -3030,6 +3113,23 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             if (bytesReturnedPtr) writeU32(bytesReturnedPtr, 4);
             lastError_ = 0;
             ret = 1;
+        } else if (a0 == 0x01012ef4u && outPtr) {
+            std::string value = registryString("hklm\\system\\emulator\\kernelioctl", "01012ef4");
+            if (value.empty()) value = registryString("hklm\\software\\hyoncorp", "devicename");
+            if (value.empty()) value = registryString("hklm\\software\\vitas", "devicename");
+            if (value.empty()) value = registryString("hklm\\software\\tubenavi\\product", "modelid");
+            if (value.empty()) value = registryString("hklm\\system\\emulator\\systemparametersinfo", "00000102");
+            if (value.empty()) value = registryString("hklm\\system\\emulator\\systemparametersinfo", "oeminfo");
+
+            if (!value.empty()) {
+                const uint32_t capacityChars = outSize ? std::max<uint32_t>(1, outSize / 2) : uint32_t(value.size() + 1);
+                const uint32_t writtenChars = writeUtf16(outPtr, value, capacityChars);
+                if (bytesReturnedPtr) writeU32(bytesReturnedPtr, (writtenChars + 1) * 2);
+                lastError_ = 0;
+                ret = 1;
+                spdlog::info("KernelIoControl 0x01012ef4 wrote device name \"{}\" chars={} capacityChars={}",
+                             value, writtenChars, capacityChars);
+            }
         }
         spdlog::info("KernelIoControl code=0x{:08x} device=0x{:04x} function=0x{:03x} method={} access={} out=0x{:08x} outSize={} bytesReturned=0x{:08x} -> {} lastError={}",
                      a0, device, function, method, access, outPtr, outSize, bytesReturnedPtr, ret, lastError_);
@@ -3447,14 +3547,40 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             ret = it->second.base;
         } else if (auto it = loadedModulesByName_.find(nameKey); it != loadedModulesByName_.end()) {
             ret = it->second.base;
+        } else if (name == "LoadLibraryW") {
+            if (auto syntheticModule = createModule(nameKey)) {
+                registerLoadedModule(syntheticModule->moduleName,
+                                     std::filesystem::path("[synthetic]") / syntheticModule->moduleName,
+                                     syntheticModule->imageBase,
+                                     syntheticModule->exportsByName,
+                                     syntheticModule->exportsByOrdinal);
+                ret = syntheticModule->imageBase;
+            } else {
+                ret = 0;
+            }
         } else {
             ret = 0;
         }
         spdlog::info("{} requested=\"{}\" -> 0x{:08x}", name, requested, ret);
         lastError_ = ret ? 0 : 126;
     } else if (name == "GetProcAddressA" || name == "GetProcAddressW") {
-        lastError_ = 127;
         ret = 0;
+        auto module = loadedModulesByBase_.find(a0);
+        if (module != loadedModulesByBase_.end()) {
+            if (a1 < 0x10000) {
+                auto ordinal = module->second.exportsByOrdinal.find(uint16_t(a1));
+                if (ordinal != module->second.exportsByOrdinal.end()) ret = module->second.base + ordinal->second;
+                spdlog::info("{} module=0x{:08x} ordinal={} -> 0x{:08x}",
+                             name, a0, a1, ret);
+            } else {
+                const std::string proc = name == "GetProcAddressW" ? readUtf16(a1) : readAscii(a1, 256);
+                auto exported = module->second.exportsByName.find(lowerAscii(proc));
+                if (exported != module->second.exportsByName.end()) ret = module->second.base + exported->second;
+                spdlog::info("{} module=0x{:08x} proc=\"{}\" -> 0x{:08x}",
+                             name, a0, proc, ret);
+            }
+        }
+        lastError_ = ret ? 0 : 127;
     } else if (name == "GetCursorPos") {
         if (!a0) {
             lastError_ = 87;
