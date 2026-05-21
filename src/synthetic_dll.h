@@ -59,6 +59,7 @@ private:
             HostMenu,
             HostAccelerator,
             HostIcon,
+            HostCursor,
             HostBitmap,
             HostSocket,
             HostComInterface,

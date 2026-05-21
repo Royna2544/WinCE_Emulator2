@@ -717,6 +717,7 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x022C, "ReleaseMutex");
     registerExport(module, 0x022D, "KernelIoControl");
     registerExport(module, 0x02AA, "SetCursor");
+    registerExport(module, 0x02AB, "LoadCursorW");
     registerExport(module, 0x02B4, "GetDlgItem");
     registerExport(module, 0x02B5, "GetDlgCtrlID");
     registerExport(module, 0x02CD, "GetVersionExW");
@@ -747,6 +748,8 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x0376, "IsWindowVisible");
     registerExport(module, 0x0377, "AdjustWindowRectEx");
     registerExport(module, 0x0379, "GetSysColor");
+    registerExport(module, 0x0394, "GetDeviceCaps");
+    registerExport(module, 0x03A9, "GetSysColorBrush");
     registerExport(module, 0x037F, "CreateFontIndirectW");
     registerExport(module, 0x0380, "ExtTextOutW");
     registerExport(module, 0x0387, "BitBlt");
@@ -766,6 +769,7 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x037B, "RegisterWindowMessageW");
     registerExport(module, 0x037C, "RegisterTaskBar");
     registerExport(module, 0x04A1, "GetDCEx");
+    registerExport(module, 0x0448, "_snwprintf");
     registerExport(module, 0x0449, "swprintf");
     registerExport(module, 0x044B, "vswprintf");
     registerExport(module, 0x01C7, "RegCloseKey");
@@ -1000,6 +1004,8 @@ uint32_t SyntheticDllRuntime::closeGuestHandle(uint32_t guestHandle) {
             DestroyAcceleratorTable(reinterpret_cast<HACCEL>(it->second.hostValue));
         } else if (it->second.kind == GuestHandle::Kind::HostIcon) {
             DestroyIcon(reinterpret_cast<HICON>(it->second.hostValue));
+        } else if (it->second.kind == GuestHandle::Kind::HostCursor) {
+            // Shared cursors returned by LoadCursorW are owned by the host.
         } else if (it->second.kind == GuestHandle::Kind::HostBitmap) {
             DeleteObject(reinterpret_cast<HGDIOBJ>(it->second.hostValue));
         } else if (it->second.kind == GuestHandle::Kind::HostComInterface) {
@@ -2017,11 +2023,14 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(const std::string& name,
     } else if (name == "memset") {
         fillGuest(a0, uint8_t(a1 & 0xffu), a2);
         ret = a0;
-    } else if (name == "swprintf" || name == "wsprintfW" || name == "vswprintf") {
+    } else if (name == "swprintf" || name == "wsprintfW" || name == "vswprintf" || name == "_snwprintf") {
         std::vector<uint32_t> values;
         if (name == "vswprintf") {
             values.reserve(16);
             for (uint32_t i = 0; i < 16; ++i) values.push_back(readU32(a2 + i * 4));
+        } else if (name == "_snwprintf") {
+            values = {a3};
+            for (uint32_t i = 4; i < 16; ++i) values.push_back(stackArg(i));
         } else {
             values = {a2, a3};
             for (uint32_t i = 4; i < 16; ++i) values.push_back(stackArg(i));
@@ -2030,7 +2039,7 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(const std::string& name,
         auto nextArg = [&]() -> uint32_t {
             return argIndex < values.size() ? values[argIndex++] : 0;
         };
-        const std::string format = readUtf16(a1, 2048);
+        const std::string format = readUtf16(name == "_snwprintf" ? a2 : a1, 2048);
         std::string out;
         for (size_t i = 0; i < format.size(); ++i) {
             if (format[i] != '%' || i + 1 >= format.size()) {
@@ -2093,7 +2102,7 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(const std::string& name,
                 break;
             }
         }
-        ret = writeUtf16(a0, out, uint32_t(out.size() + 1));
+        ret = writeUtf16(a0, out, name == "_snwprintf" ? a1 : uint32_t(out.size() + 1));
         if (out.find(".db") != std::string::npos || out.find(".bin") != std::string::npos ||
             out.find("\\") != std::string::npos || out.find("/") != std::string::npos) {
             spdlog::info("synthetic coredll.dll!{} formatted \"{}\" -> 0x{:08x}",
