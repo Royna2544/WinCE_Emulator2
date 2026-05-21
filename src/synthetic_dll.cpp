@@ -1,9 +1,16 @@
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#define _WINSOCK_DEPRECATED_NO_WARNINGS
+#ifndef _WINSOCKAPI_
+#define _WINSOCKAPI_
+#endif
+#endif
+
 #include "synthetic_dll.h"
 
 #include <spdlog/spdlog.h>
 
 #if defined(_WIN32)
-#define WIN32_LEAN_AND_MEAN
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
@@ -238,32 +245,26 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createModule(const std::stri
     if (sameModule(dllName, "ole32.dll")) {
         auto module = createGenericOrdinalDll("ole32.dll", 512);
         if (module) {
+            registerExport(*module, 0x0000, "CLSIDFromProgID");
+            registerExport(*module, 0x0001, "CLSIDFromString");
             registerExport(*module, 0x0002, "CoCreateInstance");
             registerExport(*module, 0x0006, "CoInitializeEx");
             registerExport(*module, 0x0009, "CoTaskMemAlloc");
             registerExport(*module, 0x000A, "CoTaskMemFree");
             registerExport(*module, 0x000B, "CoTaskMemRealloc");
-            registerExport(*module, 0x0004, "CoInitializeEx");
-            registerExport(*module, 0x0005, "CoUninitialize");
-            registerExport(*module, 0x0006, "CoInitializeEx");
-            registerExport(*module, 0x000C, "CoTaskMemRealloc");
-            registerExport(*module, 0x000D, "CoTaskMemFree");
+            registerExport(*module, 0x000D, "CoUninitialize");
             registerExport(*module, 0x000E, "CoTaskMemSize");
-            registerExport(*module, 0x000F, "StringFromCLSID");
-            registerExport(*module, 0x0010, "CLSIDFromString");
             registerExport(*module, 0x0011, "ProgIDFromCLSID");
-            registerExport(*module, 0x0012, "CLSIDFromProgID");
             registerExport(*module, 0x0013, "StringFromGUID2");
             registerExport(*module, 0x0014, "StringFromIID");
             registerExport(*module, 0x001B, "CoCreateGuid");
-            registerExport(*module, 0x0020, "ReadClassStm");
-            registerExport(*module, 0x0021, "WriteClassStm");
-            registerExport(*module, 0x001C, "OleCreate");
+            registerExport(*module, 0x001C, "ReadClassStm");
             registerExport(*module, 0x001D, "OleSave");
             registerExport(*module, 0x001E, "OleRun");
             registerExport(*module, 0x001F, "OleIsRunning");
+            registerExport(*module, 0x0022, "StringFromCLSID");
             registerExport(*module, 0x0025, "CreateOleAdviseHolder");
-            registerExport(*module, 0x0026, "OleSetMenuDescriptor");
+            registerExport(*module, 0x0026, "WriteClassStm");
             registerExport(*module, 0x0027, "OleDraw");
             registerExport(*module, 0x0028, "OleSetContainedObject");
         }
@@ -3523,9 +3524,10 @@ bool SyntheticDllRuntime::dispatchWinsock(const std::string& name,
         if (ret) setSocketError();
     } else if (name == "setsockopt") {
         const SOCKET s = guestSocket(a0);
-        std::vector<char> value(a3);
-        if (a2 && a3) uc_mem_read(uc_, a2, value.data(), value.size());
-        ret = s == INVALID_SOCKET ? SOCKET_ERROR : ::setsockopt(s, int(a1 >> 16), int(a1 & 0xffffu), value.data(), int(value.size()));
+        const uint32_t optLen = stackArg(4);
+        std::vector<char> value(optLen);
+        if (a3 && optLen) uc_mem_read(uc_, a3, value.data(), value.size());
+        ret = s == INVALID_SOCKET ? SOCKET_ERROR : ::setsockopt(s, int(a1), int(a2), value.data(), int(value.size()));
         if (ret) setSocketError();
     } else if (name == "select") {
         auto buildSet = [&](uint32_t ptr, fd_set& host, std::vector<uint32_t>& guestHandles) {
@@ -3606,7 +3608,10 @@ bool SyntheticDllRuntime::dispatchWinsock(const std::string& name,
         std::vector<char> buffer(a1 ? a1 : 1);
         const int ok = ::gethostname(buffer.data(), int(buffer.size()));
         if (!ok) {
-            if (a0 && a1) uc_mem_write(uc_, a0, buffer.data(), strnlen(buffer.data(), buffer.size()) + 1);
+            size_t copyLen = 0;
+            while (copyLen < buffer.size() && buffer[copyLen]) ++copyLen;
+            if (copyLen < buffer.size()) ++copyLen;
+            if (a0 && a1) uc_mem_write(uc_, a0, buffer.data(), copyLen);
             ret = 0;
             lastError_ = 0;
         } else {
@@ -3715,6 +3720,7 @@ bool SyntheticDllRuntime::dispatchOle32(const std::string& name,
         HRESULT hr = E_INVALIDARG;
         if (readGuid(a0, guid) && a1) {
             if (name == "ProgIDFromCLSID") hr = ::ProgIDFromCLSID(guid, &hostText);
+            else if (name == "StringFromIID") hr = ::StringFromIID(guid, &hostText);
             else hr = ::StringFromCLSID(guid, &hostText);
         }
         if (SUCCEEDED(hr) && hostText) {
@@ -3877,498 +3883,26 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         return;
     }
 
-    if (mutableEntry.moduleName == "WINSOCK.dll") {
-        if (name == "WSAStartup") {
-            if (a1) {
-                std::array<uint8_t, 400> data{};
-                uc_mem_write(uc_, a1, data.data(), data.size());
-            }
-            ret = 0;
-        } else if (name == "WSACleanup" || name == "closesocket") ret = 0;
-        else if (name == "socket" || name == "accept") ret = nextHandle_++;
-        else if (name == "htons" || name == "ntohs") ret = ((a0 & 0xffu) << 8) | ((a0 >> 8) & 0xffu);
-        else if (name == "htonl" || name == "ntohl") {
-            ret = ((a0 & 0xffu) << 24) | ((a0 & 0xff00u) << 8) |
-                  ((a0 >> 8) & 0xff00u) | ((a0 >> 24) & 0xffu);
-        } else {
-            lastError_ = 10035; // WSAEWOULDBLOCK-ish placeholder.
-            ret = 0xffffffffu;
-        }
-    } else if (mutableEntry.moduleName == "commctrl.dll") {
+    bool handled = false;
+    if (sameModule(mutableEntry.moduleName, "winsock.dll")) {
+        handled = dispatchWinsock(name, args, ret);
+    } else if (sameModule(mutableEntry.moduleName, "commctrl.dll")) {
         ret = 1;
-    } else if (mutableEntry.moduleName == "ole32.dll" ||
-               mutableEntry.moduleName == "OLEAUT32.dll") {
-        if (name == "CoTaskMemAlloc") ret = allocate(a0, false);
-        else if (name == "CoTaskMemRealloc") ret = allocate(a1, false);
-        else if (name == "CoTaskMemFree") ret = 0;
-        else if (name == "CoTaskMemSize") {
-            auto it = allocationSizes_.find(a0);
-            ret = it == allocationSizes_.end() ? 0 : it->second;
-        } else if (name == "SysAllocString" || name == "SysAllocStringLen") ret = allocate((a1 ? a1 : 64) * 2 + 8, true);
-        else if (name == "SysFreeString") ret = 0;
-        else if (name == "SysStringLen" || name == "SysStringByteLen") ret = 0;
-        else if (name == "CoCreateInstance" || name == "OleCreate") ret = 0x80004001u; // E_NOTIMPL
-        else ret = 0; // S_OK-style default for COM init/uninit helpers.
-    } else if (name == "SystemStarted") ret = 1;
-    else if (name == "SystemMemoryLow") ret = 0;
-    else if (name == "ExitThread") {
-        ret = 0;
-        uc_emu_stop(uc_);
+        handled = true;
+    } else if (sameModule(mutableEntry.moduleName, "ole32.dll")) {
+        handled = dispatchOle32(name, args, ret);
+    } else if (sameModule(mutableEntry.moduleName, "oleaut32.dll")) {
+        handled = dispatchOleAut32(name, args, ret);
     }
-    else if (name == "LookupSyntheticHandle") {
-        auto it = syntheticHandleValues_.find(a0);
-        ret = it == syntheticHandleValues_.end() ? 0 : it->second;
-    } else if (name == "SetSyntheticHandle") {
-        syntheticHandleValues_[a0] = a1;
-        ret = 1;
-    } else if (name == "MfcStartupProbe") {
+
+    if (!handled) {
+        lastError_ = 120; // ERROR_CALL_NOT_IMPLEMENTED
         ret = 0;
-    } else if (name == "FileTimeToLocalFileTime") {
-        if (a0 && a1) {
-            std::array<uint8_t, 8> fileTime{};
-            if (uc_mem_read(uc_, a0, fileTime.data(), fileTime.size()) == UC_ERR_OK) {
-                uc_mem_write(uc_, a1, fileTime.data(), fileTime.size());
-            }
-        }
-        ret = 1;
-    } else if (name == "SyntheticHandleCall") ret = nextHandle_++;
-    else if (name == "memcpy") {
-        copyGuest(a0, a1, a2);
-        ret = a0;
-    } else if (name == "memset") {
-        fillGuest(a0, uint8_t(a1 & 0xffu), a2);
-        ret = a0;
-    }
-    else if (name == "LocalAlloc") ret = allocate(a1, (a0 & 0x0040u) != 0);
-    else if (name == "LocalAllocTrace") ret = allocate(a1 ? a1 : 1, false);
-    else if (name == "LocalFree") ret = 0;
-    else if (name == "LocalSize" || name == "HeapSize") {
-        auto it = allocationSizes_.find(name == "HeapSize" ? a2 : a0);
-        ret = it == allocationSizes_.end() ? 0 : it->second;
-    } else if (name == "LocalReAlloc" || name == "RemoteLocalReAlloc") {
-        const uint32_t oldSize = allocationSizes_.count(a0) ? allocationSizes_[a0] : 0;
-        ret = allocate(a1, (a2 & 0x0040u) != 0);
-        if (a0 && ret && oldSize) {
-            std::vector<uint8_t> bytes(std::min(oldSize, a1));
-            uc_mem_read(uc_, a0, bytes.data(), bytes.size());
-            uc_mem_write(uc_, ret, bytes.data(), bytes.size());
-        }
-    } else if (name == "HeapCreate") {
-        ret = makeGuestHandle({GuestHandle::Kind::GuestHeap, 0, 0});
-    } else if (name == "HeapDestroy") {
-        auto it = guestHandles_.find(a0);
-        if (it == guestHandles_.end() || it->second.kind != GuestHandle::Kind::GuestHeap ||
-            a0 == processHeapHandle_) {
-            lastError_ = 6;
-            ret = 0;
-        } else {
-            guestHandles_.erase(it);
-            lastError_ = 0;
-            ret = 1;
-        }
-    } else if (name == "GetProcessHeap") {
-        if (!processHeapHandle_) processHeapHandle_ = makeGuestHandle({GuestHandle::Kind::GuestHeap, 0, 0});
-        ret = processHeapHandle_;
-    } else if (name == "HeapAlloc") {
-        auto* heap = lookupGuestHandle(a0);
-        ret = heap && heap->kind == GuestHandle::Kind::GuestHeap
-            ? allocate(a2, (a1 & 0x00000008u) != 0)
-            : 0;
-        if (!ret) lastError_ = heap ? 8 : 6;
-    } else if (name == "HeapReAlloc") {
-        auto* heap = lookupGuestHandle(a0);
-        if (!heap || heap->kind != GuestHandle::Kind::GuestHeap || !a2) {
-            lastError_ = 6;
-            ret = 0;
-        } else {
-            const uint32_t oldSize = allocationSizes_.count(a2) ? allocationSizes_[a2] : 0;
-            ret = allocate(a3, (a1 & 0x00000008u) != 0);
-            if (ret && oldSize) {
-                std::vector<uint8_t> bytes(std::min(oldSize, a3));
-                uc_mem_read(uc_, a2, bytes.data(), bytes.size());
-                uc_mem_write(uc_, ret, bytes.data(), bytes.size());
-            }
-            lastError_ = ret ? 0 : 8;
-        }
-    } else if (name == "HeapFree") {
-        auto* heap = lookupGuestHandle(a0);
-        ret = heap && heap->kind == GuestHandle::Kind::GuestHeap && a2 ? 1 : 0;
-        if (ret) {
-            allocationSizes_.erase(a2);
-            lastError_ = 0;
-        } else {
-            lastError_ = 6;
+        if (mutableEntry.calls <= 128) {
+            spdlog::warn("synthetic {}!{} unsupported by module translate layer -> 0",
+                         mutableEntry.moduleName, name);
         }
     }
-    else if (name == "RemoteHeapFree") {
-        // SDK name/ordinal is authoritative, but this target calls the ordinal
-        // with a CRT object-copy shape during startup. Preserve that evidence
-        // here and in TODO.md instead of relabeling the export.
-        ret = copyGuest(a0, a2, 0x38) ? a0 : 1;
-    }
-    else if (name == "VirtualAlloc") ret = allocate(a1, true);
-    else if (name == "VirtualFree") ret = 1;
-    else if (name == "operator_new" || name == "operator_new_nothrow" ||
-             name == "operator_vector_new" || name == "operator_vector_new_nothrow") {
-        ret = allocate(a0, false);
-    } else if (name == "operator_delete" || name == "operator_delete_nothrow" ||
-               name == "operator_vector_delete" || name == "operator_vector_delete_nothrow") {
-        ret = 0;
-    } else if (name == "TlsGetValue") ret = tlsValues_[a0];
-    else if (name == "TlsSetValue") {
-        tlsValues_[a0] = a1;
-        ret = 1;
-    } else if (name == "TlsCall") {
-        ret = 0;
-    } else if (name == "GetLastError") ret = lastError_;
-    else if (name == "SetLastError") {
-        lastError_ = a0;
-        ret = 0;
-    } else if (name == "GetTickCount") ret = uint32_t(++tick_ * 16);
-    else if (name == "Sleep") ret = 0;
-    else if (name == "QueryPerformanceFrequency") {
-        writeU32(a0, 10000000u);
-        writeU32(a0 + 4, 0);
-        ret = 1;
-    } else if (name == "QueryPerformanceCounter") {
-        const uint64_t value = ++tick_ * 160000;
-        writeU32(a0, uint32_t(value));
-        writeU32(a0 + 4, uint32_t(value >> 32));
-        ret = 1;
-    } else if (name == "GetLocalTime" || name == "GetSystemTime") {
-        std::time_t now = std::time(nullptr);
-        std::tm tm{};
-#if defined(_WIN32)
-        if (name == "GetSystemTime") gmtime_s(&tm, &now);
-        else localtime_s(&tm, &now);
-#else
-        if (name == "GetSystemTime") tm = *std::gmtime(&now);
-        else tm = *std::localtime(&now);
-#endif
-        const std::array<uint16_t, 8> st = {
-            uint16_t(tm.tm_year + 1900), uint16_t(tm.tm_mon + 1),
-            uint16_t(tm.tm_wday), uint16_t(tm.tm_mday), uint16_t(tm.tm_hour),
-            uint16_t(tm.tm_min), uint16_t(tm.tm_sec), 0,
-        };
-        if (a0) uc_mem_write(uc_, a0, st.data(), st.size() * sizeof(uint16_t));
-        ret = 0;
-    } else if (name == "GetVersionExW") {
-        writeU32(a0 + 4, 4);
-        writeU32(a0 + 8, 20);
-        writeU32(a0 + 12, 0);
-        writeU32(a0 + 16, 3);
-        ret = 1;
-    } else if (name == "InitializeCriticalSection") {
-        if (a0) {
-            criticalSectionDepth_[a0] = 0;
-            lastError_ = 0;
-        } else {
-            lastError_ = 87;
-        }
-        ret = 0;
-    } else if (name == "DeleteCriticalSection") {
-        criticalSectionDepth_.erase(a0);
-        lastError_ = 0;
-        ret = 0;
-    } else if (name == "EnterCriticalSection") {
-        if (a0) {
-            ++criticalSectionDepth_[a0];
-            lastError_ = 0;
-        } else {
-            lastError_ = 87;
-        }
-        ret = 0;
-    } else if (name == "LeaveCriticalSection") {
-        auto it = criticalSectionDepth_.find(a0);
-        if (it != criticalSectionDepth_.end() && it->second) --it->second;
-        lastError_ = 0;
-        ret = 0;
-    } else if (name == "TryEnterCriticalSection") {
-        if (a0) {
-            ++criticalSectionDepth_[a0];
-            lastError_ = 0;
-            ret = 1;
-        } else {
-            lastError_ = 87;
-            ret = 0;
-        }
-    }
-    else if (name == "InterlockedIncrement" || name == "InterlockedDecrement") {
-        int32_t value = 0;
-        uc_mem_read(uc_, a0, &value, sizeof(value));
-        value += name == "InterlockedIncrement" ? 1 : -1;
-        uc_mem_write(uc_, a0, &value, sizeof(value));
-        ret = uint32_t(value);
-    } else if (name == "InterlockedExchange") {
-        uint32_t old = 0;
-        uc_mem_read(uc_, a0, &old, sizeof(old));
-        uc_mem_write(uc_, a0, &a1, sizeof(a1));
-        ret = old;
-    } else if (name == "InterlockedExchangeAdd") {
-        uint32_t old = 0;
-        uc_mem_read(uc_, a0, &old, sizeof(old));
-        const uint32_t next = old + a1;
-        uc_mem_write(uc_, a0, &next, sizeof(next));
-        ret = old;
-    } else if (name == "InterlockedCompareExchange") {
-        uint32_t old = 0;
-        uc_mem_read(uc_, a0, &old, sizeof(old));
-        if (old == a2) uc_mem_write(uc_, a0, &a1, sizeof(a1));
-        ret = old;
-    } else if (name == "CloseHandle") ret = closeGuestHandle(a0);
-    else if (name == "ReleaseMutex") {
-        auto* handle = lookupGuestHandle(a0);
-#if defined(_WIN32)
-        if (handle && handle->kind == GuestHandle::Kind::HostMutex && handle->hostValue) {
-            ret = ReleaseMutex(reinterpret_cast<HANDLE>(handle->hostValue)) ? 1 : 0;
-            if (!ret) lastError_ = GetLastError();
-        } else
-#endif
-        {
-            ret = handle ? 1 : 0;
-            if (!ret) lastError_ = 6;
-        }
-    } else if (name == "SetEventData") ret = 1;
-    else if (name == "CreateEventW") {
-#if defined(_WIN32)
-        HANDLE host = CreateEventW(nullptr, a1 != 0, a2 != 0, nullptr);
-        if (host) ret = makeGuestHandle({GuestHandle::Kind::HostEvent, reinterpret_cast<uintptr_t>(host), 0});
-        else {
-            ret = 0;
-            lastError_ = GetLastError();
-        }
-#else
-        ret = makeGuestHandle({GuestHandle::Kind::HostEvent, 0, 0});
-#endif
-    } else if (name == "CreateMutexW") {
-#if defined(_WIN32)
-        HANDLE host = CreateMutexW(nullptr, a1 != 0, nullptr);
-        if (host) ret = makeGuestHandle({GuestHandle::Kind::HostMutex, reinterpret_cast<uintptr_t>(host), 0});
-        else {
-            ret = 0;
-            lastError_ = GetLastError();
-        }
-#else
-        ret = makeGuestHandle({GuestHandle::Kind::HostMutex, 0, 0});
-#endif
-    } else if (name == "WaitForSingleObject") {
-        auto* handle = lookupGuestHandle(a0);
-#if defined(_WIN32)
-        if (handle && handle->hostValue) {
-            ret = WaitForSingleObject(reinterpret_cast<HANDLE>(handle->hostValue), a1);
-            if (ret == 0xffffffffu) lastError_ = GetLastError();
-        } else
-#endif
-        {
-            ret = handle ? 0 : 0xffffffffu; // WAIT_OBJECT_0 or WAIT_FAILED
-            if (!handle) lastError_ = 6;
-        }
-    }
-    else if (name == "CheckMenuRadioItem") {
-        ret = fillGuest(a0, uint8_t(a1 & 0xffu), a2) ? a0 : 0;
-    } else if (name == "CheckMenuItem") {
-        ret = copyGuest(a0, a1, a2) ? a0 : 0xffffffffu;
-    } else if (name == "LoadMenuW") {
-        ret = copyGuest(a0, a1, a2) ? a0 : nextHandle_++;
-    } else if (name == "RegisterTaskBar") {
-        ret = a0 && a0 < 0x01000000u ? allocate(a0, false) : 0;
-    } else if (name == "RegisterDesktop") {
-        std::string value = readAscii(a1);
-        const uint32_t buffer = allocate(uint32_t(value.size() + 1), true);
-        writeAscii(buffer, value);
-        if (a0) {
-            std::array<uint8_t, 0x28> object{};
-            uc_mem_write(uc_, a0, object.data(), object.size());
-            writeU32(a0, buffer);
-            writeU32(a0 + 4, uint32_t(value.size()));
-            writeU32(a0 + 8, uint32_t(value.size()));
-        }
-        ret = a0;
-    } else if (name == "RegisterWindowMessageW") ret = 0;
-    else if (name == "RemoveMenu") ret = 0;
-    else if (name == "GlobalAddAtomW") {
-        const std::string atomName = lowerAscii(readUtf16(a0));
-        if (atomName.empty()) {
-            lastError_ = 87; // ERROR_INVALID_PARAMETER
-            ret = 0;
-        } else {
-            auto it = atomsByName_.find(atomName);
-            if (it == atomsByName_.end()) {
-                const uint16_t atom = nextAtom_++;
-                it = atomsByName_.emplace(atomName, atom).first;
-                atomNames_[atom] = atomName;
-            }
-            lastError_ = 0;
-            ret = it->second;
-        }
-    } else if (name == "GlobalFindAtomW") {
-        const std::string atomName = lowerAscii(readUtf16(a0));
-        auto it = atomsByName_.find(atomName);
-        ret = it == atomsByName_.end() ? 0 : it->second;
-        lastError_ = ret ? 0 : 2;
-    } else if (name == "GlobalDeleteAtom") {
-        auto it = atomNames_.find(uint16_t(a0));
-        if (it != atomNames_.end()) {
-            atomsByName_.erase(it->second);
-            atomNames_.erase(it);
-        }
-        ret = 0;
-    } else if (name == "GetAPIAddress") ret = 0;
-    else if (name == "GetCRTFlags") ret = 0;
-    else if (name == "GetCRTStorageEx") ret = allocate(0x100, true);
-    else if (name == "WNetGetUserW") {
-        ret = handleWNetGetUserW(a0, a1, a2);
-    } else if (name == "WNetGetUniversalNameW" || name == "WNetConnectionDialog1W") {
-        lastError_ = 1200; // ERROR_BAD_DEVICE / no network provider.
-        ret = 1200;
-    } else if (name == "waveInOpen" || name == "waveInReset" || name == "waveInAddBuffer" ||
-               name == "waveInUnprepareHeader" || name == "waveInMessage" ||
-               name == "mixerGetControlDetails") {
-        ret = 2; // MMSYSERR_NODRIVER
-    }
-    else if (name == "OutputDebugStringW") {
-        spdlog::info("OutputDebugStringW: {}", readUtf16(a0));
-        ret = 0;
-    } else if (name == "LoadLibraryW" || name == "GetModuleHandleW") {
-        const std::string dll = lowerAscii(readUtf16(a0));
-        ret = dll.empty() || dll == "coredll.dll" ? 0x70000000 : 0;
-    } else if (name == "GetProcAddressA" || name == "GetProcAddressW") ret = 0;
-    else if (name == "GetModuleFileNameW") {
-        ret = writeUtf16(a1, mainModulePath_, a2);
-        lastError_ = ret ? 0 : 122; // ERROR_INSUFFICIENT_BUFFER for tiny/null buffers.
-    }
-    else if (name == "CreateFileW") {
-#if defined(_WIN32)
-        const std::filesystem::path hostPath = resolveGuestPath(readUtf16(a0));
-        HANDLE host = INVALID_HANDLE_VALUE;
-        if (!hostPath.empty()) {
-            host = CreateFileW(hostPath.wstring().c_str(), a1, a2, nullptr, stackArg(4), stackArg(5), nullptr);
-        }
-        if (host == INVALID_HANDLE_VALUE) {
-            lastError_ = GetLastError();
-            ret = 0xffffffffu;
-        } else {
-            ret = makeGuestHandle({GuestHandle::Kind::HostFile, reinterpret_cast<uintptr_t>(host), 0});
-            lastError_ = 0;
-        }
-#else
-        lastError_ = 2;
-        ret = 0xffffffffu;
-#endif
-    } else if (name == "ReadFile" || name == "WriteFile") {
-        auto* handle = lookupGuestHandle(a0);
-        writeU32(a3, 0);
-        if (!handle || handle->kind != GuestHandle::Kind::HostFile || !handle->hostValue) {
-            lastError_ = 6; // ERROR_INVALID_HANDLE
-            ret = 0;
-        } else if (!a1 && a2) {
-            lastError_ = 87;
-            ret = 0;
-        } else {
-#if defined(_WIN32)
-            DWORD transferred = 0;
-            if (name == "ReadFile") {
-                std::vector<uint8_t> bytes(a2);
-                const BOOL ok = ReadFile(reinterpret_cast<HANDLE>(handle->hostValue), bytes.data(), a2, &transferred, nullptr);
-                if (ok && transferred) uc_mem_write(uc_, a1, bytes.data(), transferred);
-                ret = ok ? 1 : 0;
-            } else {
-                std::vector<uint8_t> bytes(a2);
-                if (a2) uc_mem_read(uc_, a1, bytes.data(), bytes.size());
-                const BOOL ok = WriteFile(reinterpret_cast<HANDLE>(handle->hostValue), bytes.data(), a2, &transferred, nullptr);
-                ret = ok ? 1 : 0;
-            }
-            writeU32(a3, transferred);
-            lastError_ = ret ? 0 : GetLastError();
-#else
-            lastError_ = 6;
-            ret = 0;
-#endif
-        }
-    } else if (name == "GetFileSize") {
-        auto* handle = lookupGuestHandle(a0);
-        if (!handle || handle->kind != GuestHandle::Kind::HostFile || !handle->hostValue) {
-            lastError_ = 6;
-            ret = 0xffffffffu;
-        } else {
-#if defined(_WIN32)
-            DWORD high = 0;
-            ret = GetFileSize(reinterpret_cast<HANDLE>(handle->hostValue), a1 ? &high : nullptr);
-            if (a1) writeU32(a1, high);
-            lastError_ = ret == 0xffffffffu ? GetLastError() : 0;
-#else
-            lastError_ = 6;
-            ret = 0xffffffffu;
-#endif
-        }
-    } else if (name == "SetFilePointer") {
-        auto* handle = lookupGuestHandle(a0);
-        if (!handle || handle->kind != GuestHandle::Kind::HostFile || !handle->hostValue) {
-            lastError_ = 6;
-            ret = 0xffffffffu;
-        } else {
-#if defined(_WIN32)
-            LONG high = 0;
-            if (a2) uc_mem_read(uc_, a2, &high, sizeof(high));
-            ret = SetFilePointer(reinterpret_cast<HANDLE>(handle->hostValue), LONG(a1), a2 ? &high : nullptr, a3);
-            if (a2) writeU32(a2, uint32_t(high));
-            lastError_ = ret == 0xffffffffu ? GetLastError() : 0;
-#else
-            lastError_ = 6;
-            ret = 0xffffffffu;
-#endif
-        }
-    } else if (name == "SetFileTime") {
-        auto* handle = lookupGuestHandle(a0);
-        if (!handle || handle->kind != GuestHandle::Kind::HostFile || !handle->hostValue) {
-            lastError_ = 6;
-            ret = 0;
-        } else {
-#if defined(_WIN32)
-            FILETIME creation{}, access{}, write{};
-            FILETIME* creationPtr = nullptr;
-            FILETIME* accessPtr = nullptr;
-            FILETIME* writePtr = nullptr;
-            if (a1 && uc_mem_read(uc_, a1, &creation, sizeof(creation)) == UC_ERR_OK) creationPtr = &creation;
-            if (a2 && uc_mem_read(uc_, a2, &access, sizeof(access)) == UC_ERR_OK) accessPtr = &access;
-            if (a3 && uc_mem_read(uc_, a3, &write, sizeof(write)) == UC_ERR_OK) writePtr = &write;
-            ret = SetFileTime(reinterpret_cast<HANDLE>(handle->hostValue), creationPtr, accessPtr, writePtr) ? 1 : 0;
-            lastError_ = ret ? 0 : GetLastError();
-#else
-            ret = 0;
-            lastError_ = 6;
-#endif
-        }
-    } else if (name == "wcschr" || name == "wcsrchr") {
-        const uint16_t target = uint16_t(a1 & 0xffffu);
-        uint32_t found = 0;
-        for (uint32_t offset = 0; a0; offset += 2) {
-            uint16_t ch = 0;
-            if (uc_mem_read(uc_, a0 + offset, &ch, sizeof(ch)) != UC_ERR_OK) break;
-            if (ch == target) {
-                found = a0 + offset;
-                if (name == "wcschr") break;
-            }
-            if (!ch) break;
-        }
-        ret = found;
-    } else if (name == "wcslen") {
-        uint32_t count = 0;
-        for (;; ++count) {
-            uint16_t ch = 0;
-            if (uc_mem_read(uc_, a0 + count * 2, &ch, sizeof(ch)) != UC_ERR_OK || !ch) break;
-        }
-        ret = count;
-    } else if (name == "wcscpy") {
-        uint32_t offset = 0;
-        for (;; offset += 2) {
-            uint16_t ch = 0;
-            uc_mem_read(uc_, a1 + offset, &ch, sizeof(ch));
-            uc_mem_write(uc_, a0 + offset, &ch, sizeof(ch));
-            if (!ch) break;
-        }
-        ret = a0;
-    } else if (name == "IsDBCSLeadByteEx" || name == "iswctype") ret = 0;
 
     if (mutableEntry.calls <= 128) {
         spdlog::info("synthetic {}!{} -> 0x{:08x}", mutableEntry.moduleName, name, ret);
