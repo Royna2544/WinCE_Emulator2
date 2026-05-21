@@ -433,7 +433,7 @@ struct ModuleLoader {
     }
 };
 
-static int runImage(PeImage& pe, const std::vector<fs::path>& dllSearchDirs) {
+static int runImage(PeImage& pe, const std::vector<fs::path>& dllSearchDirs, Framebuffer& fb) {
     uc_engine* uc=nullptr;
     uc_err err = uc_open(UC_ARCH_MIPS, static_cast<uc_mode>(UC_MODE_MIPS32 | UC_MODE_LITTLE_ENDIAN), &uc);
     if (err) throw std::runtime_error(std::string("uc_open: ")+uc_strerror(err));
@@ -441,6 +441,7 @@ static int runImage(PeImage& pe, const std::vector<fs::path>& dllSearchDirs) {
     try {
         SyntheticDllRuntime synthetic(uc);
         synthetic.setMainModulePath(pe.path.string());
+        synthetic.setFramebuffer(fb.bgra.data(), fb.w, fb.h);
         uc_hook syntheticHook{};
         uc_hook_add(uc, &syntheticHook, UC_HOOK_CODE, (void*)SyntheticDllRuntime::hookCode, &synthetic, 0x70000000, 0x70ffffff);
         ModuleLoader loader(uc, &synthetic, pe.path, dllSearchDirs);
@@ -487,7 +488,7 @@ int wmain(int argc, wchar_t** argv) {
         for (const auto& dir : dllSearchDirs) spdlog::info("dll search dir: {}", dir.string());
         auto pe = parsePe(exe);
         Framebuffer fb; writePpm("frame_000_loader.ppm", fb, 0);
-        int rc = runImage(pe, dllSearchDirs);
+        int rc = runImage(pe, dllSearchDirs, fb);
         writePpm("frame_001_after_unicorn.ppm", fb, 1);
         return rc;
     } catch (const std::exception& e) {

@@ -4,6 +4,7 @@
 
 #include <array>
 #include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <map>
 #include <optional>
@@ -24,6 +25,7 @@ public:
     explicit SyntheticDllRuntime(uc_engine* uc);
 
     void setMainModulePath(std::string path);
+    void setFramebuffer(uint32_t* bgra, int width, int height);
     std::optional<SyntheticModule> createModule(const std::string& dllName);
     static void hookCode(uc_engine* uc, uint64_t address, uint32_t size, void* user);
 
@@ -42,9 +44,25 @@ private:
         uint32_t ra{};
     };
     struct GuestHandle {
-        enum class Kind { HostFile, HostFind, HostWaveIn, HostEvent, HostMutex, Pseudo };
+        enum class Kind {
+            HostFile,
+            HostFind,
+            HostWaveIn,
+            HostEvent,
+            HostMutex,
+            HostMenu,
+            HostAccelerator,
+            HostIcon,
+            HostBitmap,
+            GuestHeap,
+            GuestResource,
+            GuestWindow,
+            GuestDc,
+            GuestBrush,
+            GuestFont,
+        };
 
-        Kind kind{Kind::Pseudo};
+        Kind kind{Kind::GuestHeap};
         uintptr_t hostValue{};
         uint32_t filePointer{};
     };
@@ -53,9 +71,67 @@ private:
         std::string name;
         uint16_t atom{};
     };
+    struct GuestWindow {
+        uint32_t hwnd{};
+        std::string className;
+        std::string title;
+        uint32_t style{};
+        uint32_t exStyle{};
+        uint32_t parent{};
+        uint32_t menu{};
+        uint32_t instance{};
+        uint32_t param{};
+        uint32_t wndProc{};
+        uint32_t userData{};
+        int32_t x{};
+        int32_t y{};
+        int32_t width{800};
+        int32_t height{480};
+        bool visible{};
+        std::map<int32_t, uint32_t> extraLongs;
+    };
+    struct GuestDc {
+        uint32_t hwnd{};
+        uint32_t selectedBrush{};
+        uint32_t selectedFont{};
+        uint32_t textColor{0x00000000};
+        uint32_t bkColor{0x00ffffff};
+        uint32_t bkMode{1};
+        uint32_t textAlign{};
+        int32_t x{};
+        int32_t y{};
+    };
+    struct GuestBrush {
+        uint32_t colorRef{};
+        bool stock{};
+    };
+    struct GuestFont {
+        std::array<uint8_t, 92> logFont{};
+        bool stock{};
+    };
     struct HostWaveBuffer {
         std::vector<uint8_t> data;
         std::array<uint8_t, 64> header{};
+    };
+    struct GuestMessage {
+        uint32_t hwnd{};
+        uint32_t message{};
+        uint32_t wParam{};
+        uint32_t lParam{};
+        uint32_t time{};
+        uint32_t x{};
+        uint32_t y{};
+    };
+    struct ResourceName {
+        bool ordinal{};
+        uint32_t id{};
+        std::string name;
+    };
+    struct ResourceEntry {
+        ResourceName type;
+        ResourceName name;
+        uint16_t language{};
+        std::vector<uint8_t> data;
     };
 
     uc_engine* uc_{};
@@ -65,20 +141,34 @@ private:
     uint32_t nextHeap_ = 0x30010000;
     uint32_t lastError_ = 0;
     uint32_t nextHandle_ = 0x10000;
+    uint32_t processHeapHandle_ = 0;
     uint64_t tick_ = 0;
+    bool quitPosted_ = false;
     std::string mainModulePath_ = "\\INavi\\INavi.exe";
     std::filesystem::path hostBaseDir_;
     uint16_t nextAtom_ = 0xc000;
     std::map<uint32_t, ExportEntry> exportsByAddress_;
     std::map<uint32_t, uint32_t> allocationSizes_;
     std::map<uint32_t, uint32_t> tlsValues_;
+    std::map<uint32_t, uint32_t> criticalSectionDepth_;
     std::map<uint32_t, uint32_t> syntheticHandleValues_;
     std::map<uint32_t, GuestHandle> guestHandles_;
     std::map<std::string, GuestWindowClass> windowClassesByName_;
     std::map<uint16_t, std::string> windowClassNamesByAtom_;
+    std::map<uint32_t, GuestWindow> windows_;
+    std::map<uint32_t, GuestDc> dcs_;
+    std::map<uint32_t, GuestBrush> brushes_;
+    std::map<uint32_t, GuestFont> fonts_;
+    std::map<int32_t, uint32_t> stockObjects_;
     std::map<uint32_t, HostWaveBuffer> hostWaveBuffers_;
+    std::deque<GuestMessage> guestMessages_;
+    std::vector<ResourceEntry> mainResources_;
+    std::map<uint32_t, uint32_t> loadedResourceMemory_;
     std::map<std::string, uint16_t> atomsByName_;
     std::map<uint16_t, std::string> atomNames_;
+    uint32_t* framebuffer_{};
+    int32_t framebufferWidth_{};
+    int32_t framebufferHeight_{};
 
     std::optional<SyntheticModule> createCoredll();
     std::optional<SyntheticModule> createGenericOrdinalDll(const std::string& moduleName, uint16_t maxOrdinal);
@@ -87,10 +177,29 @@ private:
     void dispatch(const ExportEntry& entry);
     bool dispatchHostWin32(const std::string& name, const GuestCallArgs& args, uint32_t& ret);
     bool dispatchGuestMemoryApi(const std::string& name, const GuestCallArgs& args, uint32_t& ret);
+    uint32_t handleWNetGetUserW(uint32_t providerName, uint32_t userName, uint32_t lengthPtr);
 
     uint32_t makeGuestHandle(GuestHandle handle);
     GuestHandle* lookupGuestHandle(uint32_t guestHandle);
     uint32_t closeGuestHandle(uint32_t guestHandle);
+    uint32_t makeGuestDc(uint32_t hwnd);
+    GuestDc* lookupGuestDc(uint32_t hdc);
+    uint32_t makeGuestBrush(uint32_t colorRef, bool stock = false);
+    uint32_t makeGuestFont(const std::array<uint8_t, 92>& logFont, bool stock = false);
+    uint32_t makeStockObject(int32_t index);
+    uint32_t colorRefToPixel(uint32_t colorRef) const;
+    bool readGuestRect(uint32_t address, int32_t& left, int32_t& top, int32_t& right, int32_t& bottom) const;
+    void writeGuestRect(uint32_t address, int32_t left, int32_t top, int32_t right, int32_t bottom) const;
+    void fillFramebufferRect(const GuestDc& dc, int32_t left, int32_t top, int32_t right, int32_t bottom, uint32_t pixel);
+    void drawFramebufferLine(const GuestDc& dc, int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint32_t pixel);
+    bool stretchDibToFramebuffer(const GuestDc& dc, int32_t dstX, int32_t dstY, int32_t dstW, int32_t dstH,
+                                 int32_t srcX, int32_t srcY, int32_t srcW, int32_t srcH,
+                                 uint32_t bitsPtr, uint32_t infoPtr);
+    void loadMainResources(const std::filesystem::path& path);
+    const ResourceEntry* findResource(uint32_t typeArg, uint32_t nameArg) const;
+    const ResourceEntry* resourceFromHandle(uint32_t guestHandle) const;
+    bool resourceNameMatches(const ResourceName& resourceName, uint32_t guestArg) const;
+    bool writeGuestMessage(uint32_t address, const GuestMessage& message) const;
     uint32_t reg(int regId) const;
     void setReg(int regId, uint32_t value) const;
     uint32_t stackArg(uint32_t index) const;

@@ -16,6 +16,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <fstream>
+#include <functional>
 #include <set>
 #include <stdexcept>
 #include <string_view>
@@ -31,6 +33,27 @@ std::string lowerAscii(std::string s) {
 bool sameModule(std::string name, std::string_view wanted) {
     name = lowerAscii(std::move(name));
     return name == wanted;
+}
+
+uint16_t readLe16(const std::vector<uint8_t>& bytes, size_t offset) {
+    if (offset + 2 > bytes.size()) return 0;
+    return uint16_t(bytes[offset] | (bytes[offset + 1] << 8));
+}
+
+uint32_t readLe32(const std::vector<uint8_t>& bytes, size_t offset) {
+    if (offset + 4 > bytes.size()) return 0;
+    return uint32_t(bytes[offset] | (bytes[offset + 1] << 8) |
+                    (bytes[offset + 2] << 16) | (bytes[offset + 3] << 24));
+}
+
+std::string utf16FromBytes(const std::vector<uint8_t>& bytes, size_t offset, size_t chars) {
+    std::string result;
+    for (size_t i = 0; i < chars && offset + i * 2 + 1 < bytes.size(); ++i) {
+        uint16_t ch = readLe16(bytes, offset + i * 2);
+        if (ch < 0x80) result.push_back(char(ch));
+        else result.push_back('?');
+    }
+    return result;
 }
 
 #if defined(_WIN32)
@@ -81,6 +104,13 @@ void SyntheticDllRuntime::setMainModulePath(std::string path) {
     if (path.empty()) return;
     mainModulePath_ = path;
     hostBaseDir_ = std::filesystem::path(std::move(path)).parent_path();
+    loadMainResources(mainModulePath_);
+}
+
+void SyntheticDllRuntime::setFramebuffer(uint32_t* bgra, int width, int height) {
+    framebuffer_ = bgra;
+    framebufferWidth_ = width;
+    framebufferHeight_ = height;
 }
 
 std::optional<SyntheticModule> SyntheticDllRuntime::createModule(const std::string& dllName) {
@@ -220,6 +250,7 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x0045, "wcsrchr");
     registerExport(module, 0x004A, "_wcsdup");
     registerExport(module, 0x0058, "GlobalMemoryStatus");
+    registerExport(module, 0x005E, "LoadAcceleratorsW");
     registerExport(module, 0x005F, "RegisterClassW");
     registerExport(module, 0x0060, "CopyRect");
     registerExport(module, 0x0062, "InflateRect");
@@ -239,8 +270,20 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x00C1, "iswctype");
     registerExport(module, 0x00E5, "_wcsnicmp");
     registerExport(module, 0x00F6, "CreateWindowExW");
+    registerExport(module, 0x00F9, "GetClientRect");
+    registerExport(module, 0x00FA, "InvalidateRect");
+    registerExport(module, 0x00FB, "GetWindow");
+    registerExport(module, 0x0102, "SetWindowLongW");
+    registerExport(module, 0x0103, "GetWindowLongW");
+    registerExport(module, 0x0104, "BeginPaint");
+    registerExport(module, 0x0105, "EndPaint");
+    registerExport(module, 0x0106, "GetDC");
+    registerExport(module, 0x0107, "ReleaseDC");
+    registerExport(module, 0x0108, "DefWindowProcW");
     registerExport(module, 0x010A, "ShowWindow");
     registerExport(module, 0x010B, "UpdateWindow");
+    registerExport(module, 0x010D, "GetParent");
+    registerExport(module, 0x0116, "ValidateRect");
     registerExport(module, 0x011D, "CallWindowProcW");
     registerExport(module, 0x011E, "FindWindowW");
     registerExport(module, 0x0143, "GetStoreInformation");
@@ -262,7 +305,10 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x020D, "VirtualFree");
     registerExport(module, 0x0210, "LoadLibraryW");
     registerExport(module, 0x0212, "GetProcAddressW");
+    registerExport(module, 0x0213, "FindResource");
     registerExport(module, 0x0214, "FindResourceW");
+    registerExport(module, 0x0215, "LoadResource");
+    registerExport(module, 0x0216, "SizeofResource");
     registerExport(module, 0x021E, "GetSystemInfo");
     registerExport(module, 0x0217, "GetTickCount");
     registerExport(module, 0x0219, "GetModuleFileNameW");
@@ -276,19 +322,43 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x02DD, "LocalAllocTrace");
     registerExport(module, 0x02DE, "GetCursorPos");
     registerExport(module, 0x02D8, "LoadIconW");
+    registerExport(module, 0x02DA, "LoadImageW");
     registerExport(module, 0x034B, "RemoveMenu");
     registerExport(module, 0x034E, "LoadMenuW");
     registerExport(module, 0x0350, "CheckMenuItem");
     registerExport(module, 0x0351, "CheckMenuRadioItem");
     registerExport(module, 0x036A, "LoadStringW");
     registerExport(module, 0x036E, "GetClassInfoW");
+    registerExport(module, 0x035B, "DispatchMessageW");
     registerExport(module, 0x035D, "GetMessageW");
+    registerExport(module, 0x035E, "GetMessagePos");
+    registerExport(module, 0x035F, "GetMessageWNoWait");
     registerExport(module, 0x0360, "PeekMessageW");
+    registerExport(module, 0x0361, "PostMessageW");
+    registerExport(module, 0x0362, "PostQuitMessage");
+    registerExport(module, 0x0364, "SendMessageW");
+    registerExport(module, 0x0366, "TranslateMessage");
     registerExport(module, 0x0375, "GetSystemMetrics");
     registerExport(module, 0x0376, "IsWindowVisible");
     registerExport(module, 0x0379, "GetSysColor");
+    registerExport(module, 0x037F, "CreateFontIndirectW");
+    registerExport(module, 0x0380, "ExtTextOutW");
+    registerExport(module, 0x0387, "BitBlt");
+    registerExport(module, 0x038E, "CreateCompatibleDC");
+    registerExport(module, 0x0390, "DeleteObject");
+    registerExport(module, 0x0397, "GetStockObject");
+    registerExport(module, 0x0399, "SelectObject");
+    registerExport(module, 0x039A, "SetBkColor");
+    registerExport(module, 0x039B, "SetBkMode");
+    registerExport(module, 0x039C, "SetTextColor");
+    registerExport(module, 0x03A3, "CreateSolidBrush");
+    registerExport(module, 0x03A7, "FillRect");
+    registerExport(module, 0x03AA, "PatBlt");
+    registerExport(module, 0x03AD, "Rectangle");
+    registerExport(module, 0x03B1, "DrawTextW");
     registerExport(module, 0x037B, "RegisterWindowMessageW");
     registerExport(module, 0x037C, "RegisterTaskBar");
+    registerExport(module, 0x04A1, "GetDCEx");
     registerExport(module, 0x0449, "swprintf");
     registerExport(module, 0x01C7, "RegCloseKey");
     registerExport(module, 0x01CD, "RegOpenKeyExW");
@@ -323,6 +393,10 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x05F1, "GlobalFindAtomW");
     registerExport(module, 0x0635, "mixerGetControlDetails");
     registerExport(module, 0x0646, "RemoteHeapFree");
+    registerExport(module, 0x0673, "MoveToEx");
+    registerExport(module, 0x0674, "LineTo");
+    registerExport(module, 0x0676, "SetTextAlign");
+    registerExport(module, 0x0683, "StretchDIBits");
     registerExport(module, 0x07D0, "_setjmp");
     registerExport(module, 0x0532, "operator_new");
     registerExport(module, 0x0533, "operator_vector_new");
@@ -404,6 +478,19 @@ uint32_t SyntheticDllRuntime::closeGuestHandle(uint32_t guestHandle) {
         lastError_ = 6; // ERROR_INVALID_HANDLE
         return 0;
     }
+    if (it->second.kind == GuestHandle::Kind::GuestWindow) {
+        windows_.erase(guestHandle);
+    } else if (it->second.kind == GuestHandle::Kind::GuestDc) {
+        dcs_.erase(guestHandle);
+    } else if (it->second.kind == GuestHandle::Kind::GuestBrush) {
+        brushes_.erase(guestHandle);
+    } else if (it->second.kind == GuestHandle::Kind::GuestFont) {
+        fonts_.erase(guestHandle);
+    }
+    if (it->second.kind == GuestHandle::Kind::GuestHeap) {
+        lastError_ = 6; // ERROR_INVALID_HANDLE; heaps are destroyed via HeapDestroy.
+        return 0;
+    }
 #if defined(_WIN32)
     if (it->second.hostValue) {
         if (it->second.kind == GuestHandle::Kind::HostFind) {
@@ -411,6 +498,14 @@ uint32_t SyntheticDllRuntime::closeGuestHandle(uint32_t guestHandle) {
         } else if (it->second.kind == GuestHandle::Kind::HostWaveIn) {
             auto& winmm = winmmBridge();
             if (winmm.waveInClose) winmm.waveInClose(reinterpret_cast<HWAVEIN>(it->second.hostValue));
+        } else if (it->second.kind == GuestHandle::Kind::HostMenu) {
+            DestroyMenu(reinterpret_cast<HMENU>(it->second.hostValue));
+        } else if (it->second.kind == GuestHandle::Kind::HostAccelerator) {
+            DestroyAcceleratorTable(reinterpret_cast<HACCEL>(it->second.hostValue));
+        } else if (it->second.kind == GuestHandle::Kind::HostIcon) {
+            DestroyIcon(reinterpret_cast<HICON>(it->second.hostValue));
+        } else if (it->second.kind == GuestHandle::Kind::HostBitmap) {
+            DeleteObject(reinterpret_cast<HGDIOBJ>(it->second.hostValue));
         } else {
             CloseHandle(reinterpret_cast<HANDLE>(it->second.hostValue));
         }
@@ -419,6 +514,439 @@ uint32_t SyntheticDllRuntime::closeGuestHandle(uint32_t guestHandle) {
     guestHandles_.erase(it);
     lastError_ = 0;
     return 1;
+}
+
+uint32_t SyntheticDllRuntime::makeGuestDc(uint32_t hwnd) {
+    GuestDc dc{};
+    dc.hwnd = hwnd;
+    dc.selectedBrush = makeStockObject(4); // BLACK_BRUSH
+    dc.selectedFont = makeStockObject(17); // DEFAULT_GUI_FONT
+    const uint32_t handle = makeGuestHandle({GuestHandle::Kind::GuestDc, 0, 0});
+    dcs_[handle] = dc;
+    return handle;
+}
+
+SyntheticDllRuntime::GuestDc* SyntheticDllRuntime::lookupGuestDc(uint32_t hdc) {
+    auto handle = guestHandles_.find(hdc);
+    if (handle == guestHandles_.end() || handle->second.kind != GuestHandle::Kind::GuestDc) return nullptr;
+    auto dc = dcs_.find(hdc);
+    return dc == dcs_.end() ? nullptr : &dc->second;
+}
+
+uint32_t SyntheticDllRuntime::makeGuestBrush(uint32_t colorRef, bool stock) {
+    const uint32_t handle = makeGuestHandle({GuestHandle::Kind::GuestBrush, 0, stock ? 1u : 0u});
+    brushes_[handle] = GuestBrush{colorRef, stock};
+    return handle;
+}
+
+uint32_t SyntheticDllRuntime::makeGuestFont(const std::array<uint8_t, 92>& logFont, bool stock) {
+    const uint32_t handle = makeGuestHandle({GuestHandle::Kind::GuestFont, 0, stock ? 1u : 0u});
+    fonts_[handle] = GuestFont{logFont, stock};
+    return handle;
+}
+
+uint32_t SyntheticDllRuntime::makeStockObject(int32_t index) {
+    auto existing = stockObjects_.find(index);
+    if (existing != stockObjects_.end()) return existing->second;
+
+    uint32_t handle = 0;
+    switch (index) {
+    case 0: handle = makeGuestBrush(0x00ffffff, true); break; // WHITE_BRUSH
+    case 1: handle = makeGuestBrush(0x00c0c0c0, true); break; // LTGRAY_BRUSH
+    case 2: handle = makeGuestBrush(0x00808080, true); break; // GRAY_BRUSH
+    case 3: handle = makeGuestBrush(0x00404040, true); break; // DKGRAY_BRUSH
+    case 4: handle = makeGuestBrush(0x00000000, true); break; // BLACK_BRUSH
+    case 5: handle = makeGuestBrush(0xffffffffu, true); break; // NULL_BRUSH
+    case 6: handle = makeGuestBrush(0x00ffffff, true); break; // WHITE_PEN
+    case 7: handle = makeGuestBrush(0x00000000, true); break; // BLACK_PEN
+    case 8: handle = makeGuestBrush(0xffffffffu, true); break; // NULL_PEN
+    case 13:
+    case 17: {
+        std::array<uint8_t, 92> font{};
+        handle = makeGuestFont(font, true);
+        break;
+    }
+    default:
+        return 0;
+    }
+    stockObjects_[index] = handle;
+    return handle;
+}
+
+uint32_t SyntheticDllRuntime::colorRefToPixel(uint32_t colorRef) const {
+    if (colorRef == 0xffffffffu) return 0;
+    return 0xff000000u | ((colorRef & 0x000000ffu) << 16) |
+           (colorRef & 0x0000ff00u) | ((colorRef >> 16) & 0x000000ffu);
+}
+
+bool SyntheticDllRuntime::readGuestRect(uint32_t address,
+                                        int32_t& left,
+                                        int32_t& top,
+                                        int32_t& right,
+                                        int32_t& bottom) const {
+    if (!address) return false;
+    std::array<uint32_t, 4> rect{};
+    if (uc_mem_read(uc_, address, rect.data(), rect.size() * sizeof(uint32_t)) != UC_ERR_OK) return false;
+    left = int32_t(rect[0]);
+    top = int32_t(rect[1]);
+    right = int32_t(rect[2]);
+    bottom = int32_t(rect[3]);
+    return true;
+}
+
+void SyntheticDllRuntime::writeGuestRect(uint32_t address,
+                                         int32_t left,
+                                         int32_t top,
+                                         int32_t right,
+                                         int32_t bottom) const {
+    if (!address) return;
+    writeU32(address, uint32_t(left));
+    writeU32(address + 4, uint32_t(top));
+    writeU32(address + 8, uint32_t(right));
+    writeU32(address + 12, uint32_t(bottom));
+}
+
+void SyntheticDllRuntime::fillFramebufferRect(const GuestDc& dc,
+                                              int32_t left,
+                                              int32_t top,
+                                              int32_t right,
+                                              int32_t bottom,
+                                              uint32_t pixel) {
+    if (!framebuffer_ || pixel == 0 || framebufferWidth_ <= 0 || framebufferHeight_ <= 0) return;
+    int32_t originX = 0;
+    int32_t originY = 0;
+    auto window = windows_.find(dc.hwnd);
+    if (window != windows_.end()) {
+        originX = window->second.x;
+        originY = window->second.y;
+    }
+    left += originX;
+    right += originX;
+    top += originY;
+    bottom += originY;
+    if (left > right) std::swap(left, right);
+    if (top > bottom) std::swap(top, bottom);
+    left = std::clamp<int32_t>(left, 0, framebufferWidth_);
+    right = std::clamp<int32_t>(right, 0, framebufferWidth_);
+    top = std::clamp<int32_t>(top, 0, framebufferHeight_);
+    bottom = std::clamp<int32_t>(bottom, 0, framebufferHeight_);
+    for (int32_t y = top; y < bottom; ++y) {
+        uint32_t* row = framebuffer_ + size_t(y) * size_t(framebufferWidth_);
+        for (int32_t x = left; x < right; ++x) row[x] = pixel;
+    }
+}
+
+void SyntheticDllRuntime::drawFramebufferLine(const GuestDc& dc,
+                                              int32_t x0,
+                                              int32_t y0,
+                                              int32_t x1,
+                                              int32_t y1,
+                                              uint32_t pixel) {
+    if (!framebuffer_ || pixel == 0 || framebufferWidth_ <= 0 || framebufferHeight_ <= 0) return;
+    int32_t originX = 0;
+    int32_t originY = 0;
+    auto window = windows_.find(dc.hwnd);
+    if (window != windows_.end()) {
+        originX = window->second.x;
+        originY = window->second.y;
+    }
+    x0 += originX;
+    x1 += originX;
+    y0 += originY;
+    y1 += originY;
+    const int32_t dx = std::abs(x1 - x0);
+    const int32_t sx = x0 < x1 ? 1 : -1;
+    const int32_t dy = -std::abs(y1 - y0);
+    const int32_t sy = y0 < y1 ? 1 : -1;
+    int32_t err = dx + dy;
+    for (;;) {
+        if (x0 >= 0 && x0 < framebufferWidth_ && y0 >= 0 && y0 < framebufferHeight_) {
+            framebuffer_[size_t(y0) * size_t(framebufferWidth_) + size_t(x0)] = pixel;
+        }
+        if (x0 == x1 && y0 == y1) break;
+        const int32_t e2 = 2 * err;
+        if (e2 >= dy) {
+            err += dy;
+            x0 += sx;
+        }
+        if (e2 <= dx) {
+            err += dx;
+            y0 += sy;
+        }
+    }
+}
+
+bool SyntheticDllRuntime::stretchDibToFramebuffer(const GuestDc& dc,
+                                                  int32_t dstX,
+                                                  int32_t dstY,
+                                                  int32_t dstW,
+                                                  int32_t dstH,
+                                                  int32_t srcX,
+                                                  int32_t srcY,
+                                                  int32_t srcW,
+                                                  int32_t srcH,
+                                                  uint32_t bitsPtr,
+                                                  uint32_t infoPtr) {
+    if (!framebuffer_ || !bitsPtr || !infoPtr || dstW == 0 || dstH == 0 || srcW == 0 || srcH == 0) return false;
+    std::array<uint8_t, 40> header{};
+    if (uc_mem_read(uc_, infoPtr, header.data(), header.size()) != UC_ERR_OK) return false;
+    const uint32_t headerSize = uint32_t(header[0]) | (uint32_t(header[1]) << 8) |
+                                (uint32_t(header[2]) << 16) | (uint32_t(header[3]) << 24);
+    const int32_t dibWidth = int32_t(uint32_t(header[4]) | (uint32_t(header[5]) << 8) |
+                                    (uint32_t(header[6]) << 16) | (uint32_t(header[7]) << 24));
+    const int32_t dibHeightRaw = int32_t(uint32_t(header[8]) | (uint32_t(header[9]) << 8) |
+                                        (uint32_t(header[10]) << 16) | (uint32_t(header[11]) << 24));
+    const uint16_t planes = uint16_t(header[12] | (header[13] << 8));
+    const uint16_t bpp = uint16_t(header[14] | (header[15] << 8));
+    const uint32_t compression = uint32_t(header[16]) | (uint32_t(header[17]) << 8) |
+                                 (uint32_t(header[18]) << 16) | (uint32_t(header[19]) << 24);
+    const uint32_t clrUsed = uint32_t(header[32]) | (uint32_t(header[33]) << 8) |
+                             (uint32_t(header[34]) << 16) | (uint32_t(header[35]) << 24);
+    if (headerSize < 40 || planes != 1 || compression != 0 || dibWidth <= 0 || dibHeightRaw == 0) return false;
+    const int32_t dibHeight = std::abs(dibHeightRaw);
+    const bool topDown = dibHeightRaw < 0;
+    const uint32_t paletteEntries = bpp <= 8 ? (clrUsed ? clrUsed : (1u << bpp)) : 0;
+    std::vector<uint32_t> palette(paletteEntries);
+    if (paletteEntries) {
+        std::vector<uint8_t> rawPalette(size_t(paletteEntries) * 4);
+        if (uc_mem_read(uc_, infoPtr + headerSize, rawPalette.data(), rawPalette.size()) != UC_ERR_OK) return false;
+        for (uint32_t i = 0; i < paletteEntries; ++i) {
+            const uint8_t b = rawPalette[size_t(i) * 4 + 0];
+            const uint8_t g = rawPalette[size_t(i) * 4 + 1];
+            const uint8_t r = rawPalette[size_t(i) * 4 + 2];
+            palette[i] = 0xff000000u | (uint32_t(r) << 16) | (uint32_t(g) << 8) | uint32_t(b);
+        }
+    }
+    const uint32_t rowStride = ((uint32_t(dibWidth) * uint32_t(bpp) + 31u) / 32u) * 4u;
+    if (!rowStride || rowStride > 0x100000u || uint64_t(rowStride) * uint64_t(dibHeight) > 0x2000000ull) return false;
+    std::vector<uint8_t> bits(size_t(rowStride) * size_t(dibHeight));
+    if (uc_mem_read(uc_, bitsPtr, bits.data(), bits.size()) != UC_ERR_OK) return false;
+
+    int32_t outLeft = dstW < 0 ? dstX + dstW : dstX;
+    int32_t outTop = dstH < 0 ? dstY + dstH : dstY;
+    const int32_t outW = std::abs(dstW);
+    const int32_t outH = std::abs(dstH);
+    int32_t originX = 0;
+    int32_t originY = 0;
+    auto window = windows_.find(dc.hwnd);
+    if (window != windows_.end()) {
+        originX = window->second.x;
+        originY = window->second.y;
+    }
+    outLeft += originX;
+    outTop += originY;
+    for (int32_t y = 0; y < outH; ++y) {
+        const int32_t dstPy = outTop + y;
+        if (dstPy < 0 || dstPy >= framebufferHeight_) continue;
+        const int32_t sy = srcY + (int64_t(y) * srcH) / outH;
+        if (sy < 0 || sy >= dibHeight) continue;
+        const int32_t row = topDown ? sy : (dibHeight - 1 - sy);
+        for (int32_t x = 0; x < outW; ++x) {
+            const int32_t dstPx = outLeft + x;
+            if (dstPx < 0 || dstPx >= framebufferWidth_) continue;
+            const int32_t sx = srcX + (int64_t(x) * srcW) / outW;
+            if (sx < 0 || sx >= dibWidth) continue;
+            const uint8_t* p = bits.data() + size_t(row) * rowStride;
+            uint32_t pixel = 0;
+            if (bpp == 32) {
+                const size_t o = size_t(sx) * 4;
+                pixel = 0xff000000u | (uint32_t(p[o + 2]) << 16) | (uint32_t(p[o + 1]) << 8) | p[o];
+            } else if (bpp == 24) {
+                const size_t o = size_t(sx) * 3;
+                pixel = 0xff000000u | (uint32_t(p[o + 2]) << 16) | (uint32_t(p[o + 1]) << 8) | p[o];
+            } else if (bpp == 16) {
+                const uint16_t v = uint16_t(p[size_t(sx) * 2] | (p[size_t(sx) * 2 + 1] << 8));
+                const uint8_t r = uint8_t(((v >> 11) & 0x1f) * 255 / 31);
+                const uint8_t g = uint8_t(((v >> 5) & 0x3f) * 255 / 63);
+                const uint8_t b = uint8_t((v & 0x1f) * 255 / 31);
+                pixel = 0xff000000u | (uint32_t(r) << 16) | (uint32_t(g) << 8) | b;
+            } else if (bpp == 8 && !palette.empty()) {
+                pixel = palette[p[sx]];
+            } else {
+                return false;
+            }
+            framebuffer_[size_t(dstPy) * size_t(framebufferWidth_) + size_t(dstPx)] = pixel;
+        }
+    }
+    return true;
+}
+
+void SyntheticDllRuntime::loadMainResources(const std::filesystem::path& path) {
+    mainResources_.clear();
+    std::ifstream file(path, std::ios::binary);
+    if (!file) {
+        spdlog::warn("resource parse skipped; cannot open {}", path.string());
+        return;
+    }
+    std::vector<uint8_t> bytes{std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
+    if (bytes.size() < 0x100 || readLe16(bytes, 0) != 0x5a4d) return;
+    const uint32_t nt = readLe32(bytes, 0x3c);
+    if (nt + 0x18 >= bytes.size() || readLe32(bytes, nt) != 0x4550) return;
+    const uint16_t sectionCount = readLe16(bytes, nt + 6);
+    const uint16_t optSize = readLe16(bytes, nt + 20);
+    const uint32_t opt = nt + 24;
+    if (opt + 112 > bytes.size() || readLe16(bytes, opt) != 0x10b) return;
+    const uint32_t sizeOfHeaders = readLe32(bytes, opt + 60);
+    const uint32_t resourceRva = readLe32(bytes, opt + 96 + 2 * 8);
+    const uint32_t resourceSize = readLe32(bytes, opt + 100 + 2 * 8);
+    if (!resourceRva || !resourceSize) return;
+
+    struct SectionView { uint32_t va{}, vsize{}, raw{}, rawSize{}; };
+    std::vector<SectionView> sections;
+    const uint32_t sh = opt + optSize;
+    for (uint16_t i = 0; i < sectionCount && sh + i * 40 + 40 <= bytes.size(); ++i) {
+        SectionView s;
+        s.vsize = readLe32(bytes, sh + i * 40 + 8);
+        s.va = readLe32(bytes, sh + i * 40 + 12);
+        s.rawSize = readLe32(bytes, sh + i * 40 + 16);
+        s.raw = readLe32(bytes, sh + i * 40 + 20);
+        sections.push_back(s);
+    }
+    auto rvaToFile = [&](uint32_t rva) -> std::optional<uint32_t> {
+        if (rva < sizeOfHeaders) return rva;
+        for (const auto& s : sections) {
+            const uint32_t span = std::max(s.vsize, s.rawSize);
+            if (rva >= s.va && rva < s.va + span) return s.raw + (rva - s.va);
+        }
+        return std::nullopt;
+    };
+    const auto resourceBase = rvaToFile(resourceRva);
+    if (!resourceBase) return;
+    const uint32_t resourceEnd = *resourceBase + resourceSize;
+    if (*resourceBase >= bytes.size()) return;
+
+    auto readResourceName = [&](uint32_t raw) -> ResourceName {
+        ResourceName result{};
+        if (raw & 0x80000000u) {
+            const uint32_t offset = *resourceBase + (raw & 0x7fffffffu);
+            const uint16_t length = readLe16(bytes, offset);
+            result.ordinal = false;
+            result.name = lowerAscii(utf16FromBytes(bytes, offset + 2, length));
+        } else {
+            result.ordinal = true;
+            result.id = raw & 0xffffu;
+        }
+        return result;
+    };
+    std::function<void(uint32_t, int, ResourceName, ResourceName)> walk =
+        [&](uint32_t dirOffset, int depth, ResourceName type, ResourceName name) {
+            const uint32_t dir = *resourceBase + dirOffset;
+            if (dir + 16 > bytes.size() || dir >= resourceEnd) return;
+            const uint16_t named = readLe16(bytes, dir + 12);
+            const uint16_t ids = readLe16(bytes, dir + 14);
+            const uint32_t count = uint32_t(named) + ids;
+            for (uint32_t i = 0; i < count; ++i) {
+                const uint32_t entry = dir + 16 + i * 8;
+                if (entry + 8 > bytes.size() || entry >= resourceEnd) return;
+                ResourceName current = readResourceName(readLe32(bytes, entry));
+                const uint32_t data = readLe32(bytes, entry + 4);
+                if (data & 0x80000000u) {
+                    if (depth == 0) walk(data & 0x7fffffffu, depth + 1, current, {});
+                    else if (depth == 1) walk(data & 0x7fffffffu, depth + 1, type, current);
+                } else if (depth >= 2) {
+                    const uint32_t dataEntry = *resourceBase + data;
+                    if (dataEntry + 16 > bytes.size() || dataEntry >= resourceEnd) continue;
+                    const uint32_t dataRva = readLe32(bytes, dataEntry);
+                    const uint32_t dataSize = readLe32(bytes, dataEntry + 4);
+                    const auto dataOff = rvaToFile(dataRva);
+                    if (!dataOff || *dataOff + dataSize > bytes.size()) continue;
+                    ResourceEntry resource{};
+                    resource.type = type;
+                    resource.name = name;
+                    resource.language = uint16_t(current.id);
+                    resource.data.assign(bytes.begin() + *dataOff, bytes.begin() + *dataOff + dataSize);
+                    mainResources_.push_back(std::move(resource));
+                }
+            }
+        };
+    walk(0, 0, {}, {});
+    spdlog::info("parsed {} resources from {}", mainResources_.size(), path.filename().string());
+}
+
+bool SyntheticDllRuntime::resourceNameMatches(const ResourceName& resourceName, uint32_t guestArg) const {
+    if (guestArg < 0x10000) {
+        return resourceName.ordinal && resourceName.id == guestArg;
+    }
+    return !resourceName.ordinal && resourceName.name == lowerAscii(readUtf16(guestArg));
+}
+
+const SyntheticDllRuntime::ResourceEntry* SyntheticDllRuntime::findResource(uint32_t typeArg,
+                                                                             uint32_t nameArg) const {
+    for (const auto& resource : mainResources_) {
+        if (resourceNameMatches(resource.type, typeArg) && resourceNameMatches(resource.name, nameArg)) {
+            return &resource;
+        }
+    }
+    if (typeArg == 6 && nameArg < 0x10000) {
+        const uint32_t blockId = (nameArg >> 4) + 1;
+        for (const auto& resource : mainResources_) {
+            if (resource.type.ordinal && resource.type.id == 6 &&
+                resource.name.ordinal && resource.name.id == blockId) {
+                return &resource;
+            }
+        }
+    }
+    return nullptr;
+}
+
+const SyntheticDllRuntime::ResourceEntry* SyntheticDllRuntime::resourceFromHandle(uint32_t guestHandle) const {
+    auto handle = guestHandles_.find(guestHandle);
+    if (handle == guestHandles_.end() || handle->second.kind != GuestHandle::Kind::GuestResource ||
+        !handle->second.hostValue) {
+        return nullptr;
+    }
+    const size_t index = size_t(handle->second.hostValue - 1);
+    return index < mainResources_.size() ? &mainResources_[index] : nullptr;
+}
+
+uint32_t SyntheticDllRuntime::handleWNetGetUserW(uint32_t, uint32_t userName, uint32_t lengthPtr) {
+    if (!userName || !lengthPtr) {
+        lastError_ = 87; // ERROR_INVALID_PARAMETER
+        return 87;
+    }
+    uint32_t capacity = 0;
+    if (uc_mem_read(uc_, lengthPtr, &capacity, sizeof(capacity)) != UC_ERR_OK || !capacity) {
+        lastError_ = 87;
+        return 87;
+    }
+    std::string user;
+#if defined(_WIN32)
+    std::vector<wchar_t> hostName(std::max<uint32_t>(capacity, 256));
+    DWORD hostLength = DWORD(hostName.size());
+    if (!GetUserNameW(hostName.data(), &hostLength)) {
+        const DWORD error = GetLastError();
+        writeU32(lengthPtr, hostLength);
+        lastError_ = error;
+        return error;
+    }
+    for (DWORD i = 0; i + 1 < hostLength && hostName[i]; ++i) {
+        user.push_back(hostName[i] < 0x80 ? char(hostName[i]) : '?');
+    }
+#else
+    const char* envUser = std::getenv("USER");
+    user = envUser && *envUser ? envUser : "user";
+#endif
+    const uint32_t required = uint32_t(user.size() + 1);
+    writeU32(lengthPtr, required);
+    if (capacity < required) {
+        lastError_ = 122; // ERROR_INSUFFICIENT_BUFFER
+        return 122;
+    }
+    writeUtf16(userName, user, capacity);
+    lastError_ = 0;
+    return 0;
+}
+
+bool SyntheticDllRuntime::writeGuestMessage(uint32_t address, const GuestMessage& message) const {
+    if (!address) return false;
+    writeU32(address, message.hwnd);
+    writeU32(address + 4, message.message);
+    writeU32(address + 8, message.wParam);
+    writeU32(address + 12, message.lParam);
+    writeU32(address + 16, message.time);
+    writeU32(address + 20, message.x);
+    writeU32(address + 24, message.y);
+    return true;
 }
 
 uint32_t SyntheticDllRuntime::reg(int regId) const {
@@ -625,11 +1153,40 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(const std::string& name,
             }
         }
         ret = writeUtf16(a0, out, uint32_t(out.size() + 1));
-    } else if (name == "InitializeCriticalSection" || name == "DeleteCriticalSection" ||
-               name == "EnterCriticalSection" || name == "LeaveCriticalSection") {
+    } else if (name == "InitializeCriticalSection") {
+        if (a0) {
+            criticalSectionDepth_[a0] = 0;
+            lastError_ = 0;
+        } else {
+            lastError_ = 87;
+        }
+        ret = 0;
+    } else if (name == "DeleteCriticalSection") {
+        criticalSectionDepth_.erase(a0);
+        lastError_ = 0;
+        ret = 0;
+    } else if (name == "EnterCriticalSection") {
+        if (a0) {
+            ++criticalSectionDepth_[a0];
+            lastError_ = 0;
+        } else {
+            lastError_ = 87;
+        }
+        ret = 0;
+    } else if (name == "LeaveCriticalSection") {
+        auto it = criticalSectionDepth_.find(a0);
+        if (it != criticalSectionDepth_.end() && it->second) --it->second;
+        lastError_ = 0;
         ret = 0;
     } else if (name == "TryEnterCriticalSection") {
-        ret = 1;
+        if (a0) {
+            ++criticalSectionDepth_[a0];
+            lastError_ = 0;
+            ret = 1;
+        } else {
+            lastError_ = 87;
+            ret = 0;
+        }
     } else if (name == "TlsGetValue") {
         ret = tlsValues_[a0];
     } else if (name == "TlsSetValue") {
@@ -684,17 +1241,57 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(const std::string& name,
             uc_mem_write(uc_, ret, bytes.data(), bytes.size());
         }
     } else if (name == "HeapCreate") {
-        ret = makeGuestHandle({GuestHandle::Kind::Pseudo, 0, 0});
+        ret = makeGuestHandle({GuestHandle::Kind::GuestHeap, 0, 0});
     } else if (name == "HeapDestroy") {
-        ret = 1;
+        auto it = guestHandles_.find(a0);
+        if (it == guestHandles_.end() || it->second.kind != GuestHandle::Kind::GuestHeap ||
+            a0 == processHeapHandle_) {
+            lastError_ = 6;
+            ret = 0;
+        } else {
+            guestHandles_.erase(it);
+            lastError_ = 0;
+            ret = 1;
+        }
     } else if (name == "GetProcessHeap") {
-        ret = 1;
+        if (!processHeapHandle_) {
+            processHeapHandle_ = makeGuestHandle({GuestHandle::Kind::GuestHeap, 0, 0});
+        }
+        ret = processHeapHandle_;
     } else if (name == "HeapAlloc") {
-        ret = allocate(a2, (a1 & 0x00000008u) != 0);
+        auto* heap = lookupGuestHandle(a0);
+        if (!heap || heap->kind != GuestHandle::Kind::GuestHeap) {
+            lastError_ = 6;
+            ret = 0;
+        } else {
+            ret = allocate(a2, (a1 & 0x00000008u) != 0);
+            lastError_ = ret ? 0 : 8;
+        }
     } else if (name == "HeapReAlloc") {
-        ret = allocate(a3, (a1 & 0x00000008u) != 0);
+        auto* heap = lookupGuestHandle(a0);
+        if (!heap || heap->kind != GuestHandle::Kind::GuestHeap || !a2) {
+            lastError_ = 6;
+            ret = 0;
+        } else {
+            const uint32_t oldSize = allocationSizes_.count(a2) ? allocationSizes_[a2] : 0;
+            ret = allocate(a3, (a1 & 0x00000008u) != 0);
+            if (ret && oldSize) {
+                std::vector<uint8_t> bytes(std::min(oldSize, a3));
+                uc_mem_read(uc_, a2, bytes.data(), bytes.size());
+                uc_mem_write(uc_, ret, bytes.data(), bytes.size());
+            }
+            lastError_ = ret ? 0 : 8;
+        }
     } else if (name == "HeapFree") {
-        ret = 1;
+        auto* heap = lookupGuestHandle(a0);
+        if (!heap || heap->kind != GuestHandle::Kind::GuestHeap || !a2) {
+            lastError_ = 6;
+            ret = 0;
+        } else {
+            allocationSizes_.erase(a2);
+            lastError_ = 0;
+            ret = 1;
+        }
     } else if (name == "RemoteHeapFree") {
         ret = copyGuest(a0, a2, 0x38) ? a0 : 1;
     } else if (name == "VirtualAlloc") {
@@ -885,6 +1482,35 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
     const uint32_t a1 = args.a1;
     const uint32_t a2 = args.a2;
     const uint32_t a3 = args.a3;
+    auto getWindowLongValue = [](const GuestWindow& window, int32_t index) -> uint32_t {
+        switch (index) {
+        case -4: return window.wndProc;  // GWL_WNDPROC
+        case -6: return window.instance; // GWL_HINSTANCE
+        case -8: return window.parent;   // GWL_HWNDPARENT
+        case -12: return window.menu;    // GWL_ID
+        case -16: return window.style;   // GWL_STYLE
+        case -20: return window.exStyle; // GWL_EXSTYLE
+        case -21: return window.userData; // GWL_USERDATA
+        default: {
+            auto it = window.extraLongs.find(index);
+            return it == window.extraLongs.end() ? 0 : it->second;
+        }
+        }
+    };
+    auto setWindowLongValue = [&](GuestWindow& window, int32_t index, uint32_t value) -> uint32_t {
+        const uint32_t previous = getWindowLongValue(window, index);
+        switch (index) {
+        case -4: window.wndProc = value; break;
+        case -6: window.instance = value; break;
+        case -8: window.parent = value; break;
+        case -12: window.menu = value; break;
+        case -16: window.style = value; break;
+        case -20: window.exStyle = value; break;
+        case -21: window.userData = value; break;
+        default: window.extraLongs[index] = value; break;
+        }
+        return previous;
+    };
 
     if (name == "IsProcessDying") {
         ret = 0;
@@ -1006,7 +1632,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             lastError_ = GetLastError();
         }
 #else
-        ret = makeGuestHandle({GuestHandle::Kind::Pseudo, 0, 0});
+        ret = makeGuestHandle({GuestHandle::Kind::HostEvent, 0, 0});
 #endif
     } else if (name == "CreateMutexW") {
 #if defined(_WIN32)
@@ -1017,7 +1643,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             lastError_ = GetLastError();
         }
 #else
-        ret = makeGuestHandle({GuestHandle::Kind::Pseudo, 0, 0});
+        ret = makeGuestHandle({GuestHandle::Kind::HostMutex, 0, 0});
 #endif
     } else if (name == "WaitForSingleObject") {
         auto* handle = lookupGuestHandle(a0);
@@ -1208,10 +1834,12 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
         }
     } else if (name == "GetSystemMetrics") {
 #if defined(_WIN32)
-        ret = uint32_t(GetSystemMetrics(int(a0)));
+        if (a0 == 0 && framebufferWidth_ > 0) ret = uint32_t(framebufferWidth_);
+        else if (a0 == 1 && framebufferHeight_ > 0) ret = uint32_t(framebufferHeight_);
+        else ret = uint32_t(GetSystemMetrics(int(a0)));
 #else
-        if (a0 == 0) ret = 800;
-        else if (a0 == 1) ret = 480;
+        if (a0 == 0) ret = uint32_t(framebufferWidth_ > 0 ? framebufferWidth_ : 800);
+        else if (a0 == 1) ret = uint32_t(framebufferHeight_ > 0 ? framebufferHeight_ : 480);
         else ret = 0;
 #endif
     } else if (name == "GetSysColor") {
@@ -1273,32 +1901,738 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             ret = 0;
         }
     } else if (name == "FindWindowW") {
-        lastError_ = 0;
         ret = 0;
+        const std::string className = a0 < 0x10000
+            ? (windowClassNamesByAtom_.count(uint16_t(a0)) ? windowClassNamesByAtom_[uint16_t(a0)] : std::string{})
+            : lowerAscii(readUtf16(a0));
+        const std::string title = readUtf16(a1);
+        for (const auto& [hwnd, window] : windows_) {
+            if ((!a0 || window.className == className) && (!a1 || window.title == title)) {
+                ret = hwnd;
+                break;
+            }
+        }
+        lastError_ = ret ? 0 : 1400;
     } else if (name == "CreateWindowExW") {
-        ret = makeGuestHandle({GuestHandle::Kind::Pseudo, 0, 0});
+        std::string className;
+        if (a1 < 0x10000) {
+            auto it = windowClassNamesByAtom_.find(uint16_t(a1));
+            if (it != windowClassNamesByAtom_.end()) className = it->second;
+        } else {
+            className = lowerAscii(readUtf16(a1));
+        }
+        const uint32_t parent = stackArg(8);
+        const uint32_t menu = stackArg(9);
+        const uint32_t instance = stackArg(10);
+        const uint32_t param = stackArg(11);
+        auto normalizePos = [](uint32_t value) -> int32_t {
+            return value == 0x80000000u ? 0 : int32_t(value);
+        };
+        auto normalizeSize = [](uint32_t value, int32_t fallback) -> int32_t {
+            const int32_t signedValue = int32_t(value);
+            return value == 0x80000000u || signedValue <= 0 ? fallback : signedValue;
+        };
+        uint32_t wndProc = 0;
+        auto cls = windowClassesByName_.find(className);
+        if (cls != windowClassesByName_.end()) {
+            std::memcpy(&wndProc, cls->second.bytes.data() + 4, sizeof(wndProc));
+        }
+        ret = makeGuestHandle({GuestHandle::Kind::GuestWindow, 0, 0});
+        GuestWindow window{};
+        window.hwnd = ret;
+        window.className = className;
+        window.title = readUtf16(a2);
+        window.style = a3;
+        window.exStyle = a0;
+        window.parent = parent;
+        window.menu = menu;
+        window.instance = instance;
+        window.param = param;
+        window.wndProc = wndProc;
+        window.x = normalizePos(stackArg(4));
+        window.y = normalizePos(stackArg(5));
+        window.width = normalizeSize(stackArg(6), framebufferWidth_ > 0 ? framebufferWidth_ : 800);
+        window.height = normalizeSize(stackArg(7), framebufferHeight_ > 0 ? framebufferHeight_ : 480);
+        window.visible = (a3 & 0x10000000u) != 0; // WS_VISIBLE
+        windows_[ret] = window;
+        const uint32_t createStruct = allocate(48, true);
+        if (createStruct) {
+            writeU32(createStruct, param);
+            writeU32(createStruct + 4, instance);
+            writeU32(createStruct + 8, menu);
+            writeU32(createStruct + 12, parent);
+            writeU32(createStruct + 16, uint32_t(window.height));
+            writeU32(createStruct + 20, uint32_t(window.width));
+            writeU32(createStruct + 24, uint32_t(window.y));
+            writeU32(createStruct + 28, uint32_t(window.x));
+            writeU32(createStruct + 32, window.style);
+            writeU32(createStruct + 36, a2);
+            writeU32(createStruct + 40, a1);
+            writeU32(createStruct + 44, window.exStyle);
+            GuestMessage create{};
+            create.hwnd = ret;
+            create.message = 0x0001; // WM_CREATE
+            create.lParam = createStruct;
+            create.time = uint32_t(++tick_ * 16);
+            guestMessages_.push_back(create);
+        }
+        GuestMessage size{};
+        size.hwnd = ret;
+        size.message = 0x0005; // WM_SIZE
+        size.lParam = (uint32_t(uint16_t(window.height)) << 16) | uint16_t(window.width);
+        size.time = uint32_t(++tick_ * 16);
+        guestMessages_.push_back(size);
         lastError_ = 0;
+    } else if (name == "GetClientRect") {
+        auto it = windows_.find(a0);
+        if (!a1 || it == windows_.end()) {
+            lastError_ = it == windows_.end() ? 1400 : 87;
+            ret = 0;
+        } else {
+            writeGuestRect(a1, 0, 0, it->second.width, it->second.height);
+            lastError_ = 0;
+            ret = 1;
+        }
+    } else if (name == "InvalidateRect") {
+        if (!windows_.count(a0)) {
+            lastError_ = 1400;
+            ret = 0;
+        } else {
+            GuestMessage message{};
+            message.hwnd = a0;
+            message.message = 0x000f; // WM_PAINT
+            message.time = uint32_t(++tick_ * 16);
+            guestMessages_.push_back(message);
+            lastError_ = 0;
+            ret = 1;
+        }
+    } else if (name == "ValidateRect") {
+        ret = windows_.count(a0) ? 1 : 0;
+        lastError_ = ret ? 0 : 1400;
+    } else if (name == "BeginPaint") {
+        auto it = windows_.find(a0);
+        if (it == windows_.end()) {
+            lastError_ = 1400;
+            ret = 0;
+        } else {
+            ret = makeGuestDc(a0);
+            if (a1) {
+                std::array<uint8_t, 64> paint{};
+                uc_mem_write(uc_, a1, paint.data(), paint.size());
+                writeU32(a1, ret);
+                writeU32(a1 + 4, 1);
+                writeGuestRect(a1 + 8, 0, 0, it->second.width, it->second.height);
+            }
+            lastError_ = 0;
+        }
+    } else if (name == "EndPaint") {
+        uint32_t hdc = 0;
+        if (a1) uc_mem_read(uc_, a1, &hdc, sizeof(hdc));
+        if (hdc) {
+            dcs_.erase(hdc);
+            guestHandles_.erase(hdc);
+        }
+        ret = windows_.count(a0) ? 1 : 0;
+        lastError_ = ret ? 0 : 1400;
+    } else if (name == "GetDC" || name == "GetDCEx") {
+        if (a0 && !windows_.count(a0)) {
+            lastError_ = 1400;
+            ret = 0;
+        } else {
+            ret = makeGuestDc(a0);
+            lastError_ = 0;
+        }
+    } else if (name == "ReleaseDC") {
+        auto handle = guestHandles_.find(a1);
+        if (handle == guestHandles_.end() || handle->second.kind != GuestHandle::Kind::GuestDc) {
+            lastError_ = 6;
+            ret = 0;
+        } else {
+            dcs_.erase(a1);
+            guestHandles_.erase(handle);
+            lastError_ = 0;
+            ret = 1;
+        }
+    } else if (name == "CreateSolidBrush") {
+        ret = makeGuestBrush(a0);
+        lastError_ = 0;
+    } else if (name == "CreateFontIndirectW") {
+        std::array<uint8_t, 92> font{};
+        if (!a0 || uc_mem_read(uc_, a0, font.data(), font.size()) != UC_ERR_OK) {
+            lastError_ = 87;
+            ret = 0;
+        } else {
+            ret = makeGuestFont(font);
+            lastError_ = 0;
+        }
+    } else if (name == "GetStockObject") {
+        ret = makeStockObject(int32_t(a0));
+        lastError_ = ret ? 0 : 87;
+    } else if (name == "SelectObject") {
+        GuestDc* dc = lookupGuestDc(a0);
+        auto object = guestHandles_.find(a1);
+        if (!dc || object == guestHandles_.end()) {
+            lastError_ = 6;
+            ret = 0;
+        } else if (object->second.kind == GuestHandle::Kind::GuestBrush) {
+            ret = dc->selectedBrush;
+            dc->selectedBrush = a1;
+            lastError_ = 0;
+        } else if (object->second.kind == GuestHandle::Kind::GuestFont) {
+            ret = dc->selectedFont;
+            dc->selectedFont = a1;
+            lastError_ = 0;
+        } else {
+            lastError_ = 6;
+            ret = 0;
+        }
+    } else if (name == "DeleteObject") {
+        auto object = guestHandles_.find(a0);
+        if (object == guestHandles_.end()) {
+            lastError_ = 6;
+            ret = 0;
+        } else if (object->second.filePointer) {
+            ret = 0;
+            lastError_ = 6;
+        } else if (object->second.kind == GuestHandle::Kind::GuestBrush) {
+            brushes_.erase(a0);
+            guestHandles_.erase(object);
+            ret = 1;
+            lastError_ = 0;
+        } else if (object->second.kind == GuestHandle::Kind::GuestFont) {
+            fonts_.erase(a0);
+            guestHandles_.erase(object);
+            ret = 1;
+            lastError_ = 0;
+        } else if (object->second.kind == GuestHandle::Kind::HostBitmap) {
+#if defined(_WIN32)
+            if (object->second.hostValue) DeleteObject(reinterpret_cast<HGDIOBJ>(object->second.hostValue));
+#endif
+            guestHandles_.erase(object);
+            ret = 1;
+            lastError_ = 0;
+        } else {
+            lastError_ = 6;
+            ret = 0;
+        }
+    } else if (name == "SetBkColor" || name == "SetTextColor" || name == "SetBkMode" || name == "SetTextAlign") {
+        GuestDc* dc = lookupGuestDc(a0);
+        if (!dc) {
+            lastError_ = 6;
+            ret = 0xffffffffu;
+        } else if (name == "SetBkColor") {
+            ret = dc->bkColor;
+            dc->bkColor = a1;
+            lastError_ = 0;
+        } else if (name == "SetTextColor") {
+            ret = dc->textColor;
+            dc->textColor = a1;
+            lastError_ = 0;
+        } else if (name == "SetBkMode") {
+            ret = dc->bkMode;
+            dc->bkMode = a1;
+            lastError_ = 0;
+        } else {
+            ret = dc->textAlign;
+            dc->textAlign = a1;
+            lastError_ = 0;
+        }
+    } else if (name == "FillRect") {
+        GuestDc* dc = lookupGuestDc(a0);
+        int32_t left = 0, top = 0, right = 0, bottom = 0;
+        auto brush = brushes_.find(a2);
+        if (!dc || !readGuestRect(a1, left, top, right, bottom) || brush == brushes_.end()) {
+            lastError_ = 87;
+            ret = 0;
+        } else {
+            fillFramebufferRect(*dc, left, top, right, bottom, colorRefToPixel(brush->second.colorRef));
+            lastError_ = 0;
+            ret = 1;
+        }
+    } else if (name == "PatBlt") {
+        GuestDc* dc = lookupGuestDc(a0);
+        auto brush = dc ? brushes_.find(dc->selectedBrush) : brushes_.end();
+        const uint32_t rop = stackArg(5);
+        if (!dc || brush == brushes_.end() || rop != 0x00f00021u) {
+            lastError_ = dc ? 120 : 6;
+            ret = 0;
+        } else {
+            fillFramebufferRect(*dc, int32_t(a1), int32_t(a2),
+                                int32_t(a1) + int32_t(a3),
+                                int32_t(a2) + int32_t(stackArg(4)),
+                                colorRefToPixel(brush->second.colorRef));
+            lastError_ = 0;
+            ret = 1;
+        }
+    } else if (name == "Rectangle") {
+        GuestDc* dc = lookupGuestDc(a0);
+        auto brush = dc ? brushes_.find(dc->selectedBrush) : brushes_.end();
+        if (!dc || brush == brushes_.end()) {
+            lastError_ = dc ? 87 : 6;
+            ret = 0;
+        } else {
+            const uint32_t pixel = colorRefToPixel(brush->second.colorRef);
+            const int32_t left = int32_t(a1);
+            const int32_t top = int32_t(a2);
+            const int32_t right = int32_t(a3);
+            const int32_t bottom = int32_t(stackArg(4));
+            drawFramebufferLine(*dc, left, top, right - 1, top, pixel);
+            drawFramebufferLine(*dc, left, bottom - 1, right - 1, bottom - 1, pixel);
+            drawFramebufferLine(*dc, left, top, left, bottom - 1, pixel);
+            drawFramebufferLine(*dc, right - 1, top, right - 1, bottom - 1, pixel);
+            lastError_ = 0;
+            ret = 1;
+        }
+    } else if (name == "MoveToEx") {
+        GuestDc* dc = lookupGuestDc(a0);
+        if (!dc) {
+            lastError_ = 6;
+            ret = 0;
+        } else {
+            if (a3) {
+                writeU32(a3, uint32_t(dc->x));
+                writeU32(a3 + 4, uint32_t(dc->y));
+            }
+            dc->x = int32_t(a1);
+            dc->y = int32_t(a2);
+            lastError_ = 0;
+            ret = 1;
+        }
+    } else if (name == "LineTo") {
+        GuestDc* dc = lookupGuestDc(a0);
+        auto brush = dc ? brushes_.find(dc->selectedBrush) : brushes_.end();
+        if (!dc || brush == brushes_.end()) {
+            lastError_ = dc ? 87 : 6;
+            ret = 0;
+        } else {
+            drawFramebufferLine(*dc, dc->x, dc->y, int32_t(a1), int32_t(a2),
+                                colorRefToPixel(brush->second.colorRef));
+            dc->x = int32_t(a1);
+            dc->y = int32_t(a2);
+            lastError_ = 0;
+            ret = 1;
+        }
+    } else if (name == "StretchDIBits") {
+        GuestDc* dc = lookupGuestDc(a0);
+        if (!dc) {
+            lastError_ = 6;
+            ret = 0xffffffffu;
+        } else {
+            const bool ok = stackArg(11) == 0 && stackArg(12) == 0x00cc0020u &&
+                stretchDibToFramebuffer(*dc, int32_t(a1), int32_t(a2), int32_t(a3),
+                                        int32_t(stackArg(4)), int32_t(stackArg(5)),
+                                        int32_t(stackArg(6)), int32_t(stackArg(7)),
+                                        int32_t(stackArg(8)), stackArg(9), stackArg(10));
+            if (ok) {
+                ret = uint32_t(std::abs(int32_t(stackArg(8))));
+                lastError_ = 0;
+            } else {
+                lastError_ = 120;
+                ret = 0xffffffffu;
+            }
+        }
+    } else if (name == "ExtTextOutW" || name == "DrawTextW") {
+        GuestDc* dc = lookupGuestDc(a0);
+        if (!dc) {
+            lastError_ = 6;
+            ret = 0;
+        } else {
+            lastError_ = 0;
+            ret = 1;
+        }
+    } else if (name == "CreateCompatibleDC" || name == "BitBlt") {
+        lastError_ = 120;
+        ret = 0;
+    } else if (name == "GetWindowLongW") {
+        auto it = windows_.find(a0);
+        if (it == windows_.end()) {
+            lastError_ = 1400;
+            ret = 0;
+        } else {
+            lastError_ = 0;
+            ret = getWindowLongValue(it->second, int32_t(a1));
+        }
+    } else if (name == "SetWindowLongW") {
+        auto it = windows_.find(a0);
+        if (it == windows_.end()) {
+            lastError_ = 1400;
+            ret = 0;
+        } else {
+            lastError_ = 0;
+            ret = setWindowLongValue(it->second, int32_t(a1), a2);
+        }
+    } else if (name == "GetParent") {
+        auto it = windows_.find(a0);
+        if (it == windows_.end()) {
+            lastError_ = 1400;
+            ret = 0;
+        } else {
+            lastError_ = 0;
+            ret = it->second.parent;
+        }
+    } else if (name == "GetWindow") {
+        auto it = windows_.find(a0);
+        if (it == windows_.end()) {
+            lastError_ = 1400;
+            ret = 0;
+        } else if (a1 == 5) {
+            ret = 0;
+            for (const auto& [hwnd, window] : windows_) {
+                if (window.parent == a0) {
+                    ret = hwnd;
+                    break;
+                }
+            }
+            lastError_ = ret ? 0 : 1400;
+        } else if (a1 == 2 || a1 == 3) {
+            std::vector<uint32_t> siblings;
+            for (const auto& [hwnd, window] : windows_) {
+                if (window.parent == it->second.parent) siblings.push_back(hwnd);
+            }
+            auto pos = std::find(siblings.begin(), siblings.end(), a0);
+            if (pos == siblings.end()) {
+                ret = 0;
+            } else if (a1 == 2 && ++pos != siblings.end()) {
+                ret = *pos;
+            } else if (a1 == 3 && pos != siblings.begin()) {
+                ret = *--pos;
+            } else {
+                ret = 0;
+            }
+            lastError_ = ret ? 0 : 1400;
+        } else if (a1 == 0 || a1 == 1) {
+            ret = 0;
+            for (const auto& [hwnd, window] : windows_) {
+                if (window.parent == it->second.parent) {
+                    ret = hwnd;
+                    if (a1 == 0) break;
+                }
+            }
+            lastError_ = ret ? 0 : 1400;
+        } else {
+            lastError_ = 1400;
+            ret = 0;
+        }
     } else if (name == "ShowWindow") {
-        ret = 0;
+        auto it = windows_.find(a0);
+        if (it == windows_.end()) {
+            lastError_ = 1400;
+            ret = 0;
+        } else {
+            const bool wasVisible = it->second.visible;
+            it->second.visible = a1 != 0;
+            if (it->second.visible != wasVisible) {
+                GuestMessage message{};
+                message.hwnd = a0;
+                message.message = 0x0018; // WM_SHOWWINDOW
+                message.wParam = it->second.visible ? 1 : 0;
+                message.time = uint32_t(++tick_ * 16);
+                guestMessages_.push_back(message);
+            }
+            lastError_ = 0;
+            ret = wasVisible ? 1 : 0;
+        }
     } else if (name == "UpdateWindow") {
+        auto it = windows_.find(a0);
+        if (it == windows_.end()) {
+            lastError_ = 1400;
+            ret = 0;
+        } else {
+            GuestMessage message{};
+            message.hwnd = a0;
+            message.message = 0x000f; // WM_PAINT
+            message.time = uint32_t(++tick_ * 16);
+            guestMessages_.push_back(message);
+            lastError_ = 0;
+            ret = 1;
+        }
+    } else if (name == "DefWindowProcW") {
+        ret = 0;
+    } else if (name == "GetMessagePos") {
+        ret = 0;
+    } else if (name == "TranslateMessage") {
         ret = a0 ? 1 : 0;
-    } else if (name == "GetMessageW") {
+    } else if (name == "PostQuitMessage") {
+        quitPosted_ = true;
+        GuestMessage message{};
+        message.message = 0x0012; // WM_QUIT
+        message.wParam = a0;
+        message.time = uint32_t(++tick_ * 16);
+        guestMessages_.push_back(message);
         ret = 0;
-    } else if (name == "PeekMessageW") {
-        ret = 0;
+    } else if (name == "PostMessageW") {
+        if (!windows_.count(a0)) {
+            lastError_ = 1400;
+            ret = 0;
+        } else {
+            GuestMessage message{};
+            message.hwnd = a0;
+            message.message = a1;
+            message.wParam = a2;
+            message.lParam = a3;
+            message.time = uint32_t(++tick_ * 16);
+            guestMessages_.push_back(message);
+            lastError_ = 0;
+            ret = 1;
+        }
+    } else if (name == "GetMessageW" || name == "GetMessageWNoWait" || name == "PeekMessageW") {
+        const bool peek = name == "PeekMessageW" || name == "GetMessageWNoWait";
+        const uint32_t removeFlags = peek ? stackArg(4) : 1;
+        GuestMessage message{};
+        bool haveMessage = false;
+        if (!guestMessages_.empty()) {
+            message = guestMessages_.front();
+            haveMessage = true;
+            if (!peek || (removeFlags & 1)) guestMessages_.pop_front();
+        }
+        if (!haveMessage) {
+            ret = 0;
+            if (!peek && !quitPosted_) {
+                spdlog::info("synthetic coredll.dll!GetMessageW blocking with empty guest queue");
+                uc_emu_stop(uc_);
+            }
+        } else if (message.message == 0x0012) {
+            writeGuestMessage(a0, message);
+            ret = 0;
+        } else {
+            writeGuestMessage(a0, message);
+            ret = 1;
+        }
     } else if (name == "IsWindowVisible") {
-        lastError_ = 1400;
+        auto it = windows_.find(a0);
+        if (it == windows_.end()) {
+            lastError_ = 1400;
+            ret = 0;
+        } else {
+            lastError_ = 0;
+            ret = it->second.visible ? 1 : 0;
+        }
+    } else if (name == "FindResource" || name == "FindResourceW") {
+        const ResourceEntry* resource = findResource(a2, a1);
+        if (!resource) {
+            lastError_ = 1814;
+            ret = 0;
+        } else {
+            const size_t index = size_t(resource - mainResources_.data());
+            ret = makeGuestHandle({GuestHandle::Kind::GuestResource, index + 1, 0});
+            lastError_ = 0;
+        }
+    } else if (name == "SizeofResource") {
+        const ResourceEntry* resource = resourceFromHandle(a1);
+        if (!resource) {
+            lastError_ = 1814;
+            ret = 0;
+        } else {
+            lastError_ = 0;
+            ret = uint32_t(resource->data.size());
+        }
+    } else if (name == "LoadResource") {
+        const ResourceEntry* resource = resourceFromHandle(a1);
+        if (!resource) {
+            lastError_ = 1814;
+            ret = 0;
+        } else {
+            auto loaded = loadedResourceMemory_.find(a1);
+            if (loaded != loadedResourceMemory_.end()) {
+                ret = loaded->second;
+            } else {
+                ret = allocate(uint32_t(resource->data.size() ? resource->data.size() : 1), false);
+                if (ret && !resource->data.empty()) {
+                    uc_mem_write(uc_, ret, resource->data.data(), resource->data.size());
+                }
+                loadedResourceMemory_[a1] = ret;
+            }
+            lastError_ = ret ? 0 : 8;
+        }
+    } else if (name == "LoadStringW") {
+        const uint32_t blockId = (a1 >> 4) + 1;
+        const uint32_t stringIndex = a1 & 0x0f;
+        const ResourceEntry* resource = nullptr;
+        for (const auto& candidate : mainResources_) {
+            if (candidate.type.ordinal && candidate.type.id == 6 &&
+                candidate.name.ordinal && candidate.name.id == blockId) {
+                resource = &candidate;
+                break;
+            }
+        }
+        std::string value;
+        if (resource) {
+            size_t offset = 0;
+            for (uint32_t i = 0; i < 16 && offset + 2 <= resource->data.size(); ++i) {
+                const uint16_t length = readLe16(resource->data, offset);
+                offset += 2;
+                if (i == stringIndex) {
+                    value = utf16FromBytes(resource->data, offset, length);
+                    break;
+                }
+                offset += size_t(length) * 2;
+            }
+        }
+        if (!resource) {
+            lastError_ = 1814;
+            ret = 0;
+        } else {
+            ret = a2 && a3 ? writeUtf16(a2, value, a3) : uint32_t(value.size());
+            lastError_ = 0;
+        }
+    } else if (name == "LoadAcceleratorsW") {
+        const ResourceEntry* resource = findResource(9, a1);
+#if defined(_WIN32)
+        if (!resource || resource->data.empty()) {
+            lastError_ = 1814;
+            ret = 0;
+        } else {
+            const int count = int(resource->data.size() / sizeof(ACCEL));
+            HACCEL accel = count > 0
+                ? CreateAcceleratorTableW(reinterpret_cast<LPACCEL>(const_cast<uint8_t*>(resource->data.data())), count)
+                : nullptr;
+            if (accel) {
+                ret = makeGuestHandle({GuestHandle::Kind::HostAccelerator, reinterpret_cast<uintptr_t>(accel), 0});
+                lastError_ = 0;
+            } else {
+                lastError_ = GetLastError();
+                ret = 0;
+            }
+        }
+#else
+        lastError_ = resource ? 0 : 1814;
         ret = 0;
-    } else if (name == "LoadIconW") {
-        lastError_ = 1814;
+#endif
+    } else if (name == "LoadIconW" || name == "LoadImageW") {
+#if defined(_WIN32)
+        const uint32_t imageType = name == "LoadImageW" ? a2 : IMAGE_ICON;
+        const uint32_t desiredCx = name == "LoadImageW" ? a3 : 0;
+        const uint32_t desiredCy = name == "LoadImageW" ? stackArg(4) : 0;
+        const uint32_t loadFlags = name == "LoadImageW" ? stackArg(5) : LR_DEFAULTCOLOR;
+        auto createIconFromMainResource = [&](uint32_t nameArg) -> HICON {
+            const ResourceEntry* group = findResource(14, nameArg); // RT_GROUP_ICON
+            if (!group || group->data.size() < 6) return nullptr;
+            const uint16_t count = readLe16(group->data, 4);
+            const uint32_t targetCx = desiredCx ? desiredCx : uint32_t(GetSystemMetrics(SM_CXICON));
+            const uint32_t targetCy = desiredCy ? desiredCy : uint32_t(GetSystemMetrics(SM_CYICON));
+            const ResourceEntry* iconResource = nullptr;
+            int bestScore = 0x7fffffff;
+            for (uint16_t i = 0; i < count; ++i) {
+                const size_t offset = 6 + size_t(i) * 14;
+                if (offset + 14 > group->data.size()) break;
+                const uint32_t width = group->data[offset] ? group->data[offset] : 256;
+                const uint32_t height = group->data[offset + 1] ? group->data[offset + 1] : 256;
+                const uint32_t bytesInResource = readLe32(group->data, offset + 8);
+                const uint32_t iconId = readLe16(group->data, offset + 12);
+                const ResourceEntry* candidate = findResource(3, iconId); // RT_ICON
+                if (!candidate || candidate->data.empty()) continue;
+                const int score = std::abs(int(width) - int(targetCx)) + std::abs(int(height) - int(targetCy));
+                if (!iconResource || score < bestScore ||
+                    (score == bestScore && bytesInResource > iconResource->data.size())) {
+                    iconResource = candidate;
+                    bestScore = score;
+                }
+            }
+            if (!iconResource) return nullptr;
+            return CreateIconFromResourceEx(const_cast<BYTE*>(iconResource->data.data()),
+                                            DWORD(iconResource->data.size()), TRUE, 0x00030000,
+                                            int(desiredCx), int(desiredCy),
+                                            loadFlags & (LR_DEFAULTCOLOR | LR_MONOCHROME));
+        };
+        auto createBitmapFromMainResource = [&](uint32_t nameArg) -> HBITMAP {
+            const ResourceEntry* bitmap = findResource(2, nameArg); // RT_BITMAP
+            if (!bitmap || bitmap->data.size() < 40) return nullptr;
+            const uint32_t headerSize = readLe32(bitmap->data, 0);
+            if (headerSize < 40 || headerSize > bitmap->data.size()) return nullptr;
+            const uint16_t bitCount = readLe16(bitmap->data, 14);
+            const uint32_t compression = readLe32(bitmap->data, 16);
+            const uint32_t clrUsed = readLe32(bitmap->data, 32);
+            uint32_t colorCount = clrUsed;
+            if (!colorCount && bitCount <= 8) colorCount = 1u << bitCount;
+            size_t bitsOffset = size_t(headerSize) + size_t(colorCount) * 4;
+            if (compression == BI_BITFIELDS && !colorCount && (bitCount == 16 || bitCount == 32)) {
+                bitsOffset += 12;
+            }
+            if (bitsOffset > bitmap->data.size()) return nullptr;
+            HDC dc = GetDC(nullptr);
+            if (!dc) return nullptr;
+            HBITMAP result = CreateDIBitmap(dc,
+                                            reinterpret_cast<const BITMAPINFOHEADER*>(bitmap->data.data()),
+                                            CBM_INIT,
+                                            bitmap->data.data() + bitsOffset,
+                                            reinterpret_cast<const BITMAPINFO*>(bitmap->data.data()),
+                                            DIB_RGB_COLORS);
+            ReleaseDC(nullptr, dc);
+            if (result && (desiredCx || desiredCy)) {
+                HANDLE scaled = CopyImage(result, IMAGE_BITMAP, int(desiredCx), int(desiredCy),
+                                          loadFlags & (LR_COPYDELETEORG | LR_COPYRETURNORG | LR_MONOCHROME));
+                if (scaled && scaled != result) result = reinterpret_cast<HBITMAP>(scaled);
+            }
+            return result;
+        };
+
+        if (imageType == IMAGE_ICON) {
+            HICON icon = createIconFromMainResource(a1);
+            if (icon) {
+                ret = makeGuestHandle({GuestHandle::Kind::HostIcon, reinterpret_cast<uintptr_t>(icon), 0});
+                lastError_ = 0;
+            } else {
+                ret = 0;
+                lastError_ = 1814;
+            }
+        } else if (imageType == IMAGE_BITMAP) {
+            HBITMAP bitmap = createBitmapFromMainResource(a1);
+            if (bitmap) {
+                ret = makeGuestHandle({GuestHandle::Kind::HostBitmap, reinterpret_cast<uintptr_t>(bitmap), 0});
+                lastError_ = 0;
+            } else {
+                ret = 0;
+                lastError_ = 1814;
+            }
+        } else {
+            ret = 0;
+            lastError_ = 1814;
+        }
+#else
+        const uint32_t type = name == "LoadImageW" ? a2 : 1;
+        lastError_ = findResource(type == 0 ? 2 : 14, a1) ? 120 : 1814;
         ret = 0;
-    } else if (name == "LoadMenuW" || name == "RemoveMenu" ||
-               name == "CheckMenuItem" || name == "CheckMenuRadioItem") {
-        lastError_ = 1401;
+#endif
+    } else if (name == "LoadMenuW") {
+        const ResourceEntry* resource = findResource(4, a1);
+#if defined(_WIN32)
+        if (!resource || resource->data.empty()) {
+            lastError_ = 1814;
+            ret = 0;
+        } else {
+            HMENU menu = LoadMenuIndirectW(reinterpret_cast<const MENUTEMPLATEW*>(resource->data.data()));
+            if (menu) {
+                ret = makeGuestHandle({GuestHandle::Kind::HostMenu, reinterpret_cast<uintptr_t>(menu), 0});
+                lastError_ = 0;
+            } else {
+                lastError_ = GetLastError();
+                ret = 0;
+            }
+        }
+#else
+        lastError_ = resource ? 0 : 1814;
         ret = 0;
-    } else if (name == "FindResourceW" || name == "LoadStringW") {
-        lastError_ = 1813;
-        ret = 0;
+#endif
+    } else if (name == "RemoveMenu" || name == "CheckMenuItem" || name == "CheckMenuRadioItem") {
+        auto* handle = lookupGuestHandle(a0);
+#if defined(_WIN32)
+        if (!handle || handle->kind != GuestHandle::Kind::HostMenu || !handle->hostValue) {
+            lastError_ = 1401;
+            ret = name == "CheckMenuItem" ? 0xffffffffu : 0;
+        } else if (name == "RemoveMenu") {
+            ret = RemoveMenu(reinterpret_cast<HMENU>(handle->hostValue), a1, a2) ? 1 : 0;
+            if (!ret) lastError_ = GetLastError();
+        } else if (name == "CheckMenuItem") {
+            ret = CheckMenuItem(reinterpret_cast<HMENU>(handle->hostValue), a1, a2);
+            if (ret == 0xffffffffu) lastError_ = GetLastError();
+        } else {
+            ret = CheckMenuRadioItem(reinterpret_cast<HMENU>(handle->hostValue), a1, a2, a3, stackArg(4)) ? 1 : 0;
+            if (!ret) lastError_ = GetLastError();
+        }
+#else
+        lastError_ = handle ? 0 : 1401;
+        ret = name == "CheckMenuItem" ? 0xffffffffu : 0;
+#endif
     } else if (name == "GetSystemInfo") {
         if (a0) {
             writeU32(a0, 0); // wProcessorArchitecture + wReserved
@@ -1355,11 +2689,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
         ret = 0;
         lastError_ = 0;
     } else if (name == "WNetGetUserW") {
-        const std::string user = "User";
-        if (a2) writeU32(a2, uint32_t(user.size() + 1));
-        if (a1) writeUtf16(a1, user, a2 ? std::max<uint32_t>(1, uint32_t(user.size() + 1)) : 32);
-        ret = 0;
-        lastError_ = 0;
+        ret = handleWNetGetUserW(a0, a1, a2);
     } else if (name == "WNetGetUniversalNameW" || name == "WNetConnectionDialog1W") {
         lastError_ = 1200;
         ret = 1200;
@@ -1499,22 +2829,44 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
     }
 
     uint32_t ret = 1;
-    if (mutableEntry.moduleName == "coredll.dll" && name == "CallWindowProcW") {
-        if (!a0) {
+    if (mutableEntry.moduleName == "coredll.dll" &&
+        (name == "CallWindowProcW" || name == "DispatchMessageW" || name == "SendMessageW")) {
+        uint32_t wndProc = a0;
+        uint32_t hwnd = a1;
+        uint32_t msg = a2;
+        uint32_t wParam = a3;
+        uint32_t lParam = stackArg(4);
+        if (name == "DispatchMessageW") {
+            if (a0) {
+                uc_mem_read(uc_, a0, &hwnd, sizeof(hwnd));
+                uc_mem_read(uc_, a0 + 4, &msg, sizeof(msg));
+                uc_mem_read(uc_, a0 + 8, &wParam, sizeof(wParam));
+                uc_mem_read(uc_, a0 + 12, &lParam, sizeof(lParam));
+            }
+            auto it = windows_.find(hwnd);
+            wndProc = it == windows_.end() ? 0 : it->second.wndProc;
+        } else if (name == "SendMessageW") {
+            auto it = windows_.find(a0);
+            wndProc = it == windows_.end() ? 0 : it->second.wndProc;
+            hwnd = a0;
+            msg = a1;
+            wParam = a2;
+            lParam = a3;
+        }
+        if (!wndProc) {
             ret = 0;
             setReg(UC_MIPS_REG_V0, ret);
             return;
         }
-        const uint32_t lParam = stackArg(4);
         if (mutableEntry.calls <= 128) {
-            spdlog::info("synthetic coredll.dll!CallWindowProcW transfer wndproc=0x{:08x} hwnd=0x{:08x} msg=0x{:08x} wparam=0x{:08x} lparam=0x{:08x}",
-                         a0, a1, a2, a3, lParam);
+            spdlog::info("synthetic coredll.dll!{} transfer wndproc=0x{:08x} hwnd=0x{:08x} msg=0x{:08x} wparam=0x{:08x} lparam=0x{:08x}",
+                         name, wndProc, hwnd, msg, wParam, lParam);
         }
-        setReg(UC_MIPS_REG_A0, a1);
-        setReg(UC_MIPS_REG_A1, a2);
-        setReg(UC_MIPS_REG_A2, a3);
+        setReg(UC_MIPS_REG_A0, hwnd);
+        setReg(UC_MIPS_REG_A1, msg);
+        setReg(UC_MIPS_REG_A2, wParam);
         setReg(UC_MIPS_REG_A3, lParam);
-        setReg(UC_MIPS_REG_PC, a0);
+        setReg(UC_MIPS_REG_PC, wndProc);
         return;
     }
     if (mutableEntry.moduleName == "coredll.dll" &&
@@ -1611,13 +2963,53 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
             uc_mem_read(uc_, a0, bytes.data(), bytes.size());
             uc_mem_write(uc_, ret, bytes.data(), bytes.size());
         }
-    } else if (name == "HeapCreate") ret = nextHandle_++;
-    else if (name == "HeapDestroy") ret = 1;
-    else if (name == "GetProcessHeap") ret = 1;
-    else if (name == "HeapAlloc") ret = allocate(a2, (a1 & 0x00000008u) != 0);
-    else if (name == "HeapReAlloc") {
-        ret = allocate(a3, (a1 & 0x00000008u) != 0);
-    } else if (name == "HeapFree") ret = 1;
+    } else if (name == "HeapCreate") {
+        ret = makeGuestHandle({GuestHandle::Kind::GuestHeap, 0, 0});
+    } else if (name == "HeapDestroy") {
+        auto it = guestHandles_.find(a0);
+        if (it == guestHandles_.end() || it->second.kind != GuestHandle::Kind::GuestHeap ||
+            a0 == processHeapHandle_) {
+            lastError_ = 6;
+            ret = 0;
+        } else {
+            guestHandles_.erase(it);
+            lastError_ = 0;
+            ret = 1;
+        }
+    } else if (name == "GetProcessHeap") {
+        if (!processHeapHandle_) processHeapHandle_ = makeGuestHandle({GuestHandle::Kind::GuestHeap, 0, 0});
+        ret = processHeapHandle_;
+    } else if (name == "HeapAlloc") {
+        auto* heap = lookupGuestHandle(a0);
+        ret = heap && heap->kind == GuestHandle::Kind::GuestHeap
+            ? allocate(a2, (a1 & 0x00000008u) != 0)
+            : 0;
+        if (!ret) lastError_ = heap ? 8 : 6;
+    } else if (name == "HeapReAlloc") {
+        auto* heap = lookupGuestHandle(a0);
+        if (!heap || heap->kind != GuestHandle::Kind::GuestHeap || !a2) {
+            lastError_ = 6;
+            ret = 0;
+        } else {
+            const uint32_t oldSize = allocationSizes_.count(a2) ? allocationSizes_[a2] : 0;
+            ret = allocate(a3, (a1 & 0x00000008u) != 0);
+            if (ret && oldSize) {
+                std::vector<uint8_t> bytes(std::min(oldSize, a3));
+                uc_mem_read(uc_, a2, bytes.data(), bytes.size());
+                uc_mem_write(uc_, ret, bytes.data(), bytes.size());
+            }
+            lastError_ = ret ? 0 : 8;
+        }
+    } else if (name == "HeapFree") {
+        auto* heap = lookupGuestHandle(a0);
+        ret = heap && heap->kind == GuestHandle::Kind::GuestHeap && a2 ? 1 : 0;
+        if (ret) {
+            allocationSizes_.erase(a2);
+            lastError_ = 0;
+        } else {
+            lastError_ = 6;
+        }
+    }
     else if (name == "RemoteHeapFree") {
         // SDK name/ordinal is authoritative, but this target calls the ordinal
         // with a CRT object-copy shape during startup. Preserve that evidence
@@ -1676,10 +3068,41 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         writeU32(a0 + 12, 0);
         writeU32(a0 + 16, 3);
         ret = 1;
-    } else if (name == "InitializeCriticalSection" || name == "DeleteCriticalSection" ||
-               name == "EnterCriticalSection" || name == "LeaveCriticalSection") {
+    } else if (name == "InitializeCriticalSection") {
+        if (a0) {
+            criticalSectionDepth_[a0] = 0;
+            lastError_ = 0;
+        } else {
+            lastError_ = 87;
+        }
         ret = 0;
-    } else if (name == "TryEnterCriticalSection") ret = 1;
+    } else if (name == "DeleteCriticalSection") {
+        criticalSectionDepth_.erase(a0);
+        lastError_ = 0;
+        ret = 0;
+    } else if (name == "EnterCriticalSection") {
+        if (a0) {
+            ++criticalSectionDepth_[a0];
+            lastError_ = 0;
+        } else {
+            lastError_ = 87;
+        }
+        ret = 0;
+    } else if (name == "LeaveCriticalSection") {
+        auto it = criticalSectionDepth_.find(a0);
+        if (it != criticalSectionDepth_.end() && it->second) --it->second;
+        lastError_ = 0;
+        ret = 0;
+    } else if (name == "TryEnterCriticalSection") {
+        if (a0) {
+            ++criticalSectionDepth_[a0];
+            lastError_ = 0;
+            ret = 1;
+        } else {
+            lastError_ = 87;
+            ret = 0;
+        }
+    }
     else if (name == "InterlockedIncrement" || name == "InterlockedDecrement") {
         int32_t value = 0;
         uc_mem_read(uc_, a0, &value, sizeof(value));
@@ -1725,7 +3148,7 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
             lastError_ = GetLastError();
         }
 #else
-        ret = makeGuestHandle({GuestHandle::Kind::Pseudo, 0, 0});
+        ret = makeGuestHandle({GuestHandle::Kind::HostEvent, 0, 0});
 #endif
     } else if (name == "CreateMutexW") {
 #if defined(_WIN32)
@@ -1736,7 +3159,7 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
             lastError_ = GetLastError();
         }
 #else
-        ret = makeGuestHandle({GuestHandle::Kind::Pseudo, 0, 0});
+        ret = makeGuestHandle({GuestHandle::Kind::HostMutex, 0, 0});
 #endif
     } else if (name == "WaitForSingleObject") {
         auto* handle = lookupGuestHandle(a0);
@@ -1804,10 +3227,7 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
     else if (name == "GetCRTFlags") ret = 0;
     else if (name == "GetCRTStorageEx") ret = allocate(0x100, true);
     else if (name == "WNetGetUserW") {
-        const std::string user = "User";
-        if (a2) writeU32(a2, uint32_t(user.size() + 1));
-        if (a1) writeUtf16(a1, user, a2 ? std::max<uint32_t>(1, uint32_t(user.size() + 1)) : 32);
-        ret = 0; // NO_ERROR
+        ret = handleWNetGetUserW(a0, a1, a2);
     } else if (name == "WNetGetUniversalNameW" || name == "WNetConnectionDialog1W") {
         lastError_ = 1200; // ERROR_BAD_DEVICE / no network provider.
         ret = 1200;

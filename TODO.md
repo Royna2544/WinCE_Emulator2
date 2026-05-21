@@ -2,23 +2,22 @@
 
 ## Immediate
 
-- Continue replacing generic synthetic `coredll.dll` returns with SDK-canonical, host-backed behavior. Trust the Windows CE 4.2 Standard SDK `coredll.lib` names/ordinals as the naming source; do not rename an ordinal just because one runtime call shape looks different.
+- Continue replacing generic synthetic `coredll.dll` returns with SDK-canonical, host-backed behavior. Trust the Windows CE 4.2 Standard SDK `coredll.lib` COFF import-object headers as the naming source; do not rename an ordinal just because one runtime call shape looks different.
 - Keep launch arguments explicit: `iNavi_Unicorn_Emulator.exe <primary.exe> [dll_search_dir ...]`. Do not reintroduce hardcoded local SDK/iNavi paths in the binary.
 - Keep real SDK DLLs preferred over synthetic modules. Synthetic `coredll.dll` exists because the installed SDK supplies `coredll.lib` but no real MIPS `COREDLL.dll` PE image.
+- Continue from smoke36's clean idle-block stop after the first paint (`GetMessageW` blocking with empty guest queue, `pc=0x70002ae8 ra=0x500245c8`). The previous null-PC teardown was caused by `GetMessageW` reporting WM_QUIT too early and is fixed by the message bridge.
+- Add real drawing/paint bridge next. `WM_PAINT` is delivered, but no framebuffer-producing GDI/paint path is implemented yet.
 
 ## Weird Ordinals To Verify Later
 
-- `0x0411` / decimal `1041`: SDK says `RemoveMenu`. Earlier runtime call shape looked allocation-like from `INavi.exe` and was temporarily handled as an allocator. Re-verify with target import table, caller disassembly, and SDK header/lib evidence before keeping any non-`RemoveMenu` behavior.
-- `0x0416` / decimal `1046`: SDK says `CheckMenuItem`, not `memcpy`. Earlier MFC/app call shape looked copy-like. Re-verify before treating it as memory copy.
-- `0x0417` / decimal `1047`: SDK says `CheckMenuRadioItem`, not `memset`. Earlier MFC/app call shape looked fill-like. Re-verify before treating it as memory fill.
-- `0x0447` / decimal `1095`: SDK says `RegisterTaskBar`. Earlier app call at `RA=0x00011e10` passed `a0=0x110` and used the return as a pointer. Re-verify with disassembly and SDK declarations before keeping pointer-allocation behavior.
-- `0x0045` / decimal `69`: SDK says `HeapAlloc`. A later MFC path around `0x50050404` looked like path/string handling after `GetModuleFileNameW`; verify whether the bad behavior was caused by an incomplete `GetModuleFileNameW` buffer write rather than by ordinal identity.
-- `0x00FB` / decimal `251`: SDK says `SetFileTime`; `mfcce400.dll` imports/calls it repeatedly near `0x500277c8`/`0x50027838`. Verify whether generic success is causing the current loop/early `UC_ERR_OK` stop.
-- `0x0537` / decimal `1335`: SDK says scalar delete with `nothrow_t`. Generic success is wrong; implement delete/free semantics and confirm callers do not consume a success value as a pointer.
+- Rejected stale `/LINKERMEMBER` labels for menu/memory ordinals: SDK COFF import-object headers confirm `0x0411=malloc`, `0x0416=memmove`, `0x0417=memset`, and `0x0447=operator_new`. Do not restore the old `RemoveMenu`/`CheckMenuItem`/`CheckMenuRadioItem` labels at those ordinals.
+- Confirmed menu/window ordinals from SDK COFF import-object headers now implemented or fail-closed by name: `0x005E=LoadAcceleratorsW`, `0x00FB=GetWindow`, `0x0102=SetWindowLongW`, `0x0103=GetWindowLongW`, `0x010D=GetParent`, `0x02DA=LoadImageW`, `0x034B=RemoveMenu`, `0x034E=LoadMenuW`, `0x0350=CheckMenuItem`, `0x0351=CheckMenuRadioItem`.
+- `LoadMenuW` has not appeared in smoke31 despite `INavi.exe` having `RT_MENU` id 128. Keep the host-backed implementation, but verify when a caller reaches it.
 
 ## Next
 
-- Implement SDK-backed host behavior for file APIs: `CreateFileW`, `ReadFile`, `WriteFile`, `GetFileSize`, `SetFilePointer`, `GetFileTime`, `SetFileTime`, and close/free semantics. Preserve real host-backed file behavior; do not return dummy success with fake lengths.
+- Audit remaining called coredll paths that are still minimal guest-side implementations, especially `_setjmp`/`longjmp` and registry access. Do not invent ABI layouts; preserve SDK names and fail closed or document evidence when exact behavior is not known.
+- Implement SDK-backed host behavior for any remaining file APIs such as `GetFileTime`. Existing `CreateFileW`, `ReadFile`, `WriteFile`, `GetFileSize`, `SetFilePointer`, `SetFileTime`, `FindFirstFileW`, and close/find-close paths are host-handle mapped.
 - Add cleaner module/load summaries if loader output becomes too noisy.
 - Add forwarder export support if a loaded SDK DLL exposes forwarded exports needed by the target.
 - Record each ordinal discovery as Confirmed, Likely, Speculative, or Rejected in `PROGRESS.md` or `KNOWN_BUGS.md` with evidence source.
