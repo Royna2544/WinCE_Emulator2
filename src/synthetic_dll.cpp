@@ -454,16 +454,14 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x0004, "EnterCriticalSection");
     registerExport(module, 0x0005, "LeaveCriticalSection");
     registerExport(module, 0x0006, "ExitThread");
-    registerExport(module, 0x000A, "InterlockedTestExchange");
-    registerExport(module, 0x000B, "InterlockedExchange");
-    registerExport(module, 0x000C, "InterlockedExchangeAdd");
-    registerExport(module, 0x0014, "FillRect");
+    registerExport(module, 0x0009, "InterlockedTestExchange");
+    registerExport(module, 0x000A, "InterlockedIncrement");
+    registerExport(module, 0x000B, "InterlockedDecrement");
+    registerExport(module, 0x000C, "InterlockedExchange");
     registerExport(module, 0x000F, "TlsGetValue");
     registerExport(module, 0x0010, "TlsSetValue");
     registerExport(module, 0x0013, "SystemTimeToFileTime");
-    registerExport(module, 0x0015, "FileTimeToSystemTime");
-    registerExport(module, 0x001F, "SystemTimeToFileTime");
-    registerExport(module, 0x0020, "FileTimeToSystemTime");
+    registerExport(module, 0x0014, "FileTimeToSystemTime");
     registerExport(module, 0x0017, "GetLocalTime");
     registerExport(module, 0x0023, "GetLocalTime");
     registerExport(module, 0x0019, "GetSystemTime");
@@ -487,7 +485,7 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x003D, "wcscpy");
     registerExport(module, 0x003E, "wcscspn");
     registerExport(module, 0x003F, "wcslen");
-    registerExport(module, 0x0059, "wcslen");
+    registerExport(module, 0x0059, "SystemParametersInfoW");
     registerExport(module, 0x0041, "wcsncmp");
     registerExport(module, 0x0045, "wcsrchr");
     registerExport(module, 0x004A, "_wcsdup");
@@ -540,13 +538,13 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x011D, "CallWindowProcW");
     registerExport(module, 0x011E, "FindWindowW");
     registerExport(module, 0x0143, "GetStoreInformation");
-    registerExport(module, 0x0192, "waveInGetID");
-    registerExport(module, 0x0194, "waveInReset");
-    registerExport(module, 0x0196, "waveInClose");
-    registerExport(module, 0x0198, "waveInUnprepareHeader");
-    registerExport(module, 0x019A, "waveInMessage");
-    registerExport(module, 0x019C, "waveInOpen");
-    registerExport(module, 0x046F, "waveInAddBuffer");
+    registerExport(module, 0x0193, "waveInClose");
+    registerExport(module, 0x0195, "waveInUnprepareHeader");
+    registerExport(module, 0x0196, "waveInAddBuffer");
+    registerExport(module, 0x0199, "waveInReset");
+    registerExport(module, 0x019B, "waveInGetID");
+    registerExport(module, 0x019C, "waveInMessage");
+    registerExport(module, 0x019D, "waveInOpen");
     registerExport(module, 0x01BE, "WNetConnectionDialog1W");
     registerExport(module, 0x01C2, "WNetGetUniversalNameW");
     registerExport(module, 0x01C3, "WNetGetUserW");
@@ -575,6 +573,7 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x0229, "CloseHandle");
     registerExport(module, 0x022B, "CreateMutexW");
     registerExport(module, 0x022C, "ReleaseMutex");
+    registerExport(module, 0x022D, "KernelIoControl");
     registerExport(module, 0x02AA, "SetCursor");
     registerExport(module, 0x02B4, "GetDlgItem");
     registerExport(module, 0x02B5, "GetDlgCtrlID");
@@ -636,10 +635,8 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x01CC, "RegEnumKeyExW");
     registerExport(module, 0x01CE, "RegQueryInfoKeyW");
     registerExport(module, 0x01D0, "RegSetValueExW");
-    registerExport(module, 0x020A, "IsBadWritePtr");
-    registerExport(module, 0x022D, "KernelLibIoControl");
-    registerExport(module, 0x0259, "IsBadReadPtr");
-    registerExport(module, 0x01CB, "RegFlushKey");
+    registerExport(module, 0x020A, "IsBadReadPtr");
+    registerExport(module, 0x020B, "IsBadWritePtr");
     registerExport(module, 0x0480, "RegFlushKey");
     registerExport(module, 0x03FA, "free");
     registerExport(module, 0x040C, "longjmp");
@@ -663,11 +660,11 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x057C, "strtol");
     registerExport(module, 0x0582, "_stricmp");
     registerExport(module, 0x0583, "_strnicmp");
-    registerExport(module, 0x0437, "_ultow");
+    registerExport(module, 0x0438, "_ultow");
     registerExport(module, 0x05B0, "operator_vector_new");
-    registerExport(module, 0x05D3, "InterlockedIncrement");
-    registerExport(module, 0x05D4, "InterlockedDecrement");
-    registerExport(module, 0x06E1, "InterlockedCompareExchange");
+    registerExport(module, 0x05D1, "KernelLibIoControl");
+    registerExport(module, 0x05D3, "InterlockedExchangeAdd");
+    registerExport(module, 0x05D4, "InterlockedCompareExchange");
     registerExport(module, 0x05E3, "RegisterDesktop");
     registerExport(module, 0x05EF, "GlobalAddAtomW");
     registerExport(module, 0x05F0, "GlobalDeleteAtom");
@@ -2386,9 +2383,62 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
     } else if (name == "IsBadReadPtr" || name == "IsBadWritePtr") {
         ret = isGuestRangeReadable(a0, a1) ? 0 : 1;
         lastError_ = 0;
+    } else if (name == "KernelIoControl") {
+        const uint32_t outPtr = a3;
+        const uint32_t outSize = stackArg(4);
+        const uint32_t bytesReturnedPtr = stackArg(5);
+        const uint32_t function = (a0 >> 2) & 0x0fffu;
+        const uint32_t method = a0 & 0x3u;
+        const uint32_t device = (a0 >> 16) & 0xffffu;
+        const uint32_t access = (a0 >> 14) & 0x3u;
+        ret = 0;
+        lastError_ = 120;
+        if (a0 == 0x0101207cu && outPtr && outSize >= 4) {
+            uint32_t value = 0;
+            if (const nlohmann::json* configured =
+                    registryValue("hklm\\system\\emulator\\kernelioctl", "0101207c")) {
+                const auto data = configured->find("data");
+                if (data != configured->end() && data->is_number_unsigned()) {
+                    value = data->get<uint32_t>();
+                }
+            }
+            writeU32(outPtr, value);
+            if (bytesReturnedPtr) writeU32(bytesReturnedPtr, 4);
+            lastError_ = 0;
+            ret = 1;
+        }
+        spdlog::info("KernelIoControl code=0x{:08x} device=0x{:04x} function=0x{:03x} method={} access={} out=0x{:08x} outSize={} bytesReturned=0x{:08x} -> {} lastError={}",
+                     a0, device, function, method, access, outPtr, outSize, bytesReturnedPtr, ret, lastError_);
     } else if (name == "KernelLibIoControl") {
         lastError_ = 120;
         ret = 0;
+    } else if (name == "SystemParametersInfoW") {
+        char actionHex[9]{};
+        std::snprintf(actionHex, sizeof(actionHex), "%08x", a0);
+        const nlohmann::json* configured =
+            registryValue("hklm\\system\\emulator\\systemparametersinfo", actionHex);
+        if (!configured && a0 == 0x00000101u) {
+            configured = registryValue("hklm\\system\\emulator\\systemparametersinfo", "platformtype");
+        }
+        if (!configured && a0 == 0x00000102u) {
+            configured = registryValue("hklm\\system\\emulator\\systemparametersinfo", "oeminfo");
+        }
+        std::string text;
+        if (configured) {
+            const auto data = configured->find("data");
+            if (data != configured->end() && data->is_string()) text = data->get<std::string>();
+        }
+
+        if (!text.empty() && a2 && a1) {
+            writeUtf16(a2, text, a1);
+            ret = 1;
+            lastError_ = 0;
+        } else {
+            ret = 0;
+            lastError_ = configured ? 87 : 120;
+        }
+        spdlog::info("SystemParametersInfoW action=0x{:08x} uiParam={} pvParam=0x{:08x} flags=0x{:08x} -> {} lastError={} data=\"{}\"",
+                     a0, a1, a2, a3, ret, lastError_, text);
     } else if (name == "GetTickCount") {
 #if defined(_WIN32)
         ret = GetTickCount();
