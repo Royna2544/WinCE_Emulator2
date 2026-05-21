@@ -440,6 +440,7 @@ static int runImage(PeImage& pe, const std::vector<fs::path>& dllSearchDirs) {
     auto close = [&]{ if (uc) uc_close(uc); };
     try {
         SyntheticDllRuntime synthetic(uc);
+        synthetic.setMainModulePath(pe.path.string());
         uc_hook syntheticHook{};
         uc_hook_add(uc, &syntheticHook, UC_HOOK_CODE, (void*)SyntheticDllRuntime::hookCode, &synthetic, 0x70000000, 0x70ffffff);
         ModuleLoader loader(uc, &synthetic, pe.path, dllSearchDirs);
@@ -450,6 +451,16 @@ static int runImage(PeImage& pe, const std::vector<fs::path>& dllSearchDirs) {
         uc_mem_map(uc, STACK_BASE, STACK_SIZE, UC_PROT_ALL);
         uint32_t sp=STACK_BASE+STACK_SIZE-0x1000; uc_reg_write(uc, UC_MIPS_REG_SP, &sp);
         uint32_t gp=main->loadBase+0x8000; uc_reg_write(uc, UC_MIPS_REG_GP, &gp);
+        const uint32_t commandLine = STACK_BASE + 0x800;
+        const uint16_t commandLineNul = 0;
+        uc_mem_write(uc, commandLine, &commandLineNul, sizeof(commandLineNul));
+        const uint32_t hInstance = main->loadBase;
+        const uint32_t hPrevInstance = 0;
+        const uint32_t nCmdShow = 1;
+        uc_reg_write(uc, UC_MIPS_REG_A0, &hInstance);
+        uc_reg_write(uc, UC_MIPS_REG_A1, &hPrevInstance);
+        uc_reg_write(uc, UC_MIPS_REG_A2, &commandLine);
+        uc_reg_write(uc, UC_MIPS_REG_A3, &nCmdShow);
         uc_hook h2{};
         uc_hook_add(uc,&h2,UC_HOOK_MEM_INVALID,(void*)hookInvalid,nullptr,1,0);
         uint32_t entry=main->loadBase+main->entryRva;

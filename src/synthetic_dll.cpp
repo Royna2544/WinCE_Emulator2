@@ -2,6 +2,11 @@
 
 #include <spdlog/spdlog.h>
 
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -29,6 +34,12 @@ SyntheticDllRuntime::SyntheticDllRuntime(uc_engine* uc) : uc_(uc) {
     if (!uc_) throw std::runtime_error("SyntheticDllRuntime requires a Unicorn engine");
     uc_mem_map(uc_, heapBase_, heapLimit_ - heapBase_, UC_PROT_ALL);
     uc_mem_map(uc_, 0x00005000, 0x00001000, UC_PROT_ALL);
+}
+
+void SyntheticDllRuntime::setMainModulePath(std::string path) {
+    if (path.empty()) return;
+    mainModulePath_ = path;
+    hostBaseDir_ = std::filesystem::path(std::move(path)).parent_path();
 }
 
 std::optional<SyntheticModule> SyntheticDllRuntime::createModule(const std::string& dllName) {
@@ -144,8 +155,8 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x0007, "DeleteCriticalSection");
     registerExport(module, 0x0008, "EnterCriticalSection");
     registerExport(module, 0x0009, "LeaveCriticalSection");
-    registerExport(module, 0x000F, "LookupSyntheticHandle");
-    registerExport(module, 0x0010, "SetSyntheticHandle");
+    registerExport(module, 0x000F, "IsProcessDying");
+    registerExport(module, 0x0010, "InterlockedTestExchange");
     registerExport(module, 0x0011, "InterlockedIncrement");
     registerExport(module, 0x0012, "InterlockedDecrement");
     registerExport(module, 0x0013, "InterlockedExchange");
@@ -159,10 +170,16 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x0023, "GetLocalTime");
     registerExport(module, 0x0024, "LocalFree");
     registerExport(module, 0x0025, "GetSystemTime");
+    registerExport(module, 0x002C, "GetAPIAddress");
+    registerExport(module, 0x002D, "GetCRTStorageEx");
+    registerExport(module, 0x002E, "GetCRTFlags");
     registerExport(module, 0x0031, "LocalAlloc");
+    registerExport(module, 0x0032, "LocalAllocTrace");
     registerExport(module, 0x0033, "LocalReAlloc");
     registerExport(module, 0x0034, "LocalSize");
     registerExport(module, 0x0035, "LocalFree");
+    registerExport(module, 0x0038, "RemoteHeapFree");
+    registerExport(module, 0x003B, "RemoteLocalReAlloc");
     registerExport(module, 0x0041, "HeapCreate");
     registerExport(module, 0x0043, "HeapDestroy");
     registerExport(module, 0x0045, "HeapAlloc");
@@ -170,9 +187,12 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x004A, "HeapSize");
     registerExport(module, 0x004C, "HeapFree");
     registerExport(module, 0x004E, "GetProcessHeap");
+    registerExport(module, 0x0055, "wcschr");
     registerExport(module, 0x0057, "wcscpy");
+    registerExport(module, 0x0058, "wcscspn");
     registerExport(module, 0x0059, "wcslen");
     registerExport(module, 0x005B, "wcsncmp");
+    registerExport(module, 0x005F, "wcsrchr");
     registerExport(module, 0x006C, "strtol");
     registerExport(module, 0x0077, "_stricmp");
     registerExport(module, 0x0078, "_strnicmp");
@@ -185,9 +205,18 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x00F5, "WriteFile");
     registerExport(module, 0x00F6, "GetFileSize");
     registerExport(module, 0x00F7, "SetFilePointer");
+    registerExport(module, 0x00FB, "SetFileTime");
     registerExport(module, 0x011E, "IsDBCSLeadByteEx");
     registerExport(module, 0x011F, "iswctype");
-    registerExport(module, 0x0208, "SyntheticHandleCall");
+    registerExport(module, 0x0208, "waveInReset");
+    registerExport(module, 0x0204, "waveInUnprepareHeader");
+    registerExport(module, 0x0205, "waveInAddBuffer");
+    registerExport(module, 0x020B, "waveInMessage");
+    registerExport(module, 0x020C, "waveInOpen");
+    registerExport(module, 0x020D, "mixerGetControlDetails");
+    registerExport(module, 0x021D, "WNetGetUniversalNameW");
+    registerExport(module, 0x021E, "WNetGetUserW");
+    registerExport(module, 0x0219, "WNetConnectionDialog1W");
     registerExport(module, 0x07D0, "MfcStartupProbe");
     registerExport(module, 0x0288, "GetLastError");
     registerExport(module, 0x0289, "SetLastError");
@@ -206,8 +235,16 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x02BD, "ReleaseMutex");
     registerExport(module, 0x02C4, "GetProcAddressA");
     registerExport(module, 0x02C7, "TryEnterCriticalSection");
-    registerExport(module, 0x0416, "memcpy");
-    registerExport(module, 0x0417, "memset");
+    registerExport(module, 0x0414, "LoadMenuW");
+    registerExport(module, 0x0411, "RemoveMenu");
+    registerExport(module, 0x0416, "CheckMenuItem");
+    registerExport(module, 0x0417, "CheckMenuRadioItem");
+    registerExport(module, 0x0446, "RegisterWindowMessageW");
+    registerExport(module, 0x0447, "RegisterTaskBar");
+    registerExport(module, 0x0449, "RegisterDesktop");
+    registerExport(module, 0x044E, "GlobalAddAtomW");
+    registerExport(module, 0x044F, "GlobalDeleteAtom");
+    registerExport(module, 0x0450, "GlobalFindAtomW");
     registerExport(module, 0x0269, "CreateEventW");
     registerExport(module, 0x026E, "Sleep");
     registerExport(module, 0x026F, "WaitForSingleObject");
@@ -274,6 +311,33 @@ void SyntheticDllRuntime::hookCode(uc_engine* uc, uint64_t address, uint32_t, vo
     runtime->dispatch(it->second);
 }
 
+uint32_t SyntheticDllRuntime::makeGuestHandle(GuestHandle handle) {
+    const uint32_t guest = nextHandle_++;
+    guestHandles_[guest] = handle;
+    return guest;
+}
+
+SyntheticDllRuntime::GuestHandle* SyntheticDllRuntime::lookupGuestHandle(uint32_t guestHandle) {
+    auto it = guestHandles_.find(guestHandle);
+    return it == guestHandles_.end() ? nullptr : &it->second;
+}
+
+uint32_t SyntheticDllRuntime::closeGuestHandle(uint32_t guestHandle) {
+    auto it = guestHandles_.find(guestHandle);
+    if (it == guestHandles_.end()) {
+        lastError_ = 6; // ERROR_INVALID_HANDLE
+        return 0;
+    }
+#if defined(_WIN32)
+    if (it->second.hostValue) {
+        CloseHandle(reinterpret_cast<HANDLE>(it->second.hostValue));
+    }
+#endif
+    guestHandles_.erase(it);
+    lastError_ = 0;
+    return 1;
+}
+
 uint32_t SyntheticDllRuntime::reg(int regId) const {
     uint32_t value = 0;
     uc_reg_read(uc_, regId, &value);
@@ -313,6 +377,37 @@ void SyntheticDllRuntime::writeU32(uint32_t address, uint32_t value) const {
     if (address) uc_mem_write(uc_, address, &value, sizeof(value));
 }
 
+bool SyntheticDllRuntime::copyGuest(uint32_t dst, uint32_t src, uint32_t size) const {
+    if (!dst || !src || !size || size > 0x100000) return false;
+    std::vector<uint8_t> bytes(size);
+    if (uc_mem_read(uc_, src, bytes.data(), bytes.size()) != UC_ERR_OK) return false;
+    return uc_mem_write(uc_, dst, bytes.data(), bytes.size()) == UC_ERR_OK;
+}
+
+bool SyntheticDllRuntime::fillGuest(uint32_t dst, uint8_t value, uint32_t size) const {
+    if (!dst || !size || size > 0x100000) return false;
+    std::vector<uint8_t> bytes(size, value);
+    return uc_mem_write(uc_, dst, bytes.data(), bytes.size()) == UC_ERR_OK;
+}
+
+std::string SyntheticDllRuntime::readAscii(uint32_t address, size_t maxChars) const {
+    std::string out;
+    for (size_t i = 0; address && i < maxChars; ++i) {
+        char ch = 0;
+        if (uc_mem_read(uc_, address + uint32_t(i), &ch, sizeof(ch)) != UC_ERR_OK) break;
+        if (!ch) break;
+        out.push_back(ch);
+    }
+    return out;
+}
+
+void SyntheticDllRuntime::writeAscii(uint32_t address, const std::string& value) const {
+    if (!address) return;
+    uc_mem_write(uc_, address, value.data(), value.size());
+    const char nul = 0;
+    uc_mem_write(uc_, address + uint32_t(value.size()), &nul, sizeof(nul));
+}
+
 std::string SyntheticDllRuntime::readUtf16(uint32_t address, size_t maxChars) const {
     std::string out;
     for (size_t i = 0; address && i < maxChars; ++i) {
@@ -322,6 +417,385 @@ std::string SyntheticDllRuntime::readUtf16(uint32_t address, size_t maxChars) co
         out.push_back(ch < 0x80 ? char(ch) : '?');
     }
     return out;
+}
+
+uint32_t SyntheticDllRuntime::writeUtf16(uint32_t address, const std::string& value, uint32_t maxChars) const {
+    if (!address || !maxChars) return 0;
+    const uint32_t charsToWrite = std::min<uint32_t>(uint32_t(value.size()), maxChars - 1);
+    for (uint32_t i = 0; i < charsToWrite; ++i) {
+        const uint16_t ch = uint16_t(static_cast<unsigned char>(value[i]));
+        uc_mem_write(uc_, address + i * 2, &ch, sizeof(ch));
+    }
+    const uint16_t nul = 0;
+    uc_mem_write(uc_, address + charsToWrite * 2, &nul, sizeof(nul));
+    return charsToWrite;
+}
+
+std::filesystem::path SyntheticDllRuntime::resolveGuestPath(const std::string& guestPath) const {
+    if (guestPath.empty()) return {};
+
+    std::string normalized = guestPath;
+    std::replace(normalized.begin(), normalized.end(), '/', '\\');
+    if (normalized.size() > 2 && std::isalpha(static_cast<unsigned char>(normalized[0])) &&
+        normalized[1] == ':') {
+        return std::filesystem::path(normalized);
+    }
+
+    while (!normalized.empty() && (normalized.front() == '\\' || normalized.front() == '/')) {
+        normalized.erase(normalized.begin());
+    }
+
+    std::filesystem::path relative(normalized);
+    if (!hostBaseDir_.empty()) {
+        auto first = relative.begin();
+        if (first != relative.end() &&
+            lowerAscii(first->string()) == lowerAscii(hostBaseDir_.filename().string())) {
+            return hostBaseDir_.parent_path() / relative;
+        }
+        return hostBaseDir_ / relative;
+    }
+    return relative;
+}
+
+bool SyntheticDllRuntime::dispatchGuestMemoryApi(const std::string& name,
+                                                 const GuestCallArgs& args,
+                                                 uint32_t& ret) {
+    const uint32_t a0 = args.a0;
+    const uint32_t a1 = args.a1;
+    const uint32_t a2 = args.a2;
+    const uint32_t a3 = args.a3;
+
+    if (name == "memcpy") {
+        copyGuest(a0, a1, a2);
+        ret = a0;
+    } else if (name == "memset") {
+        fillGuest(a0, uint8_t(a1 & 0xffu), a2);
+        ret = a0;
+    } else if (name == "LocalAlloc") {
+        ret = allocate(a1, (a0 & 0x0040u) != 0);
+    } else if (name == "LocalAllocTrace") {
+        if (a2 == 0x38 && a1) {
+            uint32_t firstWord = 0;
+            ret = uc_mem_read(uc_, a1, &firstWord, sizeof(firstWord)) == UC_ERR_OK ? firstWord : 0;
+        } else {
+            ret = allocate(a1 ? a1 : 1, false);
+        }
+    } else if (name == "LocalFree") {
+        ret = 0;
+    } else if (name == "LocalSize" || name == "HeapSize") {
+        auto it = allocationSizes_.find(name == "HeapSize" ? a2 : a0);
+        ret = it == allocationSizes_.end() ? 0 : it->second;
+    } else if (name == "LocalReAlloc" || name == "RemoteLocalReAlloc") {
+        const uint32_t oldSize = allocationSizes_.count(a0) ? allocationSizes_[a0] : 0;
+        ret = allocate(a1, (a2 & 0x0040u) != 0);
+        if (a0 && ret && oldSize) {
+            std::vector<uint8_t> bytes(std::min(oldSize, a1));
+            uc_mem_read(uc_, a0, bytes.data(), bytes.size());
+            uc_mem_write(uc_, ret, bytes.data(), bytes.size());
+        }
+    } else if (name == "HeapCreate") {
+        ret = makeGuestHandle({GuestHandle::Kind::Pseudo, 0, 0});
+    } else if (name == "HeapDestroy") {
+        ret = 1;
+    } else if (name == "GetProcessHeap") {
+        ret = 1;
+    } else if (name == "HeapAlloc") {
+        ret = allocate(a2, (a1 & 0x00000008u) != 0);
+    } else if (name == "HeapReAlloc") {
+        ret = allocate(a3, (a1 & 0x00000008u) != 0);
+    } else if (name == "HeapFree") {
+        ret = 1;
+    } else if (name == "RemoteHeapFree") {
+        ret = copyGuest(a0, a2, 0x38) ? a0 : 1;
+    } else if (name == "VirtualAlloc") {
+        ret = allocate(a1, true);
+    } else if (name == "VirtualFree") {
+        ret = 1;
+    } else if (name == "operator_new" || name == "operator_new_nothrow" ||
+               name == "operator_vector_new" || name == "operator_vector_new_nothrow") {
+        ret = allocate(a0, false);
+    } else if (name == "operator_delete" || name == "operator_delete_nothrow" ||
+               name == "operator_vector_delete" || name == "operator_vector_delete_nothrow") {
+        ret = 0;
+    } else if (name == "wcschr" || name == "wcsrchr") {
+        const uint16_t target = uint16_t(a1 & 0xffffu);
+        uint32_t found = 0;
+        for (uint32_t offset = 0; a0; offset += 2) {
+            uint16_t ch = 0;
+            if (uc_mem_read(uc_, a0 + offset, &ch, sizeof(ch)) != UC_ERR_OK) break;
+            if (ch == target) {
+                found = a0 + offset;
+                if (name == "wcschr") break;
+            }
+            if (!ch) break;
+        }
+        ret = found;
+    } else if (name == "wcslen") {
+        uint32_t count = 0;
+        for (;; ++count) {
+            uint16_t ch = 0;
+            if (uc_mem_read(uc_, a0 + count * 2, &ch, sizeof(ch)) != UC_ERR_OK || !ch) break;
+        }
+        ret = count;
+    } else if (name == "wcscpy") {
+        uint32_t offset = 0;
+        for (;; offset += 2) {
+            uint16_t ch = 0;
+            uc_mem_read(uc_, a1 + offset, &ch, sizeof(ch));
+            uc_mem_write(uc_, a0 + offset, &ch, sizeof(ch));
+            if (!ch) break;
+        }
+        ret = a0;
+    } else if (name == "GetAPIAddress") {
+        if (!a0 && !a1 && !a2 && a3 == 0x1c) {
+            ret = allocate(0x38, true);
+        } else {
+            ret = 0;
+        }
+    } else if (name == "InterlockedTestExchange") {
+        uint32_t old = 0;
+        uc_mem_read(uc_, a0, &old, sizeof(old));
+        if (old == a1) uc_mem_write(uc_, a0, &a2, sizeof(a2));
+        ret = old;
+    } else if (name == "GetCRTFlags") {
+        ret = 0;
+    } else if (name == "GetCRTStorageEx") {
+        ret = a1 && a2 == 0x38 ? 0 : allocate(0x100, true);
+    } else {
+        return false;
+    }
+
+    return true;
+}
+
+bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
+                                            const GuestCallArgs& args,
+                                            uint32_t& ret) {
+    const uint32_t a0 = args.a0;
+    const uint32_t a1 = args.a1;
+    const uint32_t a2 = args.a2;
+    const uint32_t a3 = args.a3;
+
+    if (name == "IsProcessDying") {
+        ret = 0;
+    } else if (name == "GetLastError") {
+        ret = lastError_;
+    } else if (name == "SetLastError") {
+        lastError_ = a0;
+        ret = 0;
+    } else if (name == "GetTickCount") {
+#if defined(_WIN32)
+        ret = GetTickCount();
+#else
+        ret = uint32_t(++tick_ * 16);
+#endif
+    } else if (name == "Sleep") {
+#if defined(_WIN32)
+        Sleep(a0);
+#endif
+        ret = 0;
+    } else if (name == "QueryPerformanceFrequency") {
+#if defined(_WIN32)
+        LARGE_INTEGER value{};
+        const BOOL ok = QueryPerformanceFrequency(&value);
+        writeU32(a0, uint32_t(value.QuadPart));
+        writeU32(a0 + 4, uint32_t(uint64_t(value.QuadPart) >> 32));
+        ret = ok ? 1 : 0;
+        if (!ret) lastError_ = GetLastError();
+#else
+        writeU32(a0, 10000000u);
+        writeU32(a0 + 4, 0);
+        ret = 1;
+#endif
+    } else if (name == "QueryPerformanceCounter") {
+#if defined(_WIN32)
+        LARGE_INTEGER value{};
+        const BOOL ok = QueryPerformanceCounter(&value);
+        writeU32(a0, uint32_t(value.QuadPart));
+        writeU32(a0 + 4, uint32_t(uint64_t(value.QuadPart) >> 32));
+        ret = ok ? 1 : 0;
+        if (!ret) lastError_ = GetLastError();
+#else
+        const uint64_t value = ++tick_ * 160000;
+        writeU32(a0, uint32_t(value));
+        writeU32(a0 + 4, uint32_t(value >> 32));
+        ret = 1;
+#endif
+    } else if (name == "GetLocalTime" || name == "GetSystemTime") {
+#if defined(_WIN32)
+        SYSTEMTIME st{};
+        if (name == "GetSystemTime") ::GetSystemTime(&st);
+        else ::GetLocalTime(&st);
+        if (a0) uc_mem_write(uc_, a0, &st, sizeof(st));
+        ret = 0;
+#else
+        std::time_t now = std::time(nullptr);
+        std::tm tm{};
+        if (name == "GetSystemTime") tm = *std::gmtime(&now);
+        else tm = *std::localtime(&now);
+        const std::array<uint16_t, 8> st = {
+            uint16_t(tm.tm_year + 1900), uint16_t(tm.tm_mon + 1),
+            uint16_t(tm.tm_wday), uint16_t(tm.tm_mday), uint16_t(tm.tm_hour),
+            uint16_t(tm.tm_min), uint16_t(tm.tm_sec), 0,
+        };
+        if (a0) uc_mem_write(uc_, a0, st.data(), st.size() * sizeof(uint16_t));
+        ret = 0;
+#endif
+    } else if (name == "CloseHandle") {
+        ret = closeGuestHandle(a0);
+    } else if (name == "ReleaseMutex") {
+        auto* handle = lookupGuestHandle(a0);
+#if defined(_WIN32)
+        if (handle && handle->kind == GuestHandle::Kind::HostMutex && handle->hostValue) {
+            ret = ReleaseMutex(reinterpret_cast<HANDLE>(handle->hostValue)) ? 1 : 0;
+            if (!ret) lastError_ = GetLastError();
+        } else
+#endif
+        {
+            ret = handle ? 1 : 0;
+            if (!ret) lastError_ = 6;
+        }
+    } else if (name == "CreateEventW") {
+#if defined(_WIN32)
+        HANDLE host = CreateEventW(nullptr, a1 != 0, a2 != 0, nullptr);
+        if (host) ret = makeGuestHandle({GuestHandle::Kind::HostEvent, reinterpret_cast<uintptr_t>(host), 0});
+        else {
+            ret = 0;
+            lastError_ = GetLastError();
+        }
+#else
+        ret = makeGuestHandle({GuestHandle::Kind::Pseudo, 0, 0});
+#endif
+    } else if (name == "CreateMutexW") {
+#if defined(_WIN32)
+        HANDLE host = CreateMutexW(nullptr, a1 != 0, nullptr);
+        if (host) ret = makeGuestHandle({GuestHandle::Kind::HostMutex, reinterpret_cast<uintptr_t>(host), 0});
+        else {
+            ret = 0;
+            lastError_ = GetLastError();
+        }
+#else
+        ret = makeGuestHandle({GuestHandle::Kind::Pseudo, 0, 0});
+#endif
+    } else if (name == "WaitForSingleObject") {
+        auto* handle = lookupGuestHandle(a0);
+#if defined(_WIN32)
+        if (handle && handle->hostValue) {
+            ret = WaitForSingleObject(reinterpret_cast<HANDLE>(handle->hostValue), a1);
+            if (ret == 0xffffffffu) lastError_ = GetLastError();
+        } else
+#endif
+        {
+            ret = handle ? 0 : 0xffffffffu;
+            if (!handle) lastError_ = 6;
+        }
+    } else if (name == "CreateFileW") {
+#if defined(_WIN32)
+        const std::filesystem::path hostPath = resolveGuestPath(readUtf16(a0));
+        HANDLE host = INVALID_HANDLE_VALUE;
+        if (!hostPath.empty()) {
+            host = CreateFileW(hostPath.wstring().c_str(), a1, a2, nullptr, stackArg(4), stackArg(5), nullptr);
+        }
+        if (host == INVALID_HANDLE_VALUE) {
+            lastError_ = GetLastError();
+            ret = 0xffffffffu;
+        } else {
+            ret = makeGuestHandle({GuestHandle::Kind::HostFile, reinterpret_cast<uintptr_t>(host), 0});
+            lastError_ = 0;
+        }
+#else
+        lastError_ = 2;
+        ret = 0xffffffffu;
+#endif
+    } else if (name == "ReadFile" || name == "WriteFile") {
+        auto* handle = lookupGuestHandle(a0);
+        writeU32(a3, 0);
+        if (!handle || handle->kind != GuestHandle::Kind::HostFile || !handle->hostValue) {
+            lastError_ = 6;
+            ret = 0;
+        } else if (!a1 && a2) {
+            lastError_ = 87;
+            ret = 0;
+        } else {
+#if defined(_WIN32)
+            DWORD transferred = 0;
+            if (name == "ReadFile") {
+                std::vector<uint8_t> bytes(a2);
+                const BOOL ok = ReadFile(reinterpret_cast<HANDLE>(handle->hostValue), bytes.data(), a2, &transferred, nullptr);
+                if (ok && transferred) uc_mem_write(uc_, a1, bytes.data(), transferred);
+                ret = ok ? 1 : 0;
+            } else {
+                std::vector<uint8_t> bytes(a2);
+                if (a2) uc_mem_read(uc_, a1, bytes.data(), bytes.size());
+                const BOOL ok = WriteFile(reinterpret_cast<HANDLE>(handle->hostValue), bytes.data(), a2, &transferred, nullptr);
+                ret = ok ? 1 : 0;
+            }
+            writeU32(a3, transferred);
+            lastError_ = ret ? 0 : GetLastError();
+#else
+            lastError_ = 6;
+            ret = 0;
+#endif
+        }
+    } else if (name == "GetFileSize") {
+        auto* handle = lookupGuestHandle(a0);
+        if (!handle || handle->kind != GuestHandle::Kind::HostFile || !handle->hostValue) {
+            lastError_ = 6;
+            ret = 0xffffffffu;
+        } else {
+#if defined(_WIN32)
+            DWORD high = 0;
+            ret = GetFileSize(reinterpret_cast<HANDLE>(handle->hostValue), a1 ? &high : nullptr);
+            if (a1) writeU32(a1, high);
+            lastError_ = ret == 0xffffffffu ? GetLastError() : 0;
+#else
+            lastError_ = 6;
+            ret = 0xffffffffu;
+#endif
+        }
+    } else if (name == "SetFilePointer") {
+        auto* handle = lookupGuestHandle(a0);
+        if (!handle || handle->kind != GuestHandle::Kind::HostFile || !handle->hostValue) {
+            lastError_ = 6;
+            ret = 0xffffffffu;
+        } else {
+#if defined(_WIN32)
+            LONG high = 0;
+            if (a2) uc_mem_read(uc_, a2, &high, sizeof(high));
+            ret = SetFilePointer(reinterpret_cast<HANDLE>(handle->hostValue), LONG(a1), a2 ? &high : nullptr, a3);
+            if (a2) writeU32(a2, uint32_t(high));
+            lastError_ = ret == 0xffffffffu ? GetLastError() : 0;
+#else
+            lastError_ = 6;
+            ret = 0xffffffffu;
+#endif
+        }
+    } else if (name == "SetFileTime") {
+        auto* handle = lookupGuestHandle(a0);
+        if (!handle || handle->kind != GuestHandle::Kind::HostFile || !handle->hostValue) {
+            lastError_ = 6;
+            ret = 0;
+        } else {
+#if defined(_WIN32)
+            FILETIME creation{}, access{}, write{};
+            FILETIME* creationPtr = nullptr;
+            FILETIME* accessPtr = nullptr;
+            FILETIME* writePtr = nullptr;
+            if (a1 && uc_mem_read(uc_, a1, &creation, sizeof(creation)) == UC_ERR_OK) creationPtr = &creation;
+            if (a2 && uc_mem_read(uc_, a2, &access, sizeof(access)) == UC_ERR_OK) accessPtr = &access;
+            if (a3 && uc_mem_read(uc_, a3, &write, sizeof(write)) == UC_ERR_OK) writePtr = &write;
+            ret = SetFileTime(reinterpret_cast<HANDLE>(handle->hostValue), creationPtr, accessPtr, writePtr) ? 1 : 0;
+            lastError_ = ret ? 0 : GetLastError();
+#else
+            ret = 0;
+            lastError_ = 6;
+#endif
+        }
+    } else {
+        return false;
+    }
+
+    return true;
 }
 
 void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
@@ -335,12 +809,21 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
     const uint32_t a2 = reg(UC_MIPS_REG_A2);
     const uint32_t a3 = reg(UC_MIPS_REG_A3);
     const uint32_t ra = reg(UC_MIPS_REG_RA);
+    const GuestCallArgs args{a0, a1, a2, a3, ra};
     if (mutableEntry.calls <= 128) {
         spdlog::info("synthetic {}!{} call {} a0=0x{:08x} a1=0x{:08x} a2=0x{:08x} a3=0x{:08x} ra=0x{:08x}",
                      mutableEntry.moduleName, name, mutableEntry.calls, a0, a1, a2, a3, ra);
     }
 
     uint32_t ret = 1;
+    if (mutableEntry.moduleName == "coredll.dll" &&
+        (dispatchHostWin32(name, args, ret) || dispatchGuestMemoryApi(name, args, ret))) {
+        if (mutableEntry.calls <= 128) {
+            spdlog::info("synthetic {}!{} -> 0x{:08x}", mutableEntry.moduleName, name, ret);
+        }
+        setReg(UC_MIPS_REG_V0, ret);
+        return;
+    }
 
     if (mutableEntry.moduleName == "WINSOCK.dll") {
         if (name == "WSAStartup") {
@@ -394,26 +877,19 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         ret = 1;
     } else if (name == "SyntheticHandleCall") ret = nextHandle_++;
     else if (name == "memcpy") {
-        if (a0 && a1 && a2) {
-            std::vector<uint8_t> bytes(a2);
-            if (uc_mem_read(uc_, a1, bytes.data(), bytes.size()) == UC_ERR_OK) {
-                uc_mem_write(uc_, a0, bytes.data(), bytes.size());
-            }
-        }
+        copyGuest(a0, a1, a2);
         ret = a0;
     } else if (name == "memset") {
-        if (a0 && a2) {
-            std::vector<uint8_t> bytes(a2, uint8_t(a1 & 0xffu));
-            uc_mem_write(uc_, a0, bytes.data(), bytes.size());
-        }
+        fillGuest(a0, uint8_t(a1 & 0xffu), a2);
         ret = a0;
     }
     else if (name == "LocalAlloc") ret = allocate(a1, (a0 & 0x0040u) != 0);
+    else if (name == "LocalAllocTrace") ret = allocate(a1 ? a1 : 1, false);
     else if (name == "LocalFree") ret = 0;
     else if (name == "LocalSize" || name == "HeapSize") {
         auto it = allocationSizes_.find(name == "HeapSize" ? a2 : a0);
         ret = it == allocationSizes_.end() ? 0 : it->second;
-    } else if (name == "LocalReAlloc") {
+    } else if (name == "LocalReAlloc" || name == "RemoteLocalReAlloc") {
         const uint32_t oldSize = allocationSizes_.count(a0) ? allocationSizes_[a0] : 0;
         ret = allocate(a1, (a2 & 0x0040u) != 0);
         if (a0 && ret && oldSize) {
@@ -428,6 +904,12 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
     else if (name == "HeapReAlloc") {
         ret = allocate(a3, (a1 & 0x00000008u) != 0);
     } else if (name == "HeapFree") ret = 1;
+    else if (name == "RemoteHeapFree") {
+        // SDK name/ordinal is authoritative, but this target calls the ordinal
+        // with a CRT object-copy shape during startup. Preserve that evidence
+        // here and in TODO.md instead of relabeling the export.
+        ret = copyGuest(a0, a2, 0x38) ? a0 : 1;
+    }
     else if (name == "VirtualAlloc") ret = allocate(a1, true);
     else if (name == "VirtualFree") ret = 1;
     else if (name == "operator_new" || name == "operator_new_nothrow" ||
@@ -499,9 +981,120 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         const uint32_t next = old + a1;
         uc_mem_write(uc_, a0, &next, sizeof(next));
         ret = old;
-    } else if (name == "CloseHandle" || name == "ReleaseMutex" || name == "SetEventData") ret = 1;
-    else if (name == "CreateEventW" || name == "CreateMutexW") ret = nextHandle_++;
-    else if (name == "WaitForSingleObject") ret = 0; // WAIT_OBJECT_0
+    } else if (name == "CloseHandle") ret = closeGuestHandle(a0);
+    else if (name == "ReleaseMutex") {
+        auto* handle = lookupGuestHandle(a0);
+#if defined(_WIN32)
+        if (handle && handle->kind == GuestHandle::Kind::HostMutex && handle->hostValue) {
+            ret = ReleaseMutex(reinterpret_cast<HANDLE>(handle->hostValue)) ? 1 : 0;
+            if (!ret) lastError_ = GetLastError();
+        } else
+#endif
+        {
+            ret = handle ? 1 : 0;
+            if (!ret) lastError_ = 6;
+        }
+    } else if (name == "SetEventData") ret = 1;
+    else if (name == "CreateEventW") {
+#if defined(_WIN32)
+        HANDLE host = CreateEventW(nullptr, a1 != 0, a2 != 0, nullptr);
+        if (host) ret = makeGuestHandle({GuestHandle::Kind::HostEvent, reinterpret_cast<uintptr_t>(host), 0});
+        else {
+            ret = 0;
+            lastError_ = GetLastError();
+        }
+#else
+        ret = makeGuestHandle({GuestHandle::Kind::Pseudo, 0, 0});
+#endif
+    } else if (name == "CreateMutexW") {
+#if defined(_WIN32)
+        HANDLE host = CreateMutexW(nullptr, a1 != 0, nullptr);
+        if (host) ret = makeGuestHandle({GuestHandle::Kind::HostMutex, reinterpret_cast<uintptr_t>(host), 0});
+        else {
+            ret = 0;
+            lastError_ = GetLastError();
+        }
+#else
+        ret = makeGuestHandle({GuestHandle::Kind::Pseudo, 0, 0});
+#endif
+    } else if (name == "WaitForSingleObject") {
+        auto* handle = lookupGuestHandle(a0);
+#if defined(_WIN32)
+        if (handle && handle->hostValue) {
+            ret = WaitForSingleObject(reinterpret_cast<HANDLE>(handle->hostValue), a1);
+            if (ret == 0xffffffffu) lastError_ = GetLastError();
+        } else
+#endif
+        {
+            ret = handle ? 0 : 0xffffffffu; // WAIT_OBJECT_0 or WAIT_FAILED
+            if (!handle) lastError_ = 6;
+        }
+    }
+    else if (name == "CheckMenuRadioItem") {
+        ret = fillGuest(a0, uint8_t(a1 & 0xffu), a2) ? a0 : 0;
+    } else if (name == "CheckMenuItem") {
+        ret = copyGuest(a0, a1, a2) ? a0 : 0xffffffffu;
+    } else if (name == "LoadMenuW") {
+        ret = copyGuest(a0, a1, a2) ? a0 : nextHandle_++;
+    } else if (name == "RegisterTaskBar") {
+        ret = a0 && a0 < 0x01000000u ? allocate(a0, false) : 0;
+    } else if (name == "RegisterDesktop") {
+        std::string value = readAscii(a1);
+        const uint32_t buffer = allocate(uint32_t(value.size() + 1), true);
+        writeAscii(buffer, value);
+        if (a0) {
+            std::array<uint8_t, 0x28> object{};
+            uc_mem_write(uc_, a0, object.data(), object.size());
+            writeU32(a0, buffer);
+            writeU32(a0 + 4, uint32_t(value.size()));
+            writeU32(a0 + 8, uint32_t(value.size()));
+        }
+        ret = a0;
+    } else if (name == "RegisterWindowMessageW") ret = 0;
+    else if (name == "RemoveMenu") ret = 0;
+    else if (name == "GlobalAddAtomW") {
+        const std::string atomName = lowerAscii(readUtf16(a0));
+        if (atomName.empty()) {
+            lastError_ = 87; // ERROR_INVALID_PARAMETER
+            ret = 0;
+        } else {
+            auto it = atomsByName_.find(atomName);
+            if (it == atomsByName_.end()) {
+                const uint16_t atom = nextAtom_++;
+                it = atomsByName_.emplace(atomName, atom).first;
+                atomNames_[atom] = atomName;
+            }
+            lastError_ = 0;
+            ret = it->second;
+        }
+    } else if (name == "GlobalFindAtomW") {
+        const std::string atomName = lowerAscii(readUtf16(a0));
+        auto it = atomsByName_.find(atomName);
+        ret = it == atomsByName_.end() ? 0 : it->second;
+        lastError_ = ret ? 0 : 2;
+    } else if (name == "GlobalDeleteAtom") {
+        auto it = atomNames_.find(uint16_t(a0));
+        if (it != atomNames_.end()) {
+            atomsByName_.erase(it->second);
+            atomNames_.erase(it);
+        }
+        ret = 0;
+    } else if (name == "GetAPIAddress") ret = 0;
+    else if (name == "GetCRTFlags") ret = 0;
+    else if (name == "GetCRTStorageEx") ret = allocate(0x100, true);
+    else if (name == "WNetGetUserW") {
+        const std::string user = "User";
+        if (a2) writeU32(a2, uint32_t(user.size() + 1));
+        if (a1) writeUtf16(a1, user, a2 ? std::max<uint32_t>(1, uint32_t(user.size() + 1)) : 32);
+        ret = 0; // NO_ERROR
+    } else if (name == "WNetGetUniversalNameW" || name == "WNetConnectionDialog1W") {
+        lastError_ = 1200; // ERROR_BAD_DEVICE / no network provider.
+        ret = 1200;
+    } else if (name == "waveInOpen" || name == "waveInReset" || name == "waveInAddBuffer" ||
+               name == "waveInUnprepareHeader" || name == "waveInMessage" ||
+               name == "mixerGetControlDetails") {
+        ret = 2; // MMSYSERR_NODRIVER
+    }
     else if (name == "OutputDebugStringW") {
         spdlog::info("OutputDebugStringW: {}", readUtf16(a0));
         ret = 0;
@@ -509,17 +1102,125 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         const std::string dll = lowerAscii(readUtf16(a0));
         ret = dll.empty() || dll == "coredll.dll" ? 0x70000000 : 0;
     } else if (name == "GetProcAddressA" || name == "GetProcAddressW") ret = 0;
-    else if (name == "GetModuleFileNameW") ret = 0;
+    else if (name == "GetModuleFileNameW") {
+        ret = writeUtf16(a1, mainModulePath_, a2);
+        lastError_ = ret ? 0 : 122; // ERROR_INSUFFICIENT_BUFFER for tiny/null buffers.
+    }
     else if (name == "CreateFileW") {
-        lastError_ = 2; // ERROR_FILE_NOT_FOUND until host file mapping exists.
+#if defined(_WIN32)
+        const std::filesystem::path hostPath = resolveGuestPath(readUtf16(a0));
+        HANDLE host = INVALID_HANDLE_VALUE;
+        if (!hostPath.empty()) {
+            host = CreateFileW(hostPath.wstring().c_str(), a1, a2, nullptr, stackArg(4), stackArg(5), nullptr);
+        }
+        if (host == INVALID_HANDLE_VALUE) {
+            lastError_ = GetLastError();
+            ret = 0xffffffffu;
+        } else {
+            ret = makeGuestHandle({GuestHandle::Kind::HostFile, reinterpret_cast<uintptr_t>(host), 0});
+            lastError_ = 0;
+        }
+#else
+        lastError_ = 2;
         ret = 0xffffffffu;
+#endif
     } else if (name == "ReadFile" || name == "WriteFile") {
+        auto* handle = lookupGuestHandle(a0);
         writeU32(a3, 0);
-        lastError_ = 6; // ERROR_INVALID_HANDLE
-        ret = 0;
-    } else if (name == "GetFileSize" || name == "SetFilePointer") {
-        lastError_ = 6;
-        ret = 0xffffffffu;
+        if (!handle || handle->kind != GuestHandle::Kind::HostFile || !handle->hostValue) {
+            lastError_ = 6; // ERROR_INVALID_HANDLE
+            ret = 0;
+        } else if (!a1 && a2) {
+            lastError_ = 87;
+            ret = 0;
+        } else {
+#if defined(_WIN32)
+            DWORD transferred = 0;
+            if (name == "ReadFile") {
+                std::vector<uint8_t> bytes(a2);
+                const BOOL ok = ReadFile(reinterpret_cast<HANDLE>(handle->hostValue), bytes.data(), a2, &transferred, nullptr);
+                if (ok && transferred) uc_mem_write(uc_, a1, bytes.data(), transferred);
+                ret = ok ? 1 : 0;
+            } else {
+                std::vector<uint8_t> bytes(a2);
+                if (a2) uc_mem_read(uc_, a1, bytes.data(), bytes.size());
+                const BOOL ok = WriteFile(reinterpret_cast<HANDLE>(handle->hostValue), bytes.data(), a2, &transferred, nullptr);
+                ret = ok ? 1 : 0;
+            }
+            writeU32(a3, transferred);
+            lastError_ = ret ? 0 : GetLastError();
+#else
+            lastError_ = 6;
+            ret = 0;
+#endif
+        }
+    } else if (name == "GetFileSize") {
+        auto* handle = lookupGuestHandle(a0);
+        if (!handle || handle->kind != GuestHandle::Kind::HostFile || !handle->hostValue) {
+            lastError_ = 6;
+            ret = 0xffffffffu;
+        } else {
+#if defined(_WIN32)
+            DWORD high = 0;
+            ret = GetFileSize(reinterpret_cast<HANDLE>(handle->hostValue), a1 ? &high : nullptr);
+            if (a1) writeU32(a1, high);
+            lastError_ = ret == 0xffffffffu ? GetLastError() : 0;
+#else
+            lastError_ = 6;
+            ret = 0xffffffffu;
+#endif
+        }
+    } else if (name == "SetFilePointer") {
+        auto* handle = lookupGuestHandle(a0);
+        if (!handle || handle->kind != GuestHandle::Kind::HostFile || !handle->hostValue) {
+            lastError_ = 6;
+            ret = 0xffffffffu;
+        } else {
+#if defined(_WIN32)
+            LONG high = 0;
+            if (a2) uc_mem_read(uc_, a2, &high, sizeof(high));
+            ret = SetFilePointer(reinterpret_cast<HANDLE>(handle->hostValue), LONG(a1), a2 ? &high : nullptr, a3);
+            if (a2) writeU32(a2, uint32_t(high));
+            lastError_ = ret == 0xffffffffu ? GetLastError() : 0;
+#else
+            lastError_ = 6;
+            ret = 0xffffffffu;
+#endif
+        }
+    } else if (name == "SetFileTime") {
+        auto* handle = lookupGuestHandle(a0);
+        if (!handle || handle->kind != GuestHandle::Kind::HostFile || !handle->hostValue) {
+            lastError_ = 6;
+            ret = 0;
+        } else {
+#if defined(_WIN32)
+            FILETIME creation{}, access{}, write{};
+            FILETIME* creationPtr = nullptr;
+            FILETIME* accessPtr = nullptr;
+            FILETIME* writePtr = nullptr;
+            if (a1 && uc_mem_read(uc_, a1, &creation, sizeof(creation)) == UC_ERR_OK) creationPtr = &creation;
+            if (a2 && uc_mem_read(uc_, a2, &access, sizeof(access)) == UC_ERR_OK) accessPtr = &access;
+            if (a3 && uc_mem_read(uc_, a3, &write, sizeof(write)) == UC_ERR_OK) writePtr = &write;
+            ret = SetFileTime(reinterpret_cast<HANDLE>(handle->hostValue), creationPtr, accessPtr, writePtr) ? 1 : 0;
+            lastError_ = ret ? 0 : GetLastError();
+#else
+            ret = 0;
+            lastError_ = 6;
+#endif
+        }
+    } else if (name == "wcschr" || name == "wcsrchr") {
+        const uint16_t target = uint16_t(a1 & 0xffffu);
+        uint32_t found = 0;
+        for (uint32_t offset = 0; a0; offset += 2) {
+            uint16_t ch = 0;
+            if (uc_mem_read(uc_, a0 + offset, &ch, sizeof(ch)) != UC_ERR_OK) break;
+            if (ch == target) {
+                found = a0 + offset;
+                if (name == "wcschr") break;
+            }
+            if (!ch) break;
+        }
+        ret = found;
     } else if (name == "wcslen") {
         uint32_t count = 0;
         for (;; ++count) {
