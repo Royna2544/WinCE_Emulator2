@@ -592,22 +592,6 @@ bool isRegistryApiName(const std::string& name) {
            name == "RegCloseKey";
 }
 
-bool isHotSyntheticCall(std::string_view name) {
-    return name == "Sleep" || name == "WaitForSingleObject" ||
-           name == "GetMessageW" || name == "PeekMessageW" ||
-           name == "TranslateMessage" || name == "DispatchMessageW" ||
-           name == "InvalidateRect" || name == "UpdateWindow" ||
-           name == "BeginPaint" || name == "EndPaint" ||
-           name == "BitBlt" || name == "StretchBlt" ||
-           name == "TransparentImage" || name == "CreateDIBSection" ||
-           name == "SetBkColor" || name == "SetTextColor" ||
-           name == "__fptoli" || name == "__CxxFrameHandler3";
-}
-
-bool shouldTraceSyntheticCall(std::string_view name, uint64_t calls) {
-    return calls <= (isHotSyntheticCall(name) ? 4u : 32u);
-}
-
 uint16_t readLe16(const std::vector<uint8_t>& bytes, size_t offset) {
     if (offset + 2 > bytes.size()) return 0;
     return uint16_t(bytes[offset] | (bytes[offset + 1] << 8));
@@ -719,14 +703,6 @@ const wchar_t* hostPresenterClassName() {
     return L"FakeCEHostPresenterWindow";
 }
 
-constexpr DWORD kHostPresenterStyle = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
-
-SIZE hostPresenterOuterSize(int clientWidth, int clientHeight) {
-    RECT rect{0, 0, std::max(1, clientWidth), std::max(1, clientHeight)};
-    AdjustWindowRectEx(&rect, kHostPresenterStyle, FALSE, 0);
-    return SIZE{rect.right - rect.left, rect.bottom - rect.top};
-}
-
 LRESULT CALLBACK hostPresenterWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
     if (message == WM_NCCREATE) {
         auto* create = reinterpret_cast<CREATESTRUCTW*>(lParam);
@@ -740,7 +716,6 @@ LRESULT CALLBACK hostPresenterWndProc(HWND hwnd, UINT message, WPARAM wParam, LP
         if (presenter && presenter->framebuffer && presenter->width > 0 && presenter->height > 0) {
             RECT client{};
             GetClientRect(hwnd, &client);
-            FillRect(dc, &client, reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
             BITMAPINFO info{};
             info.bmiHeader.biSize = sizeof(info.bmiHeader);
             info.bmiHeader.biWidth = presenter->width;
@@ -748,20 +723,11 @@ LRESULT CALLBACK hostPresenterWndProc(HWND hwnd, UINT message, WPARAM wParam, LP
             info.bmiHeader.biPlanes = 1;
             info.bmiHeader.biBitCount = 32;
             info.bmiHeader.biCompression = BI_RGB;
-            SetDIBitsToDevice(dc, 0, 0, presenter->width, presenter->height,
-                              0, 0, 0, presenter->height,
-                              presenter->framebuffer, &info, DIB_RGB_COLORS);
+            StretchDIBits(dc, 0, 0, client.right - client.left, client.bottom - client.top,
+                          0, 0, presenter->width, presenter->height,
+                          presenter->framebuffer, &info, DIB_RGB_COLORS, SRCCOPY);
         }
         EndPaint(hwnd, &paint);
-        return 0;
-    }
-    if (message == WM_GETMINMAXINFO && presenter) {
-        auto* info = reinterpret_cast<MINMAXINFO*>(lParam);
-        const SIZE outer = hostPresenterOuterSize(presenter->width, presenter->height);
-        info->ptMinTrackSize.x = outer.cx;
-        info->ptMinTrackSize.y = outer.cy;
-        info->ptMaxTrackSize.x = outer.cx;
-        info->ptMaxTrackSize.y = outer.cy;
         return 0;
     }
     if (message == WM_ERASEBKGND) return 1;
@@ -817,16 +783,6 @@ ATOM registerHostPresenterClass() {
 
 SyntheticDllRuntime::SyntheticDllRuntime(uc_engine* uc) : uc_(uc) {
     if (!uc_) throw std::runtime_error("SyntheticDllRuntime requires a Unicorn engine");
-#if defined(_WIN32)
-    char frameDump[16]{};
-    const DWORD frameDumpLength = GetEnvironmentVariableA("WINCE_EMULATOR_FRAME_DUMP",
-                                                          frameDump, DWORD(sizeof(frameDump)));
-    frameDumpEnabled_ = frameDumpLength > 0 && frameDump[0] != '0';
-#else
-    if (const char* frameDump = std::getenv("WINCE_EMULATOR_FRAME_DUMP")) {
-        frameDumpEnabled_ = frameDump[0] && frameDump[0] != '0';
-    }
-#endif
     uc_mem_map(uc_, heapBase_, heapLimit_ - heapBase_, UC_PROT_ALL);
     uc_mem_map(uc_, 0x00005000, 0x00001000, UC_PROT_ALL);
 }
@@ -2089,12 +2045,12 @@ void SyntheticDllRuntime::ensureHostWindow(uint32_t guestHwnd, GuestWindow& wind
         }
         auto* presenter = new HostPresenterWindow{this, guestHwnd, framebuffer_, framebufferWidth_, framebufferHeight_};
         const std::wstring title = widenLossy(window.title.empty() ? "FakeCE" : window.title);
-        const SIZE outer = hostPresenterOuterSize(hostPresenterDisplayWidth(*presenter),
-                                                 hostPresenterDisplayHeight(*presenter));
+        RECT rect{0, 0, hostPresenterDisplayWidth(*presenter), hostPresenterDisplayHeight(*presenter)};
+        AdjustWindowRectEx(&rect, WS_OVERLAPPEDWINDOW, FALSE, 0);
         HWND hwnd = CreateWindowExW(0, hostPresenterClassName(), title.c_str(),
-                                    kHostPresenterStyle,
+                                    WS_OVERLAPPEDWINDOW,
                                     CW_USEDEFAULT, CW_USEDEFAULT,
-                                    outer.cx, outer.cy,
+                                    rect.right - rect.left, rect.bottom - rect.top,
                                     nullptr, nullptr, GetModuleHandleW(nullptr), presenter);
         if (!hwnd) {
             spdlog::warn("host presenter CreateWindowExW failed guest=0x{:08x} error={}", guestHwnd, GetLastError());
@@ -5855,25 +5811,6 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
     const uint32_t a2 = args.a2;
     const uint32_t a3 = args.a3;
     const uint32_t ra = args.ra;
-    auto queuePaintMessages = [&](uint32_t hwnd, bool includeErase) {
-        std::erase_if(guestMessages_, [&](const GuestMessage& message) {
-            return message.hwnd == hwnd &&
-                   (message.message == 0x0014 || message.message == 0x000f);
-        });
-        if (includeErase) {
-            GuestMessage erase{};
-            erase.hwnd = hwnd;
-            erase.message = 0x0014; // WM_ERASEBKGND
-            erase.wParam = makeGuestDc(hwnd);
-            erase.time = uint32_t(++tick_ * 16);
-            guestMessages_.push_back(erase);
-        }
-        GuestMessage message{};
-        message.hwnd = hwnd;
-        message.message = 0x000f; // WM_PAINT
-        message.time = uint32_t(++tick_ * 16);
-        guestMessages_.push_back(message);
-    };
     if (name == "SystemParametersInfoW") {
         ret = handleSystemParametersInfoW(a0, a1, a2, a3);
         return true;
@@ -6917,7 +6854,17 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             lastError_ = 1400;
             ret = 0;
         } else {
-            queuePaintMessages(a0, true);
+            GuestMessage erase{};
+            erase.hwnd = a0;
+            erase.message = 0x0014; // WM_ERASEBKGND
+            erase.wParam = makeGuestDc(a0);
+            erase.time = uint32_t(++tick_ * 16);
+            guestMessages_.push_back(erase);
+            GuestMessage message{};
+            message.hwnd = a0;
+            message.message = 0x000f; // WM_PAINT
+            message.time = uint32_t(++tick_ * 16);
+            guestMessages_.push_back(message);
             lastError_ = 0;
             ret = 1;
         }
@@ -7357,7 +7304,6 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             const int32_t srcBitmapHeight = std::abs(srcBitmap->second.heightRaw);
             const int32_t dstBitmapHeight = std::abs(dstBitmap->second.heightRaw);
             const bool splashSlice =
-                frameDumpEnabled_ &&
                 ok && srcBitmap->second.width == 800 && dstBitmap->second.width == 800 &&
                 dstBitmapHeight == 480 && std::abs(dstW) == 800 &&
                 (std::abs(dstH) == 160 || std::abs(dstH) == 320) &&
@@ -7404,7 +7350,6 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
                                                 int32_t(a1), int32_t(a2), dstW, dstH,
                                                 srcX, srcY, srcW, srcH, rop);
             const bool splashFrame =
-                frameDumpEnabled_ &&
                 ok && !splashFramebufferDumped_ && srcDc->selectedBitmap == splashCompositeBitmap_ &&
                 srcBitmap->second.width == 800 && std::abs(srcBitmap->second.heightRaw) == 480 &&
                 std::abs(dstW) == 800 && std::abs(dstH) == 480 &&
@@ -7577,9 +7522,8 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
                                                     : std::max(1, it->second.width);
                     const int hostHeight = presenter ? hostPresenterDisplayHeight(*presenter)
                                                      : std::max(1, it->second.height);
-                    const SIZE outer = hostPresenterOuterSize(hostWidth, hostHeight);
                     SetWindowPos(hwnd, nullptr, it->second.x, it->second.y,
-                                 outer.cx, outer.cy,
+                                 hostWidth, hostHeight,
                                  SWP_NOZORDER | SWP_NOACTIVATE);
                 }
                 ShowWindow(hwnd, it->second.visible ? SW_SHOWNORMAL : SW_HIDE);
@@ -7725,7 +7669,17 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             lastError_ = 1400;
             ret = 0;
         } else {
-            queuePaintMessages(a0, true);
+            GuestMessage erase{};
+            erase.hwnd = a0;
+            erase.message = 0x0014; // WM_ERASEBKGND
+            erase.wParam = makeGuestDc(a0);
+            erase.time = uint32_t(++tick_ * 16);
+            guestMessages_.push_back(erase);
+            GuestMessage message{};
+            message.hwnd = a0;
+            message.message = 0x000f; // WM_PAINT
+            message.time = uint32_t(++tick_ * 16);
+            guestMessages_.push_back(message);
             ensureHostWindow(a0, it->second);
             invalidateHostWindows();
             lastError_ = 0;
@@ -8910,8 +8864,7 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
     const uint32_t a3 = reg(UC_MIPS_REG_A3);
     const uint32_t ra = reg(UC_MIPS_REG_RA);
     const GuestCallArgs args{a0, a1, a2, a3, ra};
-    const bool traceCall = shouldTraceSyntheticCall(name, mutableEntry.calls);
-    if (traceCall) {
+    if (mutableEntry.calls <= 128) {
         spdlog::info("synthetic {}!{} call {} a0=0x{:08x} a1=0x{:08x} a2=0x{:08x} a3=0x{:08x} ra=0x{:08x}",
                      mutableEntry.moduleName, name, mutableEntry.calls, a0, a1, a2, a3, ra);
     }
@@ -8944,12 +8897,16 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
     };
     auto dispatchQueuedPaintForBlockingApi = [&](PendingBlockingApi& pending, const char* reason) {
         if (pending.paintDispatches >= 16) return false;
-        if (guestMessages_.empty()) return false;
-        const GuestMessage message = guestMessages_.front();
-        if (message.message != 0x0014 && message.message != 0x000f) return false;
+        auto paint = std::find_if(guestMessages_.begin(), guestMessages_.end(),
+                                  [&](const GuestMessage& message) {
+                                      if (message.message != 0x0014 && message.message != 0x000f) return false;
+                                      auto window = windows_.find(message.hwnd);
+                                      return window != windows_.end() && !window->second.destroyed && window->second.wndProc;
+                                  });
+        if (paint == guestMessages_.end()) return false;
+        const GuestMessage message = *paint;
+        guestMessages_.erase(paint);
         auto window = windows_.find(message.hwnd);
-        if (window == windows_.end() || window->second.destroyed || !window->second.wndProc) return false;
-        guestMessages_.pop_front();
         uint32_t wndProc = translatedWndProc(window->second.wndProc, pending.name.c_str());
         ++pending.paintDispatches;
         spdlog::info("{} cooperative dispatch {} hwnd=0x{:08x} msg=0x{:08x} wndproc=0x{:08x} count={}",
@@ -9094,7 +9051,7 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         auto window = windows_.find(ret);
         if (!ret || window == windows_.end() || !window->second.wndProc ||
             !window->second.createStruct || !createWindowContinuationStub_) {
-            if (traceCall) {
+            if (mutableEntry.calls <= 128) {
                 spdlog::info("synthetic {}!{} -> 0x{:08x}", mutableEntry.moduleName, name, ret);
             }
             setReg(UC_MIPS_REG_V0, ret);
@@ -9197,7 +9154,7 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
             return;
         }
         wndProc = translatedWndProc(wndProc, name.c_str());
-        if (traceCall) {
+        if (mutableEntry.calls <= 128) {
             spdlog::info("synthetic coredll.dll!{} transfer wndproc=0x{:08x} hwnd=0x{:08x} msg=0x{:08x} wparam=0x{:08x} lparam=0x{:08x}",
                          name, wndProc, hwnd, msg, wParam, lParam);
         }
@@ -9210,7 +9167,7 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
     }
     if (mutableEntry.moduleName == "coredll.dll" &&
         (dispatchHostWin32(name, args, ret) || dispatchGuestMemoryApi(name, args, ret))) {
-        if (traceCall) {
+        if (mutableEntry.calls <= 128) {
             spdlog::info("synthetic {}!{} -> 0x{:08x}", mutableEntry.moduleName, name, ret);
         }
         setReg(UC_MIPS_REG_V0, ret);
@@ -9220,7 +9177,7 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
     if (mutableEntry.moduleName == "coredll.dll") {
         lastError_ = 120; // ERROR_CALL_NOT_IMPLEMENTED
         ret = 0;
-        if (traceCall) {
+        if (mutableEntry.calls <= 128) {
             spdlog::warn("synthetic coredll.dll!{} unsupported by translate layer -> 0", name);
         }
         setReg(UC_MIPS_REG_V0, ret);
@@ -9243,13 +9200,13 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
     if (!handled) {
         lastError_ = 120; // ERROR_CALL_NOT_IMPLEMENTED
         ret = 0;
-        if (traceCall) {
+        if (mutableEntry.calls <= 128) {
             spdlog::warn("synthetic {}!{} unsupported by module translate layer -> 0",
                          mutableEntry.moduleName, name);
         }
     }
 
-    if (traceCall) {
+    if (mutableEntry.calls <= 128) {
         spdlog::info("synthetic {}!{} -> 0x{:08x}", mutableEntry.moduleName, name, ret);
     }
     setReg(UC_MIPS_REG_V0, ret);
