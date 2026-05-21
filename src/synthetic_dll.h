@@ -27,8 +27,10 @@ public:
     explicit SyntheticDllRuntime(uc_engine* uc);
 
     void setMainModulePath(std::string path);
+    void setMainModuleBase(uint32_t base);
     void setFramebuffer(uint32_t* bgra, int width, int height);
     void setRegistryPath(const std::filesystem::path& path);
+    void registerLoadedModule(const std::string& moduleName, const std::filesystem::path& path, uint32_t base);
     void flushRegistry();
     bool hasHostWindows() const;
     void runHostMessageLoopUntilClosed();
@@ -154,6 +156,11 @@ private:
         uint16_t language{};
         std::vector<uint8_t> data;
     };
+    struct LoadedModuleInfo {
+        std::string name;
+        std::filesystem::path path;
+        uint32_t base{};
+    };
     struct GuestFileMapping {
         uint32_t fileHandle{};
         uint64_t size{};
@@ -182,6 +189,7 @@ private:
     uint32_t comAddRefStub_ = 0;
     uint32_t comReleaseStub_ = 0;
     std::string mainModulePath_ = "\\INavi\\INavi.exe";
+    uint32_t mainModuleBase_ = 0;
     std::filesystem::path hostBaseDir_;
     uint16_t nextAtom_ = 0xc000;
     std::map<uint32_t, ExportEntry> exportsByAddress_;
@@ -208,6 +216,8 @@ private:
     std::deque<GuestMessage> guestMessages_;
     std::vector<uintptr_t> retainedHostWindows_;
     std::vector<ResourceEntry> mainResources_;
+    std::map<std::string, LoadedModuleInfo> loadedModulesByName_;
+    std::map<std::string, LoadedModuleInfo> loadedModulesByPath_;
     std::map<uint32_t, uint32_t> loadedResourceMemory_;
     std::map<std::string, uint16_t> atomsByName_;
     std::map<uint16_t, std::string> atomNames_;

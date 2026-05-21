@@ -319,6 +319,14 @@ struct HostPresenterWindow {
     int height{};
 };
 
+int hostPresenterDisplayWidth(const HostPresenterWindow& presenter) {
+    return std::max(1, presenter.width);
+}
+
+int hostPresenterDisplayHeight(const HostPresenterWindow& presenter) {
+    return std::max(1, presenter.height);
+}
+
 std::wstring widenLossy(const std::string& value) {
     std::wstring wide;
     wide.reserve(value.size());
@@ -398,10 +406,29 @@ void SyntheticDllRuntime::setMainModulePath(std::string path) {
     loadMainResources(mainModulePath_);
 }
 
+void SyntheticDllRuntime::setMainModuleBase(uint32_t base) {
+    mainModuleBase_ = base;
+    if (!mainModulePath_.empty()) {
+        registerLoadedModule(std::filesystem::path(mainModulePath_).filename().string(),
+                             mainModulePath_, mainModuleBase_);
+    }
+}
+
 void SyntheticDllRuntime::setFramebuffer(uint32_t* bgra, int width, int height) {
     framebuffer_ = bgra;
     framebufferWidth_ = width;
     framebufferHeight_ = height;
+}
+
+void SyntheticDllRuntime::registerLoadedModule(const std::string& moduleName,
+                                               const std::filesystem::path& path,
+                                               uint32_t base) {
+    if (!base) return;
+    std::string nameKey = lowerAscii(std::filesystem::path(moduleName).filename().string());
+    if (nameKey.empty() && !path.empty()) nameKey = lowerAscii(path.filename().string());
+    LoadedModuleInfo info{nameKey, path, base};
+    if (!nameKey.empty()) loadedModulesByName_[nameKey] = info;
+    if (!path.empty()) loadedModulesByPath_[lowerAscii(path.string())] = info;
 }
 
 void SyntheticDllRuntime::setRegistryPath(const std::filesystem::path& path) {
@@ -1330,7 +1357,7 @@ void SyntheticDllRuntime::ensureHostWindow(uint32_t guestHwnd, GuestWindow& wind
         }
         auto* presenter = new HostPresenterWindow{framebuffer_, framebufferWidth_, framebufferHeight_};
         const std::wstring title = widenLossy(window.title.empty() ? "FakeCE" : window.title);
-        RECT rect{0, 0, std::max(1, window.width), std::max(1, window.height)};
+        RECT rect{0, 0, hostPresenterDisplayWidth(*presenter), hostPresenterDisplayHeight(*presenter)};
         AdjustWindowRectEx(&rect, WS_OVERLAPPEDWINDOW, FALSE, 0);
         HWND hwnd = CreateWindowExW(0, hostPresenterClassName(), title.c_str(),
                                     WS_OVERLAPPEDWINDOW,
@@ -1343,8 +1370,9 @@ void SyntheticDllRuntime::ensureHostWindow(uint32_t guestHwnd, GuestWindow& wind
             return;
         }
         window.hostHwnd = reinterpret_cast<uintptr_t>(hwnd);
-        spdlog::info("created host presenter HWND={} for guest HWND=0x{:08x} {}x{}",
-                     static_cast<void*>(hwnd), guestHwnd, window.width, window.height);
+        spdlog::info("created host presenter HWND={} for guest HWND=0x{:08x} guest={}x{} framebuffer={}x{}",
+                     static_cast<void*>(hwnd), guestHwnd, window.width, window.height,
+                     presenter->width, presenter->height);
     }
     HWND hwnd = reinterpret_cast<HWND>(window.hostHwnd);
     if (window.visible) ShowWindow(hwnd, SW_SHOWNORMAL);
@@ -3410,8 +3438,19 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
         }
         lastError_ = ret ? 0 : 122;
     } else if (name == "LoadLibraryW" || name == "GetModuleHandleW") {
-        const std::string dll = lowerAscii(readUtf16(a0));
-        ret = dll.empty() || dll == "coredll.dll" ? 0x70000000 : 0;
+        const std::string requested = readUtf16(a0);
+        const std::string pathKey = lowerAscii(requested);
+        const std::string nameKey = lowerAscii(std::filesystem::path(requested).filename().string());
+        if (requested.empty()) {
+            ret = mainModuleBase_;
+        } else if (auto it = loadedModulesByPath_.find(pathKey); it != loadedModulesByPath_.end()) {
+            ret = it->second.base;
+        } else if (auto it = loadedModulesByName_.find(nameKey); it != loadedModulesByName_.end()) {
+            ret = it->second.base;
+        } else {
+            ret = 0;
+        }
+        spdlog::info("{} requested=\"{}\" -> 0x{:08x}", name, requested, ret);
         lastError_ = ret ? 0 : 126;
     } else if (name == "GetProcAddressA" || name == "GetProcAddressW") {
         lastError_ = 127;
@@ -4042,6 +4081,10 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             const bool oldVisible = it->second.visible;
             const bool sizeChanged = !(flags & 0x0001u) &&
                 (it->second.width != newWidth || it->second.height != newHeight);
+            spdlog::info("SetWindowPos guest=0x{:08x} insertAfter=0x{:08x} x={} y={} cx={} cy={} flags=0x{:08x} oldRect={},{} {}x{} oldVisible={}",
+                         a0, a1, int32_t(a2), int32_t(a3), newWidth, newHeight, flags,
+                         it->second.x, it->second.y, it->second.width, it->second.height,
+                         oldVisible ? 1 : 0);
             if (!(flags & 0x0002u)) {
                 it->second.x = int32_t(a2);
                 it->second.y = int32_t(a3);
@@ -4056,8 +4099,13 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             if (it->second.hostHwnd) {
                 HWND hwnd = reinterpret_cast<HWND>(it->second.hostHwnd);
                 if (!(flags & 0x0001u) || !(flags & 0x0002u)) {
+                    auto* presenter = reinterpret_cast<HostPresenterWindow*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+                    const int hostWidth = presenter ? hostPresenterDisplayWidth(*presenter)
+                                                    : std::max(1, it->second.width);
+                    const int hostHeight = presenter ? hostPresenterDisplayHeight(*presenter)
+                                                     : std::max(1, it->second.height);
                     SetWindowPos(hwnd, nullptr, it->second.x, it->second.y,
-                                 std::max(1, it->second.width), std::max(1, it->second.height),
+                                 hostWidth, hostHeight,
                                  SWP_NOZORDER | SWP_NOACTIVATE);
                 }
                 ShowWindow(hwnd, it->second.visible ? SW_SHOWNORMAL : SW_HIDE);
@@ -4110,6 +4158,8 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
         } else {
             const bool wasVisible = it->second.visible;
             it->second.visible = a1 != 0;
+            spdlog::info("ShowWindow guest=0x{:08x} cmd={} oldVisible={} newVisible={}",
+                         a0, int32_t(a1), wasVisible ? 1 : 0, it->second.visible ? 1 : 0);
             ensureHostWindow(a0, it->second);
 #if defined(_WIN32)
             if (it->second.hostHwnd) {

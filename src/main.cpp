@@ -357,6 +357,7 @@ struct ModuleLoader {
         PeImage& pe = it->second;
         mapImage(pe, mainModule);
         bindImports(pe);
+        if (synthetic) synthetic->registerLoadedModule(pe.moduleKey, pe.path, pe.loadBase);
         return &pe;
     }
 
@@ -400,6 +401,7 @@ struct ModuleLoader {
                     pe.mapped = true;
                     pe.importsBound = true;
                     auto [it, inserted] = modules.emplace(key, std::move(pe));
+                    synthetic->registerLoadedModule(it->second.moduleKey, it->second.path, it->second.loadBase);
                     spdlog::warn("using synthetic {} because no real DLL was found in search paths", key);
                     return &it->second;
                 }
@@ -450,6 +452,7 @@ static int runImage(PeImage& pe, const std::vector<fs::path>& dllSearchDirs,
         ModuleLoader loader(uc, &synthetic, pe.path, dllSearchDirs);
         PeImage* main = loader.loadModuleByPath(pe.path, true);
         if (!main) throw std::runtime_error("failed to load main module");
+        synthetic.setMainModuleBase(main->loadBase);
         loader.preloadAvailableDlls();
         constexpr uint32_t STACK_BASE=0x0f000000, STACK_SIZE=0x00100000;
         uc_mem_map(uc, STACK_BASE, STACK_SIZE, UC_PROT_ALL);

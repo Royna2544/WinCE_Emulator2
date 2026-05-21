@@ -7,8 +7,15 @@
 - Status: Open.
 - Evidence: Search found SDK `coredll.lib` import libraries but no real `COREDLL.dll` PE image under the installed Windows CE Tools tree or local iNavi package.
 - Effect: Synthetic `coredll.dll` is required unless a real MIPS `COREDLL.dll` is supplied in the command-line search paths.
-- Latest result: Synthetic coredll is fail-closed and partially host-backed. Smoke52 maps real SDK/user DLLs, parses resources, creates host-backed icon/menu/socket/COM-adjacent handles where applicable, creates a host framebuffer presenter for the guest top-level HWND, dispatches the first paint/message path, has no unsupported synthetic calls before idle, and stops cleanly when `GetMessageW` blocks on an empty guest queue.
+- Latest result: Synthetic coredll is fail-closed and partially host-backed. Smoke71 for `INavi.exe` maps real SDK/user DLLs, parses resources, creates host-backed icon/menu/socket/COM-adjacent handles where applicable, creates a host framebuffer presenter for the guest top-level HWND, has no unsupported synthetic calls before idle, and stops cleanly when `GetMessageW` blocks on an empty guest queue. iSearch smoke05 also launches to idle, but still reports unresolved COREDLL ordinal `#1875` once during CRT startup.
 - Constraint: Do not replace app behavior. Keep coredll as a translate layer: bridge host-compatible APIs, copy guest memory where needed, and map guest handles to host handles for opaque objects.
+
+### iSearch unresolved COREDLL ordinal `#1875`
+
+- Status: Open.
+- Evidence: `v2_synth_isearch_smoke05_final.log` shows `synthetic coredll.dll!#1875 call 1 a0=0x00010000 a1=0x00000000 a2=0x00000001 a3=0x00000001 ra=0x0004fa14`, then the app continues to create the `iSearch` window and reaches idle. Local SDK searches did not find a MIPSII `coredll.lib` import object name for ordinal 1875.
+- Effect: It is currently a warning, not a launch blocker.
+- Constraint: Do not assign a guessed name or behavior until confirmed by SDK/export evidence or disassembly.
 
 ### App reports unsupported Korean language
 
