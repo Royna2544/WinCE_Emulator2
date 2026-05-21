@@ -304,6 +304,7 @@ private:
     bool splashTopBlitDumped_{};
     bool splashBottomBlitDumped_{};
     bool splashFramebufferDumped_{};
+    bool frameDumpEnabled_{};
     std::filesystem::path registryPath_;
     nlohmann::json registry_;
     bool registryDirty_{};
