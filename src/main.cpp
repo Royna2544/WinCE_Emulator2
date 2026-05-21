@@ -1,6 +1,8 @@
 #include <unicorn/unicorn.h>
 #include <spdlog/spdlog.h>
 
+#include "synthetic_dll.h"
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -22,12 +24,13 @@ namespace fs = std::filesystem;
 
 static uint16_t u16(const std::vector<uint8_t>& b, size_t o) { return uint16_t(b.at(o) | (b.at(o+1) << 8)); }
 static uint32_t u32(const std::vector<uint8_t>& b, size_t o) { return uint32_t(b.at(o) | (b.at(o+1) << 8) | (b.at(o+2) << 16) | (b.at(o+3) << 24)); }
+static void put16le(std::vector<uint8_t>& b, size_t o, uint16_t v) { b.at(o)=uint8_t(v); b.at(o+1)=uint8_t(v>>8); }
 static void put32le(std::vector<uint8_t>& b, size_t o, uint32_t v) { b.at(o)=uint8_t(v); b.at(o+1)=uint8_t(v>>8); b.at(o+2)=uint8_t(v>>16); b.at(o+3)=uint8_t(v>>24); }
 static uint32_t alignDown(uint32_t v, uint32_t a) { return v & ~(a - 1); }
 static uint32_t alignUp(uint32_t v, uint32_t a) { return (v + a - 1) & ~(a - 1); }
 
 struct Section { std::string name; uint32_t va{}, vsize{}, raw{}, rawSize{}, chars{}; };
-struct ImportSym { std::string dll; std::string name; uint16_t ordinal{}; uint32_t iatRva{}; uint32_t stub{}; };
+struct ImportSym { std::string dll; std::string name; uint16_t ordinal{}; uint32_t iatRva{}; };
 struct PeImage {
     fs::path path;
     std::string moduleKey;
@@ -191,20 +194,6 @@ static void writePpm(const fs::path& p, const Framebuffer& fb, int stage) {
     spdlog::info("wrote framebuffer capture {}", p.string());
 }
 
-struct RunState { PeImage* pe{}; std::map<uint32_t, ImportSym> stubs; uint64_t calls{}; uint32_t nextStub=0x70000000; };
-static void hookCode(uc_engine* uc, uint64_t address, uint32_t size, void* user) {
-    auto* st = static_cast<RunState*>(user);
-    auto it = st->stubs.find(uint32_t(address));
-    if (it == st->stubs.end()) return;
-    uint32_t ra=0, sp=0; uc_reg_read(uc, UC_MIPS_REG_RA, &ra); uc_reg_read(uc, UC_MIPS_REG_SP, &sp);
-    if (st->calls < 256) spdlog::info("stub {:<32} pc=0x{:08x} ra=0x{:08x} sp=0x{:08x}", importName(it->second), uint32_t(address), ra, sp);
-    st->calls++;
-    uint32_t v0 = 1;
-    std::string n = it->second.name;
-    if (n == "GetLastError") v0 = 0;
-    if (n == "GetTickCount") v0 = uint32_t(st->calls * 16);
-    uc_reg_write(uc, UC_MIPS_REG_V0, &v0);
-}
 static void hookInvalid(uc_engine* uc, uc_mem_type type, uint64_t addr, int size, int64_t value, void*) {
     uint32_t pc=0, ra=0, sp=0; uc_reg_read(uc, UC_MIPS_REG_PC, &pc); uc_reg_read(uc, UC_MIPS_REG_RA, &ra); uc_reg_read(uc, UC_MIPS_REG_SP, &sp);
     spdlog::warn("unmapped memory type={} addr=0x{:08x} size={} pc=0x{:08x} ra=0x{:08x} sp=0x{:08x}", int(type), uint32_t(addr), size, pc, ra, sp);
@@ -212,15 +201,14 @@ static void hookInvalid(uc_engine* uc, uc_mem_type type, uint64_t addr, int size
 
 struct ModuleLoader {
     uc_engine* uc{};
-    RunState* state{};
+    SyntheticDllRuntime* synthetic{};
     fs::path mainExe;
     std::map<std::string, PeImage> modules;
     std::vector<fs::path> searchDirs;
-    std::set<std::string> missingModules;
     uint32_t nextDllBase = 0x50000000;
 
-    ModuleLoader(uc_engine* uc_, RunState* state_, fs::path mainExe_, const std::vector<fs::path>& dllSearchDirs)
-        : uc(uc_), state(state_), mainExe(std::move(mainExe_)) {
+    ModuleLoader(uc_engine* uc_, SyntheticDllRuntime* synthetic_, fs::path mainExe_, const std::vector<fs::path>& dllSearchDirs)
+        : uc(uc_), synthetic(synthetic_), mainExe(std::move(mainExe_)) {
         addSearchDir(mainExe.parent_path());
         for (const auto& dir : dllSearchDirs) addSearchDir(dir);
     }
@@ -293,10 +281,11 @@ struct ModuleLoader {
     void applyRelocations(PeImage& pe) {
         int64_t delta64 = int64_t(pe.loadBase) - int64_t(pe.imageBase);
         if (!delta64 || !pe.dirVa[5] || !pe.dirSize[5]) return;
-        uint32_t delta = uint32_t(delta64);
+        int32_t delta = int32_t(delta64);
         uint32_t rva = pe.dirVa[5];
         uint32_t end = pe.dirVa[5] + pe.dirSize[5];
         std::set<uint16_t> warnedTypes;
+        size_t applied = 0;
         while (rva + 8 <= end && rva + 8 <= pe.image.size()) {
             uint32_t pageRva = u32(pe.image, rva);
             uint32_t blockSize = u32(pe.image, rva + 4);
@@ -310,19 +299,39 @@ struct ModuleLoader {
                 uint32_t off = pageRva + (entry & 0x0fff);
                 if (type == 0) continue;
                 if (off + 4 > pe.image.size()) continue;
-                if (type == 3) {
-                    put32le(pe.image, off, u32(pe.image, off) + delta);
+                if (type == 1) {
+                    uint16_t value = u16(pe.image, off);
+                    put16le(pe.image, off, uint16_t(value + uint16_t(uint32_t(delta) >> 16)));
+                    applied++;
+                } else if (type == 2) {
+                    uint16_t value = u16(pe.image, off);
+                    put16le(pe.image, off, uint16_t(value + uint16_t(delta)));
+                    applied++;
+                } else if (type == 3) {
+                    put32le(pe.image, off, u32(pe.image, off) + uint32_t(delta));
+                    applied++;
+                } else if (type == 4) {
+                    if (i + 1 >= count) break;
+                    uint32_t nextEntryOff = rva + 8 + (i + 1) * 2;
+                    int16_t lowAdjust = int16_t(u16(pe.image, nextEntryOff));
+                    int32_t high = int16_t(u16(pe.image, off));
+                    int32_t value = (high << 16) + lowAdjust + delta;
+                    put16le(pe.image, off, uint16_t((value + 0x8000) >> 16));
+                    i++;
+                    applied++;
                 } else if (type == 5) {
                     uint32_t instr = u32(pe.image, off);
                     uint32_t target = (instr & 0x03ffffffu) << 2;
-                    target += delta;
+                    target += uint32_t(delta);
                     put32le(pe.image, off, (instr & 0xfc000000u) | ((target >> 2) & 0x03ffffffu));
+                    applied++;
                 } else if (warnedTypes.insert(type).second) {
                     spdlog::warn("{} has unsupported relocation type {}", pe.moduleKey, type);
                 }
             }
             rva += blockSize;
         }
+        spdlog::info("applied {} relocations for {}", applied, pe.moduleKey);
     }
 
     uint32_t resolveExport(const PeImage& module, const ImportSym& sym) const {
@@ -377,10 +386,29 @@ struct ModuleLoader {
         if (existing != modules.end()) return &existing->second;
         auto found = findModuleFile(dllName, importerDir);
         if (!found) {
-            if (missingModules.insert(key).second) {
-                spdlog::warn("missing DLL {}, imports will use fallback stubs for that module", dllName);
+            if (synthetic) {
+                if (auto syntheticModule = synthetic->createModule(key)) {
+                    PeImage pe;
+                    pe.path = fs::path("[synthetic]") / syntheticModule->moduleName;
+                    pe.moduleKey = syntheticModule->moduleName;
+                    pe.imageBase = syntheticModule->imageBase;
+                    pe.loadBase = syntheticModule->imageBase;
+                    pe.sizeOfImage = syntheticModule->imageSize;
+                    pe.exportsByName = syntheticModule->exportsByName;
+                    pe.exportsByOrdinal = syntheticModule->exportsByOrdinal;
+                    pe.exportNamesByOrdinal = syntheticModule->exportNamesByOrdinal;
+                    pe.mapped = true;
+                    pe.importsBound = true;
+                    auto [it, inserted] = modules.emplace(key, std::move(pe));
+                    spdlog::warn("using synthetic {} because no real DLL was found in search paths", key);
+                    return &it->second;
+                }
             }
-            return nullptr;
+            std::ostringstream os;
+            os << "required DLL not found: " << dllName << " (searched:";
+            for (const auto& dir : searchDirs) os << " " << dir.string();
+            os << ")";
+            throw std::runtime_error(os.str());
         }
         return loadModuleByPath(*found, false);
     }
@@ -389,35 +417,19 @@ struct ModuleLoader {
         if (pe.importsBound) return;
         pe.importsBound = true;
         size_t realBindings = 0;
-        size_t fallbackBindings = 0;
         for (const auto& sym : pe.imports) {
-            uint32_t target = 0;
-            if (PeImage* dep = loadModuleByName(sym.dll, pe.path.parent_path())) {
-                target = resolveExport(*dep, sym);
-                if (!target) spdlog::warn("unresolved export {}, fallback stub installed", importName(sym));
-            }
-            if (target) {
-                realBindings++;
-            } else {
-                target = installFallbackStub(sym);
-                fallbackBindings++;
+            PeImage* dep = loadModuleByName(sym.dll, pe.path.parent_path());
+            uint32_t target = resolveExport(*dep, sym);
+            if (!target) {
+                throw std::runtime_error("required export not found: " + importName(sym));
             }
             uint32_t iat = pe.loadBase + sym.iatRva;
             uc_mem_write(uc, iat, &target, 4);
+            realBindings++;
         }
         if (!pe.imports.empty()) {
-            spdlog::info("bound imports for {:<20} real={} fallback={}", pe.moduleKey, realBindings, fallbackBindings);
+            spdlog::info("bound imports for {:<20} real={}", pe.moduleKey, realBindings);
         }
-    }
-
-    uint32_t installFallbackStub(const ImportSym& sym) {
-        uint32_t stub = state->nextStub;
-        state->nextStub += 0x10;
-        state->stubs[stub] = sym;
-        std::array<uint8_t,16> bytes{};
-        bytes[0] = 0x08; bytes[1] = 0x00; bytes[2] = 0xe0; bytes[3] = 0x03;
-        uc_mem_write(uc, stub, bytes.data(), bytes.size());
-        return stub;
     }
 };
 
@@ -427,10 +439,10 @@ static int runImage(PeImage& pe, const std::vector<fs::path>& dllSearchDirs) {
     if (err) throw std::runtime_error(std::string("uc_open: ")+uc_strerror(err));
     auto close = [&]{ if (uc) uc_close(uc); };
     try {
-        constexpr uint32_t STUB_BASE=0x70000000, STUB_SIZE=0x00100000;
-        uc_mem_map(uc, STUB_BASE, STUB_SIZE, UC_PROT_ALL);
-        RunState state; state.pe=&pe;
-        ModuleLoader loader(uc, &state, pe.path, dllSearchDirs);
+        SyntheticDllRuntime synthetic(uc);
+        uc_hook syntheticHook{};
+        uc_hook_add(uc, &syntheticHook, UC_HOOK_CODE, (void*)SyntheticDllRuntime::hookCode, &synthetic, 0x70000000, 0x70ffffff);
+        ModuleLoader loader(uc, &synthetic, pe.path, dllSearchDirs);
         PeImage* main = loader.loadModuleByPath(pe.path, true);
         if (!main) throw std::runtime_error("failed to load main module");
         loader.preloadAvailableDlls();
@@ -438,13 +450,13 @@ static int runImage(PeImage& pe, const std::vector<fs::path>& dllSearchDirs) {
         uc_mem_map(uc, STACK_BASE, STACK_SIZE, UC_PROT_ALL);
         uint32_t sp=STACK_BASE+STACK_SIZE-0x1000; uc_reg_write(uc, UC_MIPS_REG_SP, &sp);
         uint32_t gp=main->loadBase+0x8000; uc_reg_write(uc, UC_MIPS_REG_GP, &gp);
-        uc_hook h1{},h2{}; uc_hook_add(uc,&h1,UC_HOOK_CODE,(void*)hookCode,&state,STUB_BASE,STUB_BASE+STUB_SIZE-1);
+        uc_hook h2{};
         uc_hook_add(uc,&h2,UC_HOOK_MEM_INVALID,(void*)hookInvalid,nullptr,1,0);
         uint32_t entry=main->loadBase+main->entryRva;
         spdlog::info("starting Unicorn at 0x{:08x}", entry);
         err=uc_emu_start(uc, entry, 0, 0, 2500000);
         uint32_t pc=0, ra=0; uc_reg_read(uc, UC_MIPS_REG_PC, &pc); uc_reg_read(uc, UC_MIPS_REG_RA, &ra);
-        spdlog::warn("emulation stopped err={} ({}) pc=0x{:08x} ra=0x{:08x} importCalls={}", int(err), uc_strerror(err), pc, ra, state.calls);
+        spdlog::warn("emulation stopped err={} ({}) pc=0x{:08x} ra=0x{:08x}", int(err), uc_strerror(err), pc, ra);
         close(); return err == UC_ERR_OK ? 0 : 2;
     } catch (...) { close(); throw; }
 }

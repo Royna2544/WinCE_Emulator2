@@ -11,6 +11,8 @@ Goals:
 - Treat `runtime_dlls/` as optional local evidence only; the loader can use the
   installed SDK/iNavi DLLs directly when their directories are passed on the
   command line.
+- Fail fast when a required DLL or export is missing; this project does not
+  silently replace DLLs with fallback shims.
 - Emit framebuffer PPM captures so execution progress can be inspected.
 
 Build from WSL:
