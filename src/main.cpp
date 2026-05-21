@@ -301,8 +301,15 @@ static void writePpm(const fs::path& p, const Framebuffer& fb, int stage) {
 }
 
 static void hookInvalid(uc_engine* uc, uc_mem_type type, uint64_t addr, int size, int64_t value, void*) {
-    uint32_t pc=0, ra=0, sp=0; uc_reg_read(uc, UC_MIPS_REG_PC, &pc); uc_reg_read(uc, UC_MIPS_REG_RA, &ra); uc_reg_read(uc, UC_MIPS_REG_SP, &sp);
-    spdlog::warn("unmapped memory type={} addr=0x{:08x} size={} pc=0x{:08x} ra=0x{:08x} sp=0x{:08x}", int(type), uint32_t(addr), size, pc, ra, sp);
+    uint32_t pc=0, ra=0, sp=0, v0=0, a0=0, s7=0;
+    uc_reg_read(uc, UC_MIPS_REG_PC, &pc);
+    uc_reg_read(uc, UC_MIPS_REG_RA, &ra);
+    uc_reg_read(uc, UC_MIPS_REG_SP, &sp);
+    uc_reg_read(uc, UC_MIPS_REG_V0, &v0);
+    uc_reg_read(uc, UC_MIPS_REG_A0, &a0);
+    uc_reg_read(uc, UC_MIPS_REG_S7, &s7);
+    spdlog::warn("unmapped memory type={} addr=0x{:08x} size={} pc=0x{:08x} ra=0x{:08x} sp=0x{:08x} v0=0x{:08x} a0=0x{:08x} s7=0x{:08x}",
+                 int(type), uint32_t(addr), size, pc, ra, sp, v0, a0, s7);
 }
 
 struct ModuleLoader {

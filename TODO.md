@@ -6,10 +6,11 @@
 - Keep launch arguments explicit: `iNavi_Unicorn_Emulator.exe <primary.exe> [dll_search_dir ...]`. Do not reintroduce hardcoded local SDK/iNavi paths in the binary.
 - Keep real SDK DLLs preferred over synthetic modules. Synthetic `coredll.dll` exists because the installed SDK supplies `coredll.lib` but no real MIPS `COREDLL.dll` PE image.
 - Continue from smoke71's clean idle-block stop after the app-level `can't read HWInfoDB` message (`GetMessageW` blocking with empty guest queue, `pc=0x70002ae8 ra=0x500245c8`). The app opens and reads `INavi\res\values.dat` before aborting.
-- Integrate the user's forthcoming real registry dump through `--registry regs.json`. Do not hardcode device/OEM/HWInfo identity in `.cpp`; keep `SystemParametersInfoW`, registry, and `KernelIoControl` identity inputs external JSON-backed.
+- Use the user's real-device dump at `C:\Users\royna\Downloads\DUMPPLZ` as the current source of truth. Keep `dumpplz_regs.json` synced from `DUMPPLZ\REGISTRY.TXT` and do not hardcode device/OEM/HWInfo identity in `.cpp`; keep `SystemParametersInfoW`, registry, and `KernelIoControl` identity inputs external JSON-backed.
 - Continue the app-level HWInfoDB investigation at the profile matcher before `values.dat` lookup. Current assembly diagnostics show `0x129204 -> 0x299544` fails to select a profile, so `0x000594a4` stores id `0`/empty name and `0x0006bd18` later scans 118 `values.dat` records for missing id `0`. Do not bypass the warning by hardcoding iNavi state.
 - TODO: Verify the real-device contract for `KernelIoControl(0x01012ef4)` (`device=0x0101`, `function=0xbbd`). Current diagnostic bridge writes configured string results as raw NUL-terminated bytes from external registry JSON entries under `hklm\system\emulator\kernelioctl\<entry>` where `ioctlcmd` is the command and `return` is the result; keep this table synced with the real device dump once available.
 - Continue the real drawing/paint bridge. A host presenter now displays the framebuffer and survives guest teardown for inspection, but text rendering, richer common controls, and host input-to-guest message translation are still incomplete.
+- Fix CE-style filesystem root enumeration/volume merging so `--fs-root C:\Users\royna\Downloads\DUMPPLZ\FILES` and the INAVI payload can coexist without ordering hacks. Current `\*` enumeration only reports the first resolved host root, which can hide `iNaviData`/`mapdata` from the app.
 
 ## Weird Ordinals To Verify Later
 
@@ -21,6 +22,7 @@
 - COREDLL `#682=SetCursor`, `#693=GetDlgCtrlID`, `#887=AdjustWindowRectEx`, and `#97=EqualRect` are confirmed by SDK COFF import-object headers and are implemented in the translate layer.
 - COREDLL `#89=SystemParametersInfoW` is confirmed by SDK COFF import-object headers and runtime call shape. The stale `#89=wcslen` label is rejected; `wcslen` remains at SDK-confirmed `#63`.
 - COREDLL `#1875` is imported by `iSearch.exe` and called once at CRT startup with `a0=0x00010000 a1=0 a2=1 a3=1`, but it was not found in the installed Windows CE 4.2 Standard SDK MIPSII `coredll.lib`. Keep it unresolved until confirmed by a real SDK/export source, disassembly, or stronger runtime evidence.
+- COREDLL `#179=DeviceIoControl` is confirmed by Windows CE 4.2 Standard SDK MIPSII `coredll.lib` COFF import-object headers. Implemented as a real handle bridge for host file/serial handles and as an honest fail-closed result for disconnected guest devices such as `UID1:`.
 
 ## Next
 

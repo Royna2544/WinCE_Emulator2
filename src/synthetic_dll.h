@@ -116,6 +116,7 @@ private:
         int32_t height{480};
         uintptr_t hostHwnd{};
         bool visible{};
+        bool destroyed{};
         std::map<int32_t, uint32_t> extraLongs;
     };
     struct GuestDc {
@@ -307,6 +308,7 @@ private:
     uint32_t handleFlushViewOfFile(uint32_t baseAddress, uint32_t bytesToFlush);
     uint32_t handleRegEnumValueW(uint32_t hkey, uint32_t index, uint32_t valueNamePtr, uint32_t valueNameSizePtr);
     uint32_t openGuestSerialDevice(const std::string& guestPath, uint32_t access, uint32_t share);
+    uint32_t dispatchDeviceIoControl(uint32_t handle, uint32_t controlCode, uint32_t inPtr, uint32_t inSize);
 
     uint32_t makeGuestHandle(GuestHandle handle);
     GuestHandle* lookupGuestHandle(uint32_t guestHandle);

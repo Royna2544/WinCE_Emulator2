@@ -825,8 +825,9 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed() {
 std::optional<SyntheticModule> SyntheticDllRuntime::createModule(const std::string& dllName) {
     if (sameModule(dllName, "coredll.dll")) return createCoredll();
     if (sameModule(dllName, "commctrl.dll")) return createCommctrl();
-    if (sameModule(dllName, "winsock.dll")) {
-        auto module = createGenericOrdinalDll("WINSOCK.dll", 128);
+    if (sameModule(dllName, "winsock.dll") || sameModule(dllName, "ws2.dll")) {
+        const std::string moduleName = sameModule(dllName, "ws2.dll") ? "WS2.dll" : "WINSOCK.dll";
+        auto module = createGenericOrdinalDll(moduleName, 128);
         if (module) {
             registerExport(*module, 0x0001, "WSACleanup");
             registerExport(*module, 0x0003, "WSAStartup");
@@ -997,13 +998,16 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x00AB, "WriteFile");
     registerExport(module, 0x00AC, "GetFileSize");
     registerExport(module, 0x00AD, "SetFilePointer");
+    registerExport(module, 0x00AF, "FlushFileBuffers");
     registerExport(module, 0x00B1, "SetFileTime");
+    registerExport(module, 0x00B3, "DeviceIoControl");
     registerExport(module, 0x00B4, "FindClose");
     registerExport(module, 0x00B5, "FindNextFileW");
     registerExport(module, 0x00C0, "IsDBCSLeadByteEx");
     registerExport(module, 0x00C1, "iswctype");
     registerExport(module, 0x00C4, "MultiByteToWideChar");
     registerExport(module, 0x00C5, "WideCharToMultiByte");
+    registerExport(module, 0x00DD, "CharLowerW");
     registerExport(module, 0x00E0, "CharUpperW");
     registerExport(module, 0x00E5, "_wcsnicmp");
     registerExport(module, 0x00E6, "_wcsicmp");
@@ -1104,6 +1108,7 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x02DA, "LoadImageW");
     registerExport(module, 0x02BE, "SetForegroundWindow");
     registerExport(module, 0x02C0, "SetFocus");
+    registerExport(module, 0x02C1, "GetFocus");
     registerExport(module, 0x02C2, "GetActiveWindow");
     registerExport(module, 0x02C3, "GetCapture");
     registerExport(module, 0x02C4, "SetCapture");
@@ -1707,6 +1712,69 @@ uint32_t SyntheticDllRuntime::openGuestSerialDevice(const std::string& guestPath
     return guest;
 }
 
+uint32_t SyntheticDllRuntime::dispatchDeviceIoControl(uint32_t handleValue, uint32_t controlCode,
+                                                      uint32_t inPtr, uint32_t inSize) {
+    auto* handle = lookupGuestHandle(handleValue);
+    const uint32_t outPtr = stackArg(4);
+    const uint32_t outSize = stackArg(5);
+    const uint32_t bytesReturnedPtr = stackArg(6);
+    const uint32_t overlappedPtr = stackArg(7);
+    if (bytesReturnedPtr) writeU32(bytesReturnedPtr, 0);
+    if (!handle) {
+        lastError_ = 6;
+        return 0;
+    }
+    if (handle->kind == GuestHandle::Kind::GuestSerialDevice) {
+        lastError_ = 120;
+        auto debugName = fileHandleDebugNames_.find(handleValue);
+        spdlog::info("DeviceIoControl guest device handle=0x{:08x} name=\"{}\" code=0x{:08x} inSize={} outSize={} -> 0 lastError={}",
+                     handleValue, debugName == fileHandleDebugNames_.end() ? "" : debugName->second,
+                     controlCode, inSize, outSize, lastError_);
+        return 0;
+    }
+    if ((handle->kind != GuestHandle::Kind::HostFile &&
+         handle->kind != GuestHandle::Kind::HostSerialDevice) ||
+        !handle->hostValue) {
+        lastError_ = 6;
+        return 0;
+    }
+    if (overlappedPtr) {
+        lastError_ = 120;
+        return 0;
+    }
+    if ((inSize && !inPtr) || (outSize && !outPtr)) {
+        lastError_ = 87;
+        return 0;
+    }
+#if defined(_WIN32)
+    std::vector<uint8_t> inBytes(inSize);
+    std::vector<uint8_t> outBytes(outSize);
+    if (inSize) uc_mem_read(uc_, inPtr, inBytes.data(), inBytes.size());
+    DWORD transferred = 0;
+    const BOOL ok = DeviceIoControl(reinterpret_cast<HANDLE>(handle->hostValue),
+                                    controlCode,
+                                    inSize ? inBytes.data() : nullptr,
+                                    inSize,
+                                    outSize ? outBytes.data() : nullptr,
+                                    outSize,
+                                    &transferred,
+                                    nullptr);
+    if (ok && transferred && outPtr) {
+        uc_mem_write(uc_, outPtr, outBytes.data(), std::min<uint32_t>(transferred, outSize));
+    }
+    if (bytesReturnedPtr) writeU32(bytesReturnedPtr, transferred);
+    lastError_ = ok ? 0 : GetLastError();
+    auto debugName = fileHandleDebugNames_.find(handleValue);
+    spdlog::info("DeviceIoControl host handle=0x{:08x} path=\"{}\" code=0x{:08x} inSize={} outSize={} transferred={} -> {} lastError={}",
+                 handleValue, debugName == fileHandleDebugNames_.end() ? "" : debugName->second,
+                 controlCode, inSize, outSize, transferred, ok ? 1 : 0, lastError_);
+    return ok ? 1 : 0;
+#else
+    lastError_ = 120;
+    return 0;
+#endif
+}
+
 uint32_t SyntheticDllRuntime::makeGuestDc(uint32_t hwnd) {
     GuestDc dc{};
     dc.hwnd = hwnd;
@@ -1970,7 +2038,7 @@ uint32_t SyntheticDllRuntime::windowAtPoint(uint32_t rootGuestHwnd, int32_t x, i
     for (auto it = windows_.rbegin(); it != windows_.rend(); ++it) {
         const uint32_t hwnd = it->first;
         const GuestWindow& window = it->second;
-        if (!window.visible || !belongsToRoot(hwnd)) continue;
+        if (window.destroyed || !window.visible || !belongsToRoot(hwnd)) continue;
         const auto [ox, oy] = originOf(hwnd);
         if (x < ox || y < oy || x >= ox + window.width || y >= oy + window.height) continue;
         best = hwnd;
@@ -1988,11 +2056,14 @@ void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t
     int32_t clientX = hostX;
     int32_t clientY = hostY;
     uint32_t hwnd = 0;
-    if (message == 0x0202 && hostPointerCaptureWindow_ && windows_.count(hostPointerCaptureWindow_)) {
-        hwnd = hostPointerCaptureWindow_;
-    } else if (capturedWindow_ && windows_.count(capturedWindow_)) {
-        hwnd = capturedWindow_;
-    } else {
+    if (message == 0x0202 && hostPointerCaptureWindow_) {
+        auto captured = windows_.find(hostPointerCaptureWindow_);
+        if (captured != windows_.end() && !captured->second.destroyed) hwnd = hostPointerCaptureWindow_;
+    } else if (capturedWindow_) {
+        auto captured = windows_.find(capturedWindow_);
+        if (captured != windows_.end() && !captured->second.destroyed) hwnd = capturedWindow_;
+    }
+    if (!hwnd) {
         hwnd = windowAtPoint(rootGuestHwnd, hostX, hostY, clientX, clientY);
     }
     if (!hwnd) return;
@@ -2014,7 +2085,8 @@ void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t
     if (message == 0x0201) {
         hostPointerCaptureWindow_ = hwnd;
         if (focusedWindow_ != hwnd) {
-            if (focusedWindow_ && windows_.count(focusedWindow_)) {
+            auto focused = windows_.find(focusedWindow_);
+            if (focused != windows_.end() && !focused->second.destroyed) {
                 guestMessages_.push_back({focusedWindow_, 0x0008, hwnd, 0, uint32_t(++tick_ * 16), 0, 0});
             }
             guestMessages_.push_back({hwnd, 0x0007, focusedWindow_, 0, uint32_t(++tick_ * 16), 0, 0});
@@ -3725,15 +3797,18 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(const std::string& name,
     const uint32_t a2 = args.a2;
     const uint32_t a3 = args.a3;
 
-    if (name == "CharUpperW") {
+    if (name == "CharUpperW" || name == "CharLowerW") {
+        const bool makeUpper = name == "CharUpperW";
         if (a0 <= 0xffffu) {
-            ret = uint32_t(std::towupper(wint_t(a0)));
+            ret = uint32_t(makeUpper ? std::towupper(wint_t(a0))
+                                     : std::towlower(wint_t(a0)));
         } else {
             for (uint32_t offset = 0; offset < 4096; offset += 2) {
                 uint16_t ch = 0;
                 if (uc_mem_read(uc_, a0 + offset, &ch, sizeof(ch)) != UC_ERR_OK || !ch) break;
-                const uint16_t upper = uint16_t(std::towupper(wint_t(ch)));
-                if (upper != ch) uc_mem_write(uc_, a0 + offset, &upper, sizeof(upper));
+                const uint16_t mapped = uint16_t(makeUpper ? std::towupper(wint_t(ch))
+                                                           : std::towlower(wint_t(ch)));
+                if (mapped != ch) uc_mem_write(uc_, a0 + offset, &mapped, sizeof(mapped));
             }
             ret = a0;
         }
@@ -5105,7 +5180,8 @@ bool SyntheticDllRuntime::dispatchSimpleHostWin32(const std::string& name,
             lastError_ = 0;
         }
     } else if (name == "SetFocus") {
-        if (!a0 || windows_.count(a0)) {
+        auto target = windows_.find(a0);
+        if (!a0 || (target != windows_.end() && !target->second.destroyed)) {
             ret = focusedWindow_;
             focusedWindow_ = a0;
             if (a0) guestMessages_.push_back({a0, 0x0007, 0, 0, uint32_t(++tick_ * 16), 0, 0});
@@ -5114,8 +5190,12 @@ bool SyntheticDllRuntime::dispatchSimpleHostWin32(const std::string& name,
             lastError_ = 1400;
             ret = 0;
         }
+    } else if (name == "GetFocus") {
+        ret = focusedWindow_;
+        lastError_ = 0;
     } else if (name == "SetCapture") {
-        if (!a0 || windows_.count(a0)) {
+        auto target = windows_.find(a0);
+        if (!a0 || (target != windows_.end() && !target->second.destroyed)) {
             ret = capturedWindow_;
             capturedWindow_ = a0;
             lastError_ = 0;
@@ -5168,6 +5248,33 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
     }
     if (name == "GetDeviceCaps") {
         ret = handleGetDeviceCaps(a0, a1);
+        return true;
+    }
+    if (name == "DeviceIoControl") {
+        ret = dispatchDeviceIoControl(a0, a1, a2, a3);
+        return true;
+    }
+    if (name == "FlushFileBuffers") {
+        auto* handle = lookupGuestHandle(a0);
+        if (!handle || (handle->kind != GuestHandle::Kind::HostFile &&
+                        handle->kind != GuestHandle::Kind::HostSerialDevice) ||
+            !handle->hostValue) {
+            lastError_ = 6;
+            ret = 0;
+        } else {
+#if defined(_WIN32)
+            const BOOL ok = FlushFileBuffers(reinterpret_cast<HANDLE>(handle->hostValue));
+            ret = ok ? 1 : 0;
+            lastError_ = ret ? 0 : GetLastError();
+            auto debugName = fileHandleDebugNames_.find(a0);
+            spdlog::info("FlushFileBuffers handle=0x{:08x} path=\"{}\" -> {} lastError={}",
+                         a0, debugName == fileHandleDebugNames_.end() ? "" : debugName->second,
+                         ret, lastError_);
+#else
+            lastError_ = 6;
+            ret = 0;
+#endif
+        }
         return true;
     }
     if (name == "WideCharToMultiByte") {
@@ -5239,9 +5346,12 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
     };
     auto firstWindow = [&]() -> uint32_t {
         for (const auto& [hwnd, window] : windows_) {
-            if (!window.parent) return hwnd;
+            if (!window.destroyed && !window.parent) return hwnd;
         }
-        return windows_.empty() ? 0 : windows_.begin()->first;
+        for (const auto& [hwnd, window] : windows_) {
+            if (!window.destroyed) return hwnd;
+        }
+        return 0;
     };
 
     if (name == "IsProcessDying") {
@@ -6510,13 +6620,55 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             }
         }
     } else if (name == "TransparentImage") {
-        GuestDc* dc = lookupGuestDc(a0);
-        if (!dc) {
-            lastError_ = 6;
+        GuestDc* dstDc = lookupGuestDc(a0);
+        GuestDc* srcDc = lookupGuestDc(stackArg(5));
+        auto srcBitmap = srcDc ? bitmaps_.find(srcDc->selectedBitmap) : bitmaps_.end();
+        auto dstBitmap = dstDc ? bitmaps_.find(dstDc->selectedBitmap) : bitmaps_.end();
+        const int32_t dstH = int32_t(stackArg(4));
+        const int32_t srcX = int32_t(stackArg(6));
+        const int32_t srcY = int32_t(stackArg(7));
+        const int32_t srcW = int32_t(stackArg(8));
+        const int32_t srcH = int32_t(stackArg(9));
+        const uint32_t transparentColor = stackArg(10);
+        if (!dstDc || !srcDc || srcBitmap == bitmaps_.end()) {
+            spdlog::info("TransparentImage unsupported dst=0x{:08x} dstBitmap=0x{:08x} src=0x{:08x} "
+                         "srcBitmap=0x{:08x} dst={}x{} src={}x{} srcOrigin={},{} color=0x{:08x}",
+                         a0, dstDc ? dstDc->selectedBitmap : 0, stackArg(5),
+                         srcDc ? srcDc->selectedBitmap : 0, int32_t(a3), dstH,
+                         srcW, srcH, srcX, srcY, transparentColor);
+            lastError_ = dstDc && srcDc ? 120 : 6;
             ret = 0;
+        } else if (dstBitmap != bitmaps_.end()) {
+            const bool ok = transparentImageToBitmap(dstBitmap->second, srcBitmap->second,
+                                                     int32_t(a1), int32_t(a2), int32_t(a3), dstH,
+                                                     srcX, srcY, srcW, srcH, transparentColor);
+            if (!ok) {
+                spdlog::info("TransparentImage bitmap blit failed dst=0x{:08x} dstBitmap=0x{:08x} "
+                             "dstBits=0x{:08x} dstSize={}x{} dstBpp={} src=0x{:08x} srcBitmap=0x{:08x} "
+                             "srcBits=0x{:08x} srcSize={}x{} srcBpp={} dst={}x{} src={}x{} "
+                             "srcOrigin={},{} color=0x{:08x}",
+                             a0, dstDc->selectedBitmap, dstBitmap->second.bits, dstBitmap->second.width,
+                             dstBitmap->second.heightRaw, dstBitmap->second.bpp, stackArg(5),
+                             srcDc->selectedBitmap, srcBitmap->second.bits, srcBitmap->second.width,
+                             srcBitmap->second.heightRaw, srcBitmap->second.bpp, int32_t(a3), dstH,
+                             srcW, srcH, srcX, srcY, transparentColor);
+            }
+            lastError_ = ok ? 0 : 120;
+            ret = ok ? 1 : 0;
         } else {
-            lastError_ = 0;
-            ret = 1;
+            const bool ok = transparentImageToFramebuffer(*dstDc, srcBitmap->second,
+                                                          int32_t(a1), int32_t(a2), int32_t(a3), dstH,
+                                                          srcX, srcY, srcW, srcH, transparentColor);
+            if (!ok) {
+                spdlog::info("TransparentImage framebuffer blit failed dst=0x{:08x} src=0x{:08x} "
+                             "srcBitmap=0x{:08x} srcBits=0x{:08x} srcSize={}x{} srcBpp={} "
+                             "dst={}x{} src={}x{} srcOrigin={},{} color=0x{:08x}",
+                             a0, stackArg(5), srcDc->selectedBitmap, srcBitmap->second.bits,
+                             srcBitmap->second.width, srcBitmap->second.heightRaw, srcBitmap->second.bpp,
+                             int32_t(a3), dstH, srcW, srcH, srcX, srcY, transparentColor);
+            }
+            lastError_ = ok ? 0 : 120;
+            ret = ok ? 1 : 0;
         }
     } else if (name == "ExtTextOutW" || name == "DrawTextW") {
         GuestDc* dc = lookupGuestDc(a0);
@@ -6632,16 +6784,20 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
         } else if (a1 == 5) {
             ret = 0;
             for (const auto& [hwnd, window] : windows_) {
-                if (window.parent == a0) {
+                if (!window.destroyed && window.parent == a0) {
                     ret = hwnd;
                     break;
                 }
             }
             lastError_ = ret ? 0 : 1400;
+        } else if (a1 == 4) {
+            const auto owner = windows_.find(it->second.parent);
+            ret = owner != windows_.end() && !owner->second.destroyed ? it->second.parent : 0;
+            lastError_ = ret ? 0 : 1400;
         } else if (a1 == 2 || a1 == 3) {
             std::vector<uint32_t> siblings;
             for (const auto& [hwnd, window] : windows_) {
-                if (window.parent == it->second.parent) siblings.push_back(hwnd);
+                if (!window.destroyed && window.parent == it->second.parent) siblings.push_back(hwnd);
             }
             auto pos = std::find(siblings.begin(), siblings.end(), a0);
             if (pos == siblings.end()) {
@@ -6657,7 +6813,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
         } else if (a1 == 0 || a1 == 1) {
             ret = 0;
             for (const auto& [hwnd, window] : windows_) {
-                if (window.parent == it->second.parent) {
+                if (!window.destroyed && window.parent == it->second.parent) {
                     ret = hwnd;
                     if (a1 == 0) break;
                 }
@@ -6824,18 +6980,30 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
         }
     } else if (name == "DestroyWindow") {
         auto it = windows_.find(a0);
-        if (it == windows_.end()) {
+        if (it == windows_.end() || it->second.destroyed) {
             lastError_ = 1400;
             ret = 0;
         } else {
-            GuestMessage message{};
-            message.hwnd = a0;
-            message.message = 0x0002; // WM_DESTROY
-            message.time = uint32_t(++tick_ * 16);
-            guestMessages_.push_back(message);
+            for (auto timer = timers_.begin(); timer != timers_.end();) {
+                if (timer->second.hwnd == a0) timer = timers_.erase(timer);
+                else ++timer;
+            }
+            if (focusedWindow_ == a0) focusedWindow_ = 0;
+            if (capturedWindow_ == a0) capturedWindow_ = 0;
+            if (hostPointerCaptureWindow_ == a0) hostPointerCaptureWindow_ = 0;
+            it->second.visible = false;
+            it->second.destroyed = true;
+            GuestMessage destroy{};
+            destroy.hwnd = a0;
+            destroy.message = 0x0002; // WM_DESTROY
+            destroy.time = uint32_t(++tick_ * 16);
+            guestMessages_.push_back(destroy);
+            GuestMessage ncDestroy{};
+            ncDestroy.hwnd = a0;
+            ncDestroy.message = 0x0082; // WM_NCDESTROY
+            ncDestroy.time = uint32_t(++tick_ * 16);
+            guestMessages_.push_back(ncDestroy);
             destroyHostWindow(it->second);
-            windows_.erase(it);
-            guestHandles_.erase(a0);
             lastError_ = 0;
             ret = 1;
         }
@@ -6918,10 +7086,24 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
         enqueueDueTimers();
         GuestMessage message{};
         bool haveMessage = false;
-        if (!guestMessages_.empty()) {
+        auto takeMessage = [&]() {
+            if (guestMessages_.empty()) return false;
             message = guestMessages_.front();
-            haveMessage = true;
             if (!peek || (removeFlags & 1)) guestMessages_.pop_front();
+            return true;
+        };
+        haveMessage = takeMessage();
+        if (!haveMessage && !peek && !quitPosted_ && !timers_.empty()) {
+            const uint64_t now = hostTickMilliseconds();
+            auto next = std::min_element(timers_.begin(), timers_.end(),
+                                         [](const auto& left, const auto& right) {
+                                             return left.second.nextDueMs < right.second.nextDueMs;
+                                         });
+            if (next != timers_.end()) {
+                next->second.nextDueMs = now;
+                enqueueDueTimers();
+                haveMessage = takeMessage();
+            }
         }
         if (!haveMessage) {
             ret = 0;
@@ -8130,7 +8312,8 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
     }
 
     bool handled = false;
-    if (sameModule(mutableEntry.moduleName, "winsock.dll")) {
+    if (sameModule(mutableEntry.moduleName, "winsock.dll") ||
+        sameModule(mutableEntry.moduleName, "ws2.dll")) {
         handled = dispatchWinsock(name, args, ret);
     } else if (sameModule(mutableEntry.moduleName, "commctrl.dll")) {
         handled = dispatchCommctrl(name, args, ret);
