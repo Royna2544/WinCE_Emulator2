@@ -1344,6 +1344,7 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x0582, "_stricmp");
     registerExport(module, 0x0583, "_strnicmp");
     registerExport(module, 0x0438, "_ultow");
+    registerExport(module, 0x043B, "wcstoul");
     registerExport(module, 0x0443, "toupper");
     registerExport(module, 0x05B0, "operator_vector_new");
     registerExport(module, 0x05B1, "operator_vector_delete");
@@ -1368,6 +1369,7 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x06BE, "SetDIBitsToDevice");
     registerExport(module, 0x07D0, "_setjmp");
     registerExport(module, 0x07D5, "__ll_div");
+    registerExport(module, 0x07E2, "__f_to_ll");
     registerExport(module, 0x07E6, "__fpadd");
     registerExport(module, 0x0628, "__ehvec_ctor");
     registerExport(module, 0x07E7, "__dpadd");
@@ -5241,6 +5243,13 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(const std::string& name,
         if (a1) writeU32(a1, a0 + uint32_t(end ? end - source.c_str() : 0));
         ret = uint32_t(value);
         spdlog::info("strtoul source=\"{}\" base={} -> 0x{:08x}", source, a2, ret);
+    } else if (name == "wcstoul") {
+        const std::string source = readUtf16(a0);
+        char* end = nullptr;
+        const unsigned long value = std::strtoul(source.c_str(), &end, int(a2 ? a2 : 10));
+        if (a1) writeU32(a1, a0 + uint32_t(end ? (end - source.c_str()) * 2 : 0));
+        ret = uint32_t(value);
+        spdlog::info("wcstoul source=\"{}\" base={} -> 0x{:08x}", source, a2, ret);
     } else if (name == "atoi") {
         ret = uint32_t(std::atoi(readAscii(a0, 256).c_str()));
     } else if (name == "atof") {
@@ -5370,6 +5379,12 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(const std::string& name,
         const int64_t quotient = divisor ? (dividend / divisor) : 0;
         ret = uint32_t(uint64_t(quotient));
         setReg(UC_MIPS_REG_V1, uint32_t(uint64_t(quotient) >> 32));
+    } else if (name == "__f_to_ll") {
+        float value = 0.0f;
+        std::memcpy(&value, &a0, sizeof(value));
+        const int64_t converted = std::isfinite(value) ? static_cast<int64_t>(value) : 0;
+        ret = uint32_t(uint64_t(converted));
+        setReg(UC_MIPS_REG_V1, uint32_t(uint64_t(converted) >> 32));
     } else if (name == "__litodp") {
         setGuestDoubleReturn(uc_, static_cast<double>(int32_t(a0)), ret);
     } else if (name == "__ultodp") {

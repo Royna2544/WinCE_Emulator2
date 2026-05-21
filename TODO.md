@@ -29,6 +29,7 @@
 - COREDLL `#1875` is imported by `iSearch.exe` and called once at CRT startup with `a0=0x00010000 a1=0 a2=1 a3=1`, but it was not found in the installed Windows CE 4.2 Standard SDK MIPSII `coredll.lib`. Keep it unresolved until confirmed by a real SDK/export source, disassembly, or stronger runtime evidence.
 - COREDLL `#179=DeviceIoControl` is confirmed by Windows CE 4.2 Standard SDK MIPSII `coredll.lib` COFF import-object headers. Implemented as a real handle bridge for host file/serial handles and as an honest fail-closed result for disconnected guest devices such as `UID1:`.
 - COREDLL `#1023=_hypot`, `#2046=__gts`, and `#2052=__gtd` are confirmed by Windows CE 4.2 Standard SDK MIPSII `coredll.lib` COFF import-object headers and implemented for the route-search/map path.
+- COREDLL `#1083=wcstoul` and `#2018=__f_to_ll` are confirmed by Windows CE 4.2 Standard SDK MIPSII `coredll.lib` COFF import-object headers and implemented after the final auto-driver run reached them in map/route code.
 
 ## Next
 
