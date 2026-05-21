@@ -33,8 +33,8 @@
 ### App reports `can't read HWInfoDB`
 
 - Status: Open.
-- Evidence: Smoke71 logs successful external-registry reads for diagnostic `ModelID`, `DeviceName`, and `SystemParametersInfoW(0x102)` values, then opens and reads `C:\Users\royna\Downloads\INAVI\INavi\res\values.dat` before `MessageBoxW caption="INavi" text="can't read HWInfoDB"`.
-- Interpretation: The previous stale ordinal bug (`COREDLL #89` mislabeled as `wcslen`) is fixed; `#89` is SDK-confirmed `SystemParametersInfoW`. The remaining abort is likely a real HWInfoDB/registry identity mismatch or a parser-adjacent bridge issue. Do not hardcode accepted model strings in `.cpp`; use the external registry dump and targeted parser diagnostics.
+- Evidence: Smoke71 logs successful external-registry reads for diagnostic `ModelID`, `DeviceName`, and `SystemParametersInfoW(0x102)` values, then opens and reads `C:\Users\royna\Downloads\INAVI\INavi\res\values.dat` before `MessageBoxW caption="INavi" text="can't read HWInfoDB"`. Assembly diagnostic smoke `v2_synth_inavi_hwinfo_asm_diag.log` shows `0x000594a4` stores HWInfo id `0`, subId `0`, and an empty name; `0x00059764` then calls the DB lookup with that empty object; `0x0006bd18` scans all 118 records in `values.dat` for requested id `0` and misses.
+- Interpretation: The previous stale ordinal bug (`COREDLL #89` mislabeled as `wcslen`) is fixed; `#89` is SDK-confirmed `SystemParametersInfoW`. The remaining abort is before `values.dat` record lookup: the profile matcher path `0x129204 -> 0x299544` rejects the current diagnostic identity and leaves the selected HWInfo id at zero. Do not hardcode accepted model strings in `.cpp`; use the external registry dump and targeted parser diagnostics.
 
 ### Message loop blocks without a host event pump
 

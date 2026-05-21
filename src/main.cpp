@@ -8,6 +8,7 @@
 #include <cctype>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -28,6 +29,111 @@ static void put16le(std::vector<uint8_t>& b, size_t o, uint16_t v) { b.at(o)=uin
 static void put32le(std::vector<uint8_t>& b, size_t o, uint32_t v) { b.at(o)=uint8_t(v); b.at(o+1)=uint8_t(v>>8); b.at(o+2)=uint8_t(v>>16); b.at(o+3)=uint8_t(v>>24); }
 static uint32_t alignDown(uint32_t v, uint32_t a) { return v & ~(a - 1); }
 static uint32_t alignUp(uint32_t v, uint32_t a) { return (v + a - 1) & ~(a - 1); }
+
+static std::string readGuestWideLossy(uc_engine* uc, uint32_t address, size_t maxChars = 128) {
+    std::string out;
+    for (size_t i = 0; address && i < maxChars; ++i) {
+        uint16_t ch = 0;
+        if (uc_mem_read(uc, address + uint32_t(i * 2), &ch, sizeof(ch)) != UC_ERR_OK) break;
+        if (!ch) break;
+        out.push_back(ch >= 0x20 && ch < 0x7f ? char(ch) : '?');
+    }
+    return out;
+}
+
+static uint16_t readGuestU16(uc_engine* uc, uint32_t address) {
+    uint16_t value = 0;
+    if (address) uc_mem_read(uc, address, &value, sizeof(value));
+    return value;
+}
+
+static uint8_t readGuestU8(uc_engine* uc, uint32_t address) {
+    uint8_t value = 0;
+    if (address) uc_mem_read(uc, address, &value, sizeof(value));
+    return value;
+}
+
+static uint32_t readGuestU32(uc_engine* uc, uint32_t address) {
+    uint32_t value = 0;
+    if (address) uc_mem_read(uc, address, &value, sizeof(value));
+    return value;
+}
+
+static int profilePredicateReturnCase(uint64_t address) {
+    switch (uint32_t(address)) {
+    case 0x002995ec: return 0;
+    case 0x00299620: return 8;
+    case 0x00299654: return 1;
+    case 0x00299688: return 2;
+    case 0x002996bc: return 3;
+    case 0x00299700: return 9;
+    case 0x002997a4: return 4;
+    case 0x002997d8: return 10;
+    case 0x0029980c: return 11;
+    case 0x00299840: return 5;
+    case 0x00299874: return 6;
+    case 0x002998a8: return 12;
+    case 0x002998dc: return 7;
+    case 0x00299910: return 13;
+    default: return -1;
+    }
+}
+
+static std::string readProfileField(uc_engine* uc, uint32_t record, uint32_t offset) {
+    const uint32_t pointer = readGuestU32(uc, record + offset);
+    return readGuestWideLossy(uc, pointer, 96);
+}
+
+static void hookAsmDiag(uc_engine* uc, uint64_t address, uint32_t, void*) {
+    uint32_t a0 = 0, a1 = 0, a2 = 0, v0 = 0, sp = 0, fp = 0, s7 = 0;
+    uc_reg_read(uc, UC_MIPS_REG_A0, &a0);
+    uc_reg_read(uc, UC_MIPS_REG_A1, &a1);
+    uc_reg_read(uc, UC_MIPS_REG_A2, &a2);
+    uc_reg_read(uc, UC_MIPS_REG_V0, &v0);
+    uc_reg_read(uc, UC_MIPS_REG_SP, &sp);
+    uc_reg_read(uc, UC_MIPS_REG_FP, &fp);
+    uc_reg_read(uc, UC_MIPS_REG_S7, &s7);
+    if (address == 0x000594a4u) {
+        spdlog::warn("asm diag HWInfo setter pc=0x{:08x} object=0x{:08x} id={} subId={} name=\"{}\" sp=0x{:08x}",
+                     uint32_t(address), a0, int16_t(readGuestU16(uc, sp + 0x18)),
+                     int16_t(readGuestU16(uc, sp + 0x1a)), readGuestWideLossy(uc, sp + 0x1c), sp);
+    } else if (address == 0x00059764u) {
+        spdlog::warn("asm diag HWInfo DB call pc=0x{:08x} object=0x{:08x} id={} subId={} valid={} name=\"{}\" out=0x{:08x}",
+                     uint32_t(address), a0, int16_t(readGuestU16(uc, a0)),
+                     int16_t(readGuestU16(uc, a0 + 2)), readGuestU8(uc, a0 + 0x20c),
+                     readGuestWideLossy(uc, a0 + 4), a1);
+    } else if (address == 0x0001adb0u) {
+        spdlog::warn("asm diag values lookup wrapper pc=0x{:08x} fp=0x{:08x} id={} subId={} name=\"{}\"",
+                     uint32_t(address), fp, int16_t(readGuestU16(uc, fp)),
+                     int16_t(readGuestU16(uc, fp + 2)), readGuestWideLossy(uc, fp + 4));
+    } else if (address == 0x0006bd18u) {
+        spdlog::warn("asm diag values.dat lookup entry pc=0x{:08x} parser=0x{:08x} requestedId={} out=0x{:08x}",
+                     uint32_t(address), a0, int16_t(a1 & 0xffffu), a2);
+    } else if (address == 0x00299594u) {
+        const uint32_t record = sp + 0x18;
+        spdlog::warn("asm diag HWProfile record idx={} selector={} raw02=0x{:04x} word4=0x{:08x} word8=0x{:08x} field4=\"{}\" field8=\"{}\"",
+                     s7, int16_t(readGuestU16(uc, record)), readGuestU16(uc, record + 2),
+                     readGuestU32(uc, record + 4), readGuestU32(uc, record + 8),
+                     readProfileField(uc, record, 4), readProfileField(uc, record, 8));
+    } else if (const int selectorCase = profilePredicateReturnCase(address); selectorCase >= 0) {
+        const uint32_t record = sp + 0x18;
+        spdlog::warn("asm diag HWProfile predicate idx={} selector={} case={} result={} field4=\"{}\" field8=\"{}\"",
+                     s7, int16_t(readGuestU16(uc, record)), selectorCase, v0 ? 1 : 0,
+                     readProfileField(uc, record, 4), readProfileField(uc, record, 8));
+    }
+}
+
+static bool asmDiagEnabled() {
+#if defined(_WIN32)
+    char* value = nullptr;
+    size_t length = 0;
+    if (_dupenv_s(&value, &length, "WINCE_ASM_DIAG") != 0 || !value) return false;
+    std::free(value);
+    return length > 1;
+#else
+    return std::getenv("WINCE_ASM_DIAG") != nullptr;
+#endif
+}
 
 struct Section { std::string name; uint32_t va{}, vsize{}, raw{}, rawSize{}, chars{}; };
 struct ImportSym { std::string dll; std::string name; uint16_t ordinal{}; uint32_t iatRva{}; };
@@ -453,6 +559,22 @@ static int runImage(PeImage& pe, const std::vector<fs::path>& dllSearchDirs,
         if (registryPath) synthetic.setRegistryPath(*registryPath);
         uc_hook syntheticHook{};
         uc_hook_add(uc, &syntheticHook, UC_HOOK_CODE, (void*)SyntheticDllRuntime::hookCode, &synthetic, 0x70000000, 0x70ffffff);
+        std::vector<uc_hook> asmDiagHooks;
+        if (asmDiagEnabled()) {
+            constexpr std::array<uint32_t, 19> diagAddresses{
+                0x000594a4u, 0x00059764u, 0x0001adb0u, 0x0006bd18u,
+                0x00299594u,
+                0x002995ecu, 0x00299620u, 0x00299654u, 0x00299688u,
+                0x002996bcu, 0x00299700u, 0x002997a4u, 0x002997d8u,
+                0x0029980cu, 0x00299840u, 0x00299874u, 0x002998a8u,
+                0x002998dcu, 0x00299910u,
+            };
+            asmDiagHooks.resize(diagAddresses.size());
+            for (size_t i = 0; i < diagAddresses.size(); ++i) {
+                uc_hook_add(uc, &asmDiagHooks[i], UC_HOOK_CODE, (void*)hookAsmDiag, nullptr,
+                            diagAddresses[i], diagAddresses[i]);
+            }
+        }
         ModuleLoader loader(uc, &synthetic, pe.path, dllSearchDirs);
         PeImage* main = loader.loadModuleByPath(pe.path, true);
         if (!main) throw std::runtime_error("failed to load main module");

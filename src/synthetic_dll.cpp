@@ -41,6 +41,27 @@ std::string lowerAscii(std::string s) {
     return s;
 }
 
+#if defined(_WIN32)
+void writeGuestFindData(uc_engine* uc, uint32_t guestAddress, const WIN32_FIND_DATAW& data) {
+    if (!guestAddress) return;
+    auto writeU32 = [&](uint32_t offset, uint32_t value) {
+        uc_mem_write(uc, guestAddress + offset, &value, sizeof(value));
+    };
+    writeU32(0, data.dwFileAttributes);
+    uc_mem_write(uc, guestAddress + 4, &data.ftCreationTime, sizeof(data.ftCreationTime));
+    uc_mem_write(uc, guestAddress + 12, &data.ftLastAccessTime, sizeof(data.ftLastAccessTime));
+    uc_mem_write(uc, guestAddress + 20, &data.ftLastWriteTime, sizeof(data.ftLastWriteTime));
+    writeU32(28, data.nFileSizeHigh);
+    writeU32(32, data.nFileSizeLow);
+    writeU32(36, 0);
+    for (uint32_t i = 0; i < 260; ++i) {
+        const uint16_t ch = uint16_t(data.cFileName[i]);
+        uc_mem_write(uc, guestAddress + 40 + i * 2, &ch, sizeof(ch));
+        if (!ch) break;
+    }
+}
+#endif
+
 std::string registryRootName(uint32_t hkey) {
     switch (hkey) {
     case 0x80000000u: return "hkcr";
@@ -677,6 +698,7 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x00AD, "SetFilePointer");
     registerExport(module, 0x00B1, "SetFileTime");
     registerExport(module, 0x00B4, "FindClose");
+    registerExport(module, 0x00B5, "FindNextFileW");
     registerExport(module, 0x00C0, "IsDBCSLeadByteEx");
     registerExport(module, 0x00C1, "iswctype");
     registerExport(module, 0x00C4, "MultiByteToWideChar");
@@ -1019,6 +1041,8 @@ uint32_t SyntheticDllRuntime::closeGuestHandle(uint32_t guestHandle) {
         fileHandleDebugNames_.erase(guestHandle);
         fileReadCounts_.erase(guestHandle);
         fileSeekCounts_.erase(guestHandle);
+    } else if (it->second.kind == GuestHandle::Kind::HostFind) {
+        fileHandleDebugNames_.erase(guestHandle);
     } else if (it->second.kind == GuestHandle::Kind::GuestFileMapping) {
         fileMappings_.erase(guestHandle);
     }
@@ -2285,7 +2309,34 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(const std::string& name,
     const uint32_t a2 = args.a2;
     const uint32_t a3 = args.a3;
 
-    if (name == "memcpy" || name == "memmove") {
+    if (name == "FindNextFileW") {
+#if defined(_WIN32)
+        auto* handle = lookupGuestHandle(a0);
+        if (!handle || handle->kind != GuestHandle::Kind::HostFind || !handle->hostValue) {
+            lastError_ = 6;
+            ret = 0;
+        } else {
+            WIN32_FIND_DATAW data{};
+            const BOOL ok = FindNextFileW(reinterpret_cast<HANDLE>(handle->hostValue), &data);
+            ret = ok ? 1 : 0;
+            lastError_ = ok ? 0 : GetLastError();
+            if (ok) {
+                writeGuestFindData(uc_, a1, data);
+                auto debugName = fileHandleDebugNames_.find(a0);
+                const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+                spdlog::info("FindNextFileW hit handle=0x{:08x} path=\"{}\" file=\"{}\" size={}",
+                             a0, debugPath,
+                             std::filesystem::path(data.cFileName).string(),
+                             (uint64_t(data.nFileSizeHigh) << 32) | data.nFileSizeLow);
+            } else {
+                spdlog::info("FindNextFileW miss handle=0x{:08x} lastError={}", a0, lastError_);
+            }
+        }
+#else
+        lastError_ = 6;
+        ret = 0;
+#endif
+    } else if (name == "memcpy" || name == "memmove") {
         copyGuest(a0, a1, a2);
         ret = a0;
     } else if (name == "memset") {
@@ -2906,6 +2957,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
     const uint32_t a1 = args.a1;
     const uint32_t a2 = args.a2;
     const uint32_t a3 = args.a3;
+    const uint32_t ra = args.ra;
     if (name == "SystemParametersInfoW") {
         ret = handleSystemParametersInfoW(a0, a1, a2, a3);
         return true;
@@ -3014,12 +3066,6 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
         const uint32_t method = a0 & 0x3u;
         const uint32_t device = (a0 >> 16) & 0xffffu;
         const uint32_t access = (a0 >> 14) & 0x3u;
-        auto registryString = [&](const std::string& path, const std::string& valueName) -> std::string {
-            const nlohmann::json* configured = registryValue(path, valueName);
-            if (!configured) return {};
-            const auto data = configured->find("data");
-            return data != configured->end() && data->is_string() ? data->get<std::string>() : std::string{};
-        };
         auto registryData = [](const nlohmann::json* value) -> const nlohmann::json* {
             if (!value) return nullptr;
             const auto data = value->find("data");
@@ -3084,11 +3130,15 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             }
             if (data->is_string()) {
                 const std::string value = data->get<std::string>();
-                const uint32_t capacityChars = outSize ? std::max<uint32_t>(1, outSize / 2) : uint32_t(value.size() + 1);
-                const uint32_t writtenChars = writeUtf16(outPtr, value, capacityChars);
-                if (bytesReturnedPtr) writeU32(bytesReturnedPtr, (writtenChars + 1) * 2);
-                spdlog::info("KernelIoControl registry return cmd=0x{:08x} string=\"{}\" chars={} capacityChars={}",
-                             a0, value, writtenChars, capacityChars);
+                const uint32_t capacityBytes = outSize ? outSize : uint32_t(value.size() + 1);
+                if (!capacityBytes) return false;
+                const uint32_t bytesToWrite = std::min<uint32_t>(uint32_t(value.size()), capacityBytes - 1);
+                if (bytesToWrite) uc_mem_write(uc_, outPtr, value.data(), bytesToWrite);
+                const char nul = 0;
+                uc_mem_write(uc_, outPtr + bytesToWrite, &nul, sizeof(nul));
+                if (bytesReturnedPtr) writeU32(bytesReturnedPtr, bytesToWrite + 1);
+                spdlog::info("KernelIoControl registry return cmd=0x{:08x} string=\"{}\" bytes={} capacityBytes={}",
+                             a0, value, bytesToWrite, capacityBytes);
                 return true;
             }
             return false;
@@ -3099,36 +3149,6 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             if (writeConfiguredIoctlReturn(*configured)) {
                 lastError_ = 0;
                 ret = 1;
-            }
-        } else if (a0 == 0x0101207cu && outPtr && outSize >= 4) {
-            uint32_t value = 0;
-            if (const nlohmann::json* configured =
-                    registryValue("hklm\\system\\emulator\\kernelioctl", "0101207c")) {
-                const auto data = configured->find("data");
-                if (data != configured->end() && data->is_number_unsigned()) {
-                    value = data->get<uint32_t>();
-                }
-            }
-            writeU32(outPtr, value);
-            if (bytesReturnedPtr) writeU32(bytesReturnedPtr, 4);
-            lastError_ = 0;
-            ret = 1;
-        } else if (a0 == 0x01012ef4u && outPtr) {
-            std::string value = registryString("hklm\\system\\emulator\\kernelioctl", "01012ef4");
-            if (value.empty()) value = registryString("hklm\\software\\hyoncorp", "devicename");
-            if (value.empty()) value = registryString("hklm\\software\\vitas", "devicename");
-            if (value.empty()) value = registryString("hklm\\software\\tubenavi\\product", "modelid");
-            if (value.empty()) value = registryString("hklm\\system\\emulator\\systemparametersinfo", "00000102");
-            if (value.empty()) value = registryString("hklm\\system\\emulator\\systemparametersinfo", "oeminfo");
-
-            if (!value.empty()) {
-                const uint32_t capacityChars = outSize ? std::max<uint32_t>(1, outSize / 2) : uint32_t(value.size() + 1);
-                const uint32_t writtenChars = writeUtf16(outPtr, value, capacityChars);
-                if (bytesReturnedPtr) writeU32(bytesReturnedPtr, (writtenChars + 1) * 2);
-                lastError_ = 0;
-                ret = 1;
-                spdlog::info("KernelIoControl 0x01012ef4 wrote device name \"{}\" chars={} capacityChars={}",
-                             value, writtenChars, capacityChars);
             }
         }
         spdlog::info("KernelIoControl code=0x{:08x} device=0x{:04x} function=0x{:03x} method={} access={} out=0x{:08x} outSize={} bytesReturned=0x{:08x} -> {} lastError={}",
@@ -3263,6 +3283,19 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
         ret = 0;
 #endif
     } else if (name == "CloseHandle") {
+        auto debugName = fileHandleDebugNames_.find(a0);
+        const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+        const std::string lowerPath = lowerAscii(debugPath);
+        if (ra == 0x0006bea4u && lowerPath.find("values.dat") != std::string::npos) {
+            uint16_t recordCount = 0;
+            const uint32_t sp = reg(UC_MIPS_REG_SP);
+            uc_mem_read(uc_, sp + 0x20, &recordCount, sizeof(recordCount));
+            const uint32_t requestedId = reg(UC_MIPS_REG_S3);
+            const uint32_t scannedRecords = reg(UC_MIPS_REG_S5);
+            spdlog::warn("values.dat lookup miss handle=0x{:08x} path=\"{}\" requestedId={} (0x{:04x}) scanned={} recordCount={} ra=0x{:08x}",
+                         a0, debugPath, int16_t(requestedId & 0xffffu), requestedId & 0xffffu,
+                         scannedRecords, recordCount, ra);
+        }
         ret = closeGuestHandle(a0);
     } else if (name == "FindClose") {
         ret = closeGuestHandle(a0);
@@ -3381,21 +3414,9 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             spdlog::warn("FindFirstFileW miss guest=\"{}\" host=\"{}\" lastError={}",
                          guestPath, hostPath.string(), lastError_);
         } else {
-            if (a1) {
-                writeU32(a1, data.dwFileAttributes);
-                uc_mem_write(uc_, a1 + 4, &data.ftCreationTime, sizeof(data.ftCreationTime));
-                uc_mem_write(uc_, a1 + 12, &data.ftLastAccessTime, sizeof(data.ftLastAccessTime));
-                uc_mem_write(uc_, a1 + 20, &data.ftLastWriteTime, sizeof(data.ftLastWriteTime));
-                writeU32(a1 + 28, data.nFileSizeHigh);
-                writeU32(a1 + 32, data.nFileSizeLow);
-                writeU32(a1 + 36, 0);
-                for (uint32_t i = 0; i < 260; ++i) {
-                    const uint16_t ch = uint16_t(data.cFileName[i]);
-                    uc_mem_write(uc_, a1 + 40 + i * 2, &ch, sizeof(ch));
-                    if (!ch) break;
-                }
-            }
+            writeGuestFindData(uc_, a1, data);
             ret = makeGuestHandle({GuestHandle::Kind::HostFind, reinterpret_cast<uintptr_t>(host), 0});
+            fileHandleDebugNames_[ret] = hostPath.string();
             lastError_ = 0;
             spdlog::info("FindFirstFileW hit guest=\"{}\" host=\"{}\" guestHandle=0x{:08x} file=\"{}\" size={}",
                          guestPath, hostPath.string(), ret,
@@ -3424,10 +3445,11 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
                 if (ok && transferred) uc_mem_write(uc_, a1, bytes.data(), transferred);
                 ret = ok ? 1 : 0;
                 const uint32_t readCount = ++fileReadCounts_[a0];
+                auto debugName = fileHandleDebugNames_.find(a0);
+                const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
                 if (readCount <= 32 || !ok || transferred != a2 || transferred == 0) {
-                    auto debugName = fileHandleDebugNames_.find(a0);
                     spdlog::info("ReadFile handle=0x{:08x} path=\"{}\" requested={} transferred={} ok={} read#={}",
-                                 a0, debugName == fileHandleDebugNames_.end() ? "" : debugName->second,
+                                 a0, debugPath,
                                  a2, transferred, ok ? 1 : 0, readCount);
                 }
             } else {

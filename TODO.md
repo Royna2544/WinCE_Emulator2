@@ -7,8 +7,8 @@
 - Keep real SDK DLLs preferred over synthetic modules. Synthetic `coredll.dll` exists because the installed SDK supplies `coredll.lib` but no real MIPS `COREDLL.dll` PE image.
 - Continue from smoke71's clean idle-block stop after the app-level `can't read HWInfoDB` message (`GetMessageW` blocking with empty guest queue, `pc=0x70002ae8 ra=0x500245c8`). The app opens and reads `INavi\res\values.dat` before aborting.
 - Integrate the user's forthcoming real registry dump through `--registry regs.json`. Do not hardcode device/OEM/HWInfo identity in `.cpp`; keep `SystemParametersInfoW`, registry, and `KernelIoControl` identity inputs external JSON-backed.
-- Investigate the app-level HWInfoDB rejection by tracing the real `values.dat` parser, registry values, and SDK-backed APIs. Do not bypass the warning by hardcoding iNavi state.
-- TODO: Verify the real-device contract for `KernelIoControl(0x01012ef4)` (`device=0x0101`, `function=0xbbd`). Current diagnostic bridge can write a UTF-16 device name from external registry JSON entries under `hklm\system\emulator\kernelioctl\<entry>` where `ioctlcmd` is the command and `return` is the configured result; legacy `DeviceName`/`ModelID`/`SystemParametersInfoW(0x102)` fallbacks remain only as diagnostics until the real device dump confirms the shape.
+- Continue the app-level HWInfoDB investigation at the profile matcher before `values.dat` lookup. Current assembly diagnostics show `0x129204 -> 0x299544` fails to select a profile, so `0x000594a4` stores id `0`/empty name and `0x0006bd18` later scans 118 `values.dat` records for missing id `0`. Do not bypass the warning by hardcoding iNavi state.
+- TODO: Verify the real-device contract for `KernelIoControl(0x01012ef4)` (`device=0x0101`, `function=0xbbd`). Current diagnostic bridge writes configured string results as raw NUL-terminated bytes from external registry JSON entries under `hklm\system\emulator\kernelioctl\<entry>` where `ioctlcmd` is the command and `return` is the result; keep this table synced with the real device dump once available.
 - Continue the real drawing/paint bridge. A host presenter now displays the framebuffer and survives guest teardown for inspection, but text rendering, richer common controls, and host input-to-guest message translation are still incomplete.
 
 ## Weird Ordinals To Verify Later
@@ -24,7 +24,7 @@
 
 ## Next
 
-- Add targeted `values.dat`/HWInfoDB parser tracing or reverse the record lookup enough to identify which real registry fields are required. Keep this as diagnostics, not app-specific acceptance logic.
+- Reverse or trace the profile predicates inside `0x299544` far enough to identify which real registry/ioctl/file values select a nonzero HWInfo id. Known predicate inputs include `HKLM\SOFTWARE\TubeNavi\PRODUCT\ModelID`, `KernelIoControl(0x0101207c)`, and `KernelIoControl(0x01012ef4)`.
 - Continue using `iSearch.exe` as a second launch target. Next useful bridge work is host input/event delivery into the blocked `GetMessageW` loop and any file-mapping view paths if `MapViewOfFile` appears beyond the initial `CreateFileMappingW`.
 - CE_MANAGER launch is blocked by missing real `WININET.dll`. Do not synthesize `WININET.dll` unless explicitly requested; if a real CE/MIPS `WININET.dll` is supplied, rerun `CE_Manager.exe` with that directory in the explicit DLL search path.
 - Audit remaining called coredll paths that are still minimal guest-side implementations, especially `_setjmp`/`longjmp`, `__ehvec_ctor`, and locale/NLS APIs. Do not invent ABI layouts; preserve SDK names and fail closed or document evidence when exact behavior is not known.
