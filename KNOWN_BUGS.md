@@ -59,9 +59,14 @@
 
 ### Possible remaining bitmap color-format mismatch
 
-- Status: Investigating.
-- Evidence: The settings/menu UI can show a green cast in interactive runs. The bridge previously decoded all 16-bit bitmaps as RGB565; the current build uses RGB555 for 16-bit BI_RGB-style bitmap paths. A synchronous `UpdateWindow` experiment was reverted separately because it caused black startup/icon glitches.
-- Constraint: Do not add an app-specific color correction. If the green cast persists, identify the exact source bitmap path and header (`BI_RGB` vs `BI_BITFIELDS`, palette vs direct color, guest DIB section vs resource/host bitmap) before changing the conversion again.
+- Status: Mostly fixed; keep watching specific assets.
+- Evidence: The settings/menu UI showed green grid/pattern leakage on dark UI objects and icons. `v2_synth_inavi_ui565_text.log` confirms the target creates 16-bit DIB sections with `BI_BITFIELDS` masks `0000f800/000007e0/0000001f`; tracking those masks and defaulting CE 16-bit DIB sections to RGB565 fixed the obvious patterned volume/statistic blocks in the captured framebuffer.
+- Constraint: Do not add an app-specific color correction. If a cast persists, identify the exact source bitmap path and header (`BI_RGB` vs `BI_BITFIELDS`, palette vs direct color, guest DIB section vs resource/host bitmap) before changing conversion again.
+
+### Host ClearType leaked into guest text
+
+- Status: Fixed in the current working tree.
+- Evidence: Interactive screenshots showed red/green/blue fringes around Korean text. The emulator was drawing guest `ExtTextOutW`/`DrawTextW` through host GDI and copying the desktop ClearType subpixel result into the guest framebuffer. The current text bridge creates non-ClearType fonts before host-backed rasterization; `frame_001_after_unicorn_ui565_text.png` shows clean Korean dialog text without RGB fringes.
 
 ### COM bridge is IUnknown-only beyond creation
 

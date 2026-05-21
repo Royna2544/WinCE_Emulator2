@@ -153,6 +153,9 @@ private:
         uint16_t bpp{};
         uint32_t stride{};
         uint32_t bits{};
+        uint32_t redMask{};
+        uint32_t greenMask{};
+        uint32_t blueMask{};
         std::vector<uint32_t> palette;
     };
     struct HostWaveBuffer {

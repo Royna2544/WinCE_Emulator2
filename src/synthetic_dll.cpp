@@ -107,6 +107,86 @@ uint16_t encodeRgb555(uint32_t pixel) {
     return uint16_t((r << 10) | (g << 5) | b);
 }
 
+uint32_t decodeRgb565(uint16_t value) {
+    const uint8_t r = expand5To8(value >> 11);
+    const uint8_t g = uint8_t(((value >> 5) & 0x3fu) * 255u / 63u);
+    const uint8_t b = expand5To8(value);
+    return 0xff000000u | (uint32_t(r) << 16) | (uint32_t(g) << 8) | b;
+}
+
+uint16_t encodeRgb565(uint32_t pixel) {
+    const uint16_t r = uint16_t(((pixel >> 16) & 0xffu) * 31u / 255u);
+    const uint16_t g = uint16_t(((pixel >> 8) & 0xffu) * 63u / 255u);
+    const uint16_t b = uint16_t((pixel & 0xffu) * 31u / 255u);
+    return uint16_t((r << 11) | (g << 5) | b);
+}
+
+uint32_t maskShift(uint32_t mask) {
+    if (!mask) return 0;
+    uint32_t shift = 0;
+    while ((mask & 1u) == 0) {
+        mask >>= 1;
+        ++shift;
+    }
+    return shift;
+}
+
+uint32_t maskBits(uint32_t mask) {
+    uint32_t bits = 0;
+    while (mask) {
+        bits += mask & 1u;
+        mask >>= 1;
+    }
+    return bits;
+}
+
+uint8_t expandMaskedChannel(uint32_t value, uint32_t mask) {
+    if (!mask) return 0;
+    const uint32_t shift = maskShift(mask);
+    const uint32_t bits = maskBits(mask);
+    const uint32_t raw = (value & mask) >> shift;
+    const uint32_t maxValue = (1u << bits) - 1u;
+    return uint8_t((raw * 255u + maxValue / 2u) / maxValue);
+}
+
+uint32_t compressMaskedChannel(uint32_t pixel, uint32_t shift, uint32_t mask) {
+    if (!mask) return 0;
+    const uint32_t bits = maskBits(mask);
+    const uint32_t maxValue = (1u << bits) - 1u;
+    const uint32_t raw = ((pixel >> shift) & 0xffu) * maxValue / 255u;
+    return (raw << maskShift(mask)) & mask;
+}
+
+uint32_t decodeMasked16(uint16_t value, uint32_t redMask, uint32_t greenMask, uint32_t blueMask) {
+    const uint32_t v = value;
+    const uint8_t r = expandMaskedChannel(v, redMask);
+    const uint8_t g = expandMaskedChannel(v, greenMask);
+    const uint8_t b = expandMaskedChannel(v, blueMask);
+    return 0xff000000u | (uint32_t(r) << 16) | (uint32_t(g) << 8) | b;
+}
+
+uint16_t encodeMasked16(uint32_t pixel, uint32_t redMask, uint32_t greenMask, uint32_t blueMask) {
+    return uint16_t(compressMaskedChannel(pixel, 16, redMask) |
+                    compressMaskedChannel(pixel, 8, greenMask) |
+                    compressMaskedChannel(pixel, 0, blueMask));
+}
+
+void ceDefault16BitMasks(uint32_t& redMask, uint32_t& greenMask, uint32_t& blueMask) {
+    redMask = 0x0000f800u;
+    greenMask = 0x000007e0u;
+    blueMask = 0x0000001fu;
+}
+
+uint32_t decodeBitmap16(uint16_t value, uint32_t redMask, uint32_t greenMask, uint32_t blueMask) {
+    if (!redMask && !greenMask && !blueMask) return decodeRgb565(value);
+    return decodeMasked16(value, redMask, greenMask, blueMask);
+}
+
+uint16_t encodeBitmap16(uint32_t pixel, uint32_t redMask, uint32_t greenMask, uint32_t blueMask) {
+    if (!redMask && !greenMask && !blueMask) return encodeRgb565(pixel);
+    return encodeMasked16(pixel, redMask, greenMask, blueMask);
+}
+
 std::string lowerAscii(std::string s) {
     for (char& c : s) c = char(std::tolower(static_cast<unsigned char>(c)));
     return s;
@@ -2323,16 +2403,26 @@ bool SyntheticDllRuntime::drawHostTextToDc(const GuestDc& dc,
         rectArg = &textRect;
     }
 
+    bool hostFontOwned = false;
     auto selectedFont = [&]() -> HFONT {
+        LOGFONTW logFont{};
         auto font = fonts_.find(dc.selectedFont);
         if (font == fonts_.end() || font->second.stock) {
-            return reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+            HFONT stockFont = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+            if (!stockFont || GetObjectW(stockFont, sizeof(logFont), &logFont) != sizeof(logFont)) {
+                return stockFont;
+            }
+        } else {
+            const size_t bytes = std::min(sizeof(logFont), font->second.logFont.size());
+            std::memcpy(&logFont, font->second.logFont.data(), bytes);
         }
-        LOGFONTW logFont{};
-        const size_t bytes = std::min(sizeof(logFont), font->second.logFont.size());
-        std::memcpy(&logFont, font->second.logFont.data(), bytes);
+        logFont.lfQuality = NONANTIALIASED_QUALITY;
         HFONT hostFont = CreateFontIndirectW(&logFont);
-        return hostFont ? hostFont : reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+        if (hostFont) {
+            hostFontOwned = true;
+            return hostFont;
+        }
+        return reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
     };
 
     auto drawIntoDib = [&](int width, int height, uint32_t* pixels) -> bool {
@@ -2375,7 +2465,7 @@ bool SyntheticDllRuntime::drawHostTextToDc(const GuestDc& dc,
         GdiFlush();
         if (ok) std::memcpy(pixels, dibBits, size_t(width) * size_t(height) * 4);
         if (oldFont) SelectObject(memDc, oldFont);
-        if (hostFont && fonts_.find(dc.selectedFont) != fonts_.end() && !fonts_[dc.selectedFont].stock) {
+        if (hostFont && hostFontOwned) {
             DeleteObject(hostFont);
         }
         SelectObject(memDc, oldBitmap);
@@ -2447,7 +2537,7 @@ bool SyntheticDllRuntime::readBitmapPixel(const GuestBitmap& bitmap,
     } else if (bitmap.bpp == 16) {
         const size_t o = size_t(x) * 2;
         const uint16_t v = uint16_t(row[o] | (row[o + 1] << 8));
-        pixel = decodeRgb555(v);
+        pixel = decodeBitmap16(v, bitmap.redMask, bitmap.greenMask, bitmap.blueMask);
     } else if (bitmap.bpp == 8 && !bitmap.palette.empty()) {
         pixel = bitmap.palette[std::min<size_t>(row[x], bitmap.palette.size() - 1)];
     } else if (bitmap.bpp == 4 && !bitmap.palette.empty()) {
@@ -2488,7 +2578,7 @@ bool SyntheticDllRuntime::writeBitmapPixel(const GuestBitmap& bitmap,
         row[o + 1] = g;
         row[o + 2] = r;
     } else if (bitmap.bpp == 16) {
-        const uint16_t v = encodeRgb555(pixel);
+        const uint16_t v = encodeBitmap16(pixel, bitmap.redMask, bitmap.greenMask, bitmap.blueMask);
         const size_t o = size_t(x) * 2;
         row[o + 0] = uint8_t(v & 0xff);
         row[o + 1] = uint8_t(v >> 8);
@@ -2616,6 +2706,7 @@ bool SyntheticDllRuntime::handleCreateBitmap(const GuestCallArgs& args, uint32_t
         bitmap.bpp = uint16_t(bpp);
         bitmap.stride = stride;
         bitmap.bits = bits;
+        if (bitmap.bpp == 16) ceDefault16BitMasks(bitmap.redMask, bitmap.greenMask, bitmap.blueMask);
         bitmap.palette = defaultIndexedPalette(uint16_t(bpp));
         bitmaps_[ret] = std::move(bitmap);
     }
@@ -2792,7 +2883,22 @@ bool SyntheticDllRuntime::stretchDibToFramebuffer(const GuestDc& dc,
                                  (uint32_t(header[18]) << 16) | (uint32_t(header[19]) << 24);
     const uint32_t clrUsed = uint32_t(header[32]) | (uint32_t(header[33]) << 8) |
                              (uint32_t(header[34]) << 16) | (uint32_t(header[35]) << 24);
-    if (headerSize < 40 || planes != 1 || compression != 0 || dibWidth <= 0 || dibHeightRaw == 0) return false;
+    if (headerSize < 40 || planes != 1 || (compression != 0 && compression != 3) ||
+        dibWidth <= 0 || dibHeightRaw == 0) {
+        return false;
+    }
+    uint32_t redMask = 0;
+    uint32_t greenMask = 0;
+    uint32_t blueMask = 0;
+    if (bpp == 16) {
+        ceDefault16BitMasks(redMask, greenMask, blueMask);
+        if (compression == 3) {
+            const uint32_t maskOffset = headerSize >= 52 ? 40 : headerSize;
+            redMask = readU32(infoPtr + maskOffset);
+            greenMask = readU32(infoPtr + maskOffset + 4);
+            blueMask = readU32(infoPtr + maskOffset + 8);
+        }
+    }
     const int32_t dibHeight = std::abs(dibHeightRaw);
     const bool topDown = dibHeightRaw < 0;
     const uint32_t paletteEntries = bpp <= 8 ? (clrUsed ? clrUsed : (1u << bpp)) : 0;
@@ -2846,7 +2952,7 @@ bool SyntheticDllRuntime::stretchDibToFramebuffer(const GuestDc& dc,
                 pixel = 0xff000000u | (uint32_t(p[o + 2]) << 16) | (uint32_t(p[o + 1]) << 8) | p[o];
             } else if (bpp == 16) {
                 const uint16_t v = uint16_t(p[size_t(sx) * 2] | (p[size_t(sx) * 2 + 1] << 8));
-                pixel = decodeRgb555(v);
+                pixel = decodeBitmap16(v, redMask, greenMask, blueMask);
             } else if (bpp == 8 && !palette.empty()) {
                 pixel = palette[std::min<size_t>(p[sx], palette.size() - 1)];
             } else if (bpp == 4 && !palette.empty()) {
@@ -2897,7 +3003,22 @@ bool SyntheticDllRuntime::stretchDibToBitmap(const GuestBitmap& dstBitmap,
                                  (uint32_t(header[18]) << 16) | (uint32_t(header[19]) << 24);
     const uint32_t clrUsed = uint32_t(header[32]) | (uint32_t(header[33]) << 8) |
                              (uint32_t(header[34]) << 16) | (uint32_t(header[35]) << 24);
-    if (headerSize < 40 || planes != 1 || compression != 0 || dibWidth <= 0 || dibHeightRaw == 0) return false;
+    if (headerSize < 40 || planes != 1 || (compression != 0 && compression != 3) ||
+        dibWidth <= 0 || dibHeightRaw == 0) {
+        return false;
+    }
+    uint32_t redMask = 0;
+    uint32_t greenMask = 0;
+    uint32_t blueMask = 0;
+    if (bpp == 16) {
+        ceDefault16BitMasks(redMask, greenMask, blueMask);
+        if (compression == 3) {
+            const uint32_t maskOffset = headerSize >= 52 ? 40 : headerSize;
+            redMask = readU32(infoPtr + maskOffset);
+            greenMask = readU32(infoPtr + maskOffset + 4);
+            blueMask = readU32(infoPtr + maskOffset + 8);
+        }
+    }
 
     const int32_t dibHeight = std::abs(dibHeightRaw);
     const bool topDown = dibHeightRaw < 0;
@@ -2940,7 +3061,7 @@ bool SyntheticDllRuntime::stretchDibToBitmap(const GuestBitmap& dstBitmap,
         } else if (bpp == 16) {
             const size_t o = size_t(x) * 2;
             const uint16_t v = uint16_t(row[o] | (row[o + 1] << 8));
-            pixel = decodeRgb555(v);
+            pixel = decodeBitmap16(v, redMask, greenMask, blueMask);
         } else if (bpp == 8 && !palette.empty()) {
             pixel = palette[std::min<size_t>(row[x], palette.size() - 1)];
         } else if (bpp == 4 && !palette.empty()) {
@@ -2976,7 +3097,7 @@ bool SyntheticDllRuntime::stretchDibToBitmap(const GuestBitmap& dstBitmap,
             row[o + 1] = g;
             row[o + 2] = r;
         } else if (dstBitmap.bpp == 16) {
-            const uint16_t v = encodeRgb555(pixel);
+            const uint16_t v = encodeBitmap16(pixel, dstBitmap.redMask, dstBitmap.greenMask, dstBitmap.blueMask);
             const size_t o = size_t(x) * 2;
             row[o + 0] = uint8_t(v & 0xff);
             row[o + 1] = uint8_t(v >> 8);
@@ -3112,7 +3233,7 @@ bool SyntheticDllRuntime::bitBltToFramebuffer(const GuestDc& dstDc,
             } else if (bitmap.bpp == 16) {
                 const size_t o = size_t(sx) * 2;
                 const uint16_t v = uint16_t(row[o] | (row[o + 1] << 8));
-                pixel = decodeRgb555(v);
+                pixel = decodeBitmap16(v, bitmap.redMask, bitmap.greenMask, bitmap.blueMask);
             } else if (bitmap.bpp == 8 && !bitmap.palette.empty()) {
                 pixel = bitmap.palette[std::min<size_t>(row[sx], bitmap.palette.size() - 1)];
             } else if (bitmap.bpp == 4 && !bitmap.palette.empty()) {
@@ -3178,7 +3299,7 @@ bool SyntheticDllRuntime::bitBltToBitmap(const GuestBitmap& dstBitmap,
         } else if (bitmap.bpp == 16) {
             const size_t o = size_t(x) * 2;
             const uint16_t v = uint16_t(row[o] | (row[o + 1] << 8));
-            pixel = decodeRgb555(v);
+            pixel = decodeBitmap16(v, bitmap.redMask, bitmap.greenMask, bitmap.blueMask);
         } else if (bitmap.bpp == 8 && !bitmap.palette.empty()) {
             pixel = bitmap.palette[std::min<size_t>(row[x], bitmap.palette.size() - 1)];
         } else if (bitmap.bpp == 4 && !bitmap.palette.empty()) {
@@ -3214,7 +3335,7 @@ bool SyntheticDllRuntime::bitBltToBitmap(const GuestBitmap& dstBitmap,
             row[o + 1] = g;
             row[o + 2] = r;
         } else if (dstBitmap.bpp == 16) {
-            const uint16_t v = encodeRgb555(pixel);
+            const uint16_t v = encodeBitmap16(pixel, dstBitmap.redMask, dstBitmap.greenMask, dstBitmap.blueMask);
             const size_t o = size_t(x) * 2;
             row[o + 0] = uint8_t(v & 0xff);
             row[o + 1] = uint8_t(v >> 8);
@@ -4268,6 +4389,7 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(const std::string& name,
             const int32_t heightRaw = int32_t(readU32(a1 + 8));
             uint16_t bpp = 0;
             uc_mem_read(uc_, a1 + 14, &bpp, sizeof(bpp));
+            const uint32_t compression = headerSize >= 40 ? readU32(a1 + 16) : 0;
             const uint32_t clrUsed = headerSize >= 40 ? readU32(a1 + 32) : 0;
             const uint32_t absHeight = uint32_t(heightRaw < 0 ? -heightRaw : heightRaw);
             const uint32_t bitsPerPixel = bpp ? bpp : 32;
@@ -4283,6 +4405,15 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(const std::string& name,
                 bitmap.bpp = uint16_t(bitsPerPixel);
                 bitmap.stride = stride;
                 bitmap.bits = bits;
+                if (bitmap.bpp == 16) {
+                    ceDefault16BitMasks(bitmap.redMask, bitmap.greenMask, bitmap.blueMask);
+                    if (compression == 3) {
+                        const uint32_t maskOffset = headerSize >= 52 ? 40 : headerSize;
+                        bitmap.redMask = readU32(a1 + maskOffset);
+                        bitmap.greenMask = readU32(a1 + maskOffset + 4);
+                        bitmap.blueMask = readU32(a1 + maskOffset + 8);
+                    }
+                }
                 const uint32_t paletteEntries = bitsPerPixel <= 8 ? (clrUsed ? clrUsed : (1u << bitsPerPixel)) : 0;
                 if (headerSize >= 40 && headerSize < 0x1000 && paletteEntries && paletteEntries <= 256) {
                     std::vector<uint8_t> rawPalette(size_t(paletteEntries) * 4);
@@ -4302,8 +4433,12 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(const std::string& name,
                 }
                 bitmaps_[ret] = std::move(bitmap);
             }
-            spdlog::info("CreateDIBSection {}x{} bpp={} stride={} bits=0x{:08x} bitmap=0x{:08x}",
-                         width, heightRaw, bitsPerPixel, stride, bits, ret);
+            spdlog::info("CreateDIBSection {}x{} bpp={} compression={} masks={:08x}/{:08x}/{:08x} stride={} bits=0x{:08x} bitmap=0x{:08x}",
+                         width, heightRaw, bitsPerPixel, compression,
+                         ret && bitmaps_.count(ret) ? bitmaps_[ret].redMask : 0,
+                         ret && bitmaps_.count(ret) ? bitmaps_[ret].greenMask : 0,
+                         ret && bitmaps_.count(ret) ? bitmaps_[ret].blueMask : 0,
+                         stride, bits, ret);
         }
     } else if (name == "CreateCompatibleBitmap") {
         const uint32_t width = std::max<uint32_t>(a1, 1);
@@ -4313,7 +4448,8 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(const std::string& name,
         const uint32_t bits = allocate(std::max<uint32_t>(stride * height, 4), true);
         ret = makeGuestHandle({GuestHandle::Kind::HostBitmap, 0, bits});
         if (ret) {
-            bitmaps_[ret] = GuestBitmap{int32_t(width), -int32_t(height), uint16_t(bpp), stride, bits, {}};
+            bitmaps_[ret] = GuestBitmap{int32_t(width), -int32_t(height), uint16_t(bpp), stride, bits,
+                                        0, 0, 0, {}};
         }
         lastError_ = ret ? 0 : 8;
         spdlog::info("CreateCompatibleBitmap {}x{} bits=0x{:08x} bitmap=0x{:08x}",
