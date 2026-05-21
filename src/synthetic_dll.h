@@ -31,12 +31,14 @@ public:
     void setFramebuffer(uint32_t* bgra, int width, int height);
     void setRegistryPath(const std::filesystem::path& path);
     void setFileSystemRoots(std::vector<std::filesystem::path> roots);
+    void setGpsCommPort(std::string port);
     void registerLoadedModule(const std::string& moduleName, const std::filesystem::path& path, uint32_t base,
                               const std::map<std::string, uint32_t>& exportsByName = {},
                               const std::map<uint16_t, uint32_t>& exportsByOrdinal = {});
     void flushRegistry();
     bool hasHostWindows() const;
     void runHostMessageLoopUntilClosed();
+    void queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t message, int32_t hostX, int32_t hostY);
     std::optional<SyntheticModule> createModule(const std::string& dllName);
     static void hookCode(uc_engine* uc, uint64_t address, uint32_t size, void* user);
 
@@ -71,6 +73,7 @@ private:
             HostRegion,
             HostSocket,
             HostComInterface,
+            HostSerialDevice,
             GuestFileMapping,
             GuestPropertySheetPage,
             GuestHeap,
@@ -197,6 +200,13 @@ private:
         uint64_t offset{};
         uint32_t size{};
     };
+    struct GuestTimer {
+        uint32_t hwnd{};
+        uint32_t id{};
+        uint32_t intervalMs{};
+        uint32_t callback{};
+        uint64_t nextDueMs{};
+    };
 
     uc_engine* uc_{};
     uint32_t nextModuleBase_ = 0x70000000;
@@ -211,6 +221,7 @@ private:
     uint32_t currentCursor_ = 0;
     uint32_t focusedWindow_ = 0;
     uint32_t capturedWindow_ = 0;
+    uint32_t hostPointerCaptureWindow_ = 0;
     uint32_t strtokNext_ = 0;
     uint32_t comProxyVtable_ = 0;
     uint32_t comQueryInterfaceStub_ = 0;
@@ -246,6 +257,7 @@ private:
     std::map<uint32_t, uint32_t> fileSeekCounts_;
     std::map<uint32_t, GuestFileMapping> fileMappings_;
     std::map<uint32_t, GuestMappedView> mappedViews_;
+    std::map<uint64_t, GuestTimer> timers_;
     std::deque<GuestMessage> guestMessages_;
     std::vector<uintptr_t> retainedHostWindows_;
     std::vector<ResourceEntry> mainResources_;
@@ -261,6 +273,7 @@ private:
     std::filesystem::path registryPath_;
     nlohmann::json registry_;
     bool registryDirty_{};
+    std::string gpsCommPort_;
 
     std::optional<SyntheticModule> createCoredll();
     std::optional<SyntheticModule> createCommctrl();
@@ -268,6 +281,7 @@ private:
     void registerExport(SyntheticModule& module, uint16_t ordinal, const std::string& name);
     void writeStub(uint32_t address);
     void dispatch(const ExportEntry& entry);
+    bool dispatchSimpleHostWin32(const std::string& name, const GuestCallArgs& args, uint32_t& ret);
     bool dispatchHostWin32(const std::string& name, const GuestCallArgs& args, uint32_t& ret);
     bool dispatchGuestMemoryApi(const std::string& name, const GuestCallArgs& args, uint32_t& ret);
     bool dispatchCommctrl(const std::string& name, const GuestCallArgs& args, uint32_t& ret);
@@ -292,6 +306,7 @@ private:
     uint32_t handleUnmapViewOfFile(uint32_t baseAddress);
     uint32_t handleFlushViewOfFile(uint32_t baseAddress, uint32_t bytesToFlush);
     uint32_t handleRegEnumValueW(uint32_t hkey, uint32_t index, uint32_t valueNamePtr, uint32_t valueNameSizePtr);
+    uint32_t openGuestSerialDevice(const std::string& guestPath, uint32_t access, uint32_t share);
 
     uint32_t makeGuestHandle(GuestHandle handle);
     GuestHandle* lookupGuestHandle(uint32_t guestHandle);
@@ -312,20 +327,40 @@ private:
     void destroyHostWindow(GuestWindow& window);
     void invalidateHostWindows();
     void pumpHostMessages();
+    void enqueueDueTimers();
+    uint32_t timerWaitMilliseconds() const;
+    uint32_t windowAtPoint(uint32_t rootGuestHwnd, int32_t x, int32_t y, int32_t& clientX, int32_t& clientY) const;
     uint32_t colorRefToPixel(uint32_t colorRef) const;
     bool readGuestRect(uint32_t address, int32_t& left, int32_t& top, int32_t& right, int32_t& bottom) const;
     void writeGuestRect(uint32_t address, int32_t left, int32_t top, int32_t right, int32_t bottom) const;
     void fillFramebufferRect(const GuestDc& dc, int32_t left, int32_t top, int32_t right, int32_t bottom, uint32_t pixel);
     void drawFramebufferLine(const GuestDc& dc, int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint32_t pixel);
+    bool readBitmapPixel(const GuestBitmap& bitmap, const std::vector<uint8_t>& bits,
+                         int32_t height, int32_t x, int32_t y, uint32_t& pixel) const;
+    bool writeBitmapPixel(const GuestBitmap& bitmap, std::vector<uint8_t>& bits,
+                          int32_t height, int32_t x, int32_t y, uint32_t pixel) const;
     bool stretchDibToFramebuffer(const GuestDc& dc, int32_t dstX, int32_t dstY, int32_t dstW, int32_t dstH,
                                  int32_t srcX, int32_t srcY, int32_t srcW, int32_t srcH,
                                  uint32_t bitsPtr, uint32_t infoPtr);
+    bool stretchDibToBitmap(const GuestBitmap& dstBitmap, int32_t dstX, int32_t dstY, int32_t dstW, int32_t dstH,
+                            int32_t srcX, int32_t srcY, int32_t srcW, int32_t srcH,
+                            uint32_t bitsPtr, uint32_t infoPtr);
     bool bitBltToFramebuffer(const GuestDc& dstDc, const GuestBitmap& bitmap,
                              int32_t dstX, int32_t dstY, int32_t dstW, int32_t dstH,
-                             int32_t srcX, int32_t srcY, int32_t srcW, int32_t srcH);
+                             int32_t srcX, int32_t srcY, int32_t srcW, int32_t srcH,
+                             uint32_t rop);
     bool bitBltToBitmap(const GuestBitmap& dstBitmap, const GuestBitmap& srcBitmap,
                         int32_t dstX, int32_t dstY, int32_t dstW, int32_t dstH,
-                        int32_t srcX, int32_t srcY, int32_t srcW, int32_t srcH);
+                        int32_t srcX, int32_t srcY, int32_t srcW, int32_t srcH,
+                        uint32_t rop);
+    bool transparentImageToFramebuffer(const GuestDc& dstDc, const GuestBitmap& srcBitmap,
+                                       int32_t dstX, int32_t dstY, int32_t dstW, int32_t dstH,
+                                       int32_t srcX, int32_t srcY, int32_t srcW, int32_t srcH,
+                                       uint32_t transparentColor);
+    bool transparentImageToBitmap(const GuestBitmap& dstBitmap, const GuestBitmap& srcBitmap,
+                                  int32_t dstX, int32_t dstY, int32_t dstW, int32_t dstH,
+                                  int32_t srcX, int32_t srcY, int32_t srcW, int32_t srcH,
+                                  uint32_t transparentColor);
     std::optional<std::string> registryPathFromHandle(uint32_t hkey, const std::string& subKey) const;
     bool registryKeyExists(const std::string& path) const;
     void registryEnsureKey(const std::string& path);

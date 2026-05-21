@@ -42,6 +42,40 @@ namespace {
 constexpr uint32_t kErrorFileNotFound = 2;
 constexpr uint32_t kErrorPathNotFound = 3;
 
+bool supportedSourceRasterOp(uint32_t rop) {
+    switch (rop) {
+    case 0x00000042u: // BLACKNESS
+    case 0x00330008u: // NOTSRCCOPY
+    case 0x00550009u: // DSTINVERT
+    case 0x00660046u: // SRCINVERT
+    case 0x008800c6u: // SRCAND
+    case 0x00cc0020u: // SRCCOPY
+    case 0x00ee0086u: // SRCPAINT
+    case 0x00ff0062u: // WHITENESS
+        return true;
+    default:
+        return false;
+    }
+}
+
+uint32_t applySourceRasterOp(uint32_t rop, uint32_t src, uint32_t dst) {
+    const uint32_t s = src & 0x00ffffffu;
+    const uint32_t d = dst & 0x00ffffffu;
+    uint32_t out = 0;
+    switch (rop) {
+    case 0x00000042u: out = 0; break;
+    case 0x00330008u: out = ~s; break;
+    case 0x00550009u: out = ~d; break;
+    case 0x00660046u: out = s ^ d; break;
+    case 0x008800c6u: out = s & d; break;
+    case 0x00cc0020u: out = s; break;
+    case 0x00ee0086u: out = s | d; break;
+    case 0x00ff0062u: out = 0x00ffffffu; break;
+    default: out = s; break;
+    }
+    return 0xff000000u | (out & 0x00ffffffu);
+}
+
 std::string lowerAscii(std::string s) {
     for (char& c : s) c = char(std::tolower(static_cast<unsigned char>(c)));
     return s;
@@ -81,6 +115,19 @@ void writeGuestFileAttributeData(uc_engine* uc, uint32_t guestAddress, const WIN
 }
 #endif
 
+uint64_t hostTickMilliseconds() {
+#if defined(_WIN32)
+    return GetTickCount64();
+#else
+    return uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+#endif
+}
+
+uint64_t guestTimerKey(uint32_t hwnd, uint32_t id) {
+    return (uint64_t(hwnd) << 32) | id;
+}
+
 bool pathHasWildcard(const std::filesystem::path& path) {
 #if defined(_WIN32)
     const std::wstring text = path.filename().wstring();
@@ -116,6 +163,31 @@ bool isGuestDevicePath(const std::string& guestPath) {
     }
     return hasDigit;
 }
+
+#if defined(_WIN32)
+std::wstring normalizeHostCommPort(std::string port) {
+    while (!port.empty() && std::isspace(static_cast<unsigned char>(port.front()))) port.erase(port.begin());
+    while (!port.empty() && std::isspace(static_cast<unsigned char>(port.back()))) port.pop_back();
+    if (!port.empty() && port.back() == ':') port.pop_back();
+    if (port.rfind("\\\\.\\", 0) == 0) {
+        std::wstring out;
+        for (char ch : port) out.push_back(wchar_t(static_cast<unsigned char>(ch)));
+        return out;
+    }
+    for (char& ch : port) ch = char(std::toupper(static_cast<unsigned char>(ch)));
+    if (port.rfind("COM", 0) != 0) port = "COM" + port;
+    std::wstring out = L"\\\\.\\";
+    for (char ch : port) out.push_back(wchar_t(static_cast<unsigned char>(ch)));
+    return out;
+}
+
+std::string narrowAsciiLossy(const std::wstring& text) {
+    std::string out;
+    out.reserve(text.size());
+    for (wchar_t ch : text) out.push_back(ch >= 0 && ch <= 0x7f ? char(ch) : '?');
+    return out;
+}
+#endif
 
 std::filesystem::path pathFromUtf8(const std::string& text) {
     std::u8string utf8Path;
@@ -494,6 +566,8 @@ WinmmBridge& winmmBridge() {
 }
 
 struct HostPresenterWindow {
+    SyntheticDllRuntime* runtime{};
+    uint32_t guestHwnd{};
     uint32_t* framebuffer{};
     int width{};
     int height{};
@@ -546,6 +620,29 @@ LRESULT CALLBACK hostPresenterWndProc(HWND hwnd, UINT message, WPARAM wParam, LP
         return 0;
     }
     if (message == WM_ERASEBKGND) return 1;
+    if (message == WM_LBUTTONDOWN || message == WM_LBUTTONUP) {
+        if (presenter && presenter->runtime) {
+            RECT client{};
+            GetClientRect(hwnd, &client);
+            const int clientWidth = std::max(1L, client.right - client.left);
+            const int clientHeight = std::max(1L, client.bottom - client.top);
+            const int hostX = int16_t(LOWORD(lParam));
+            const int hostY = int16_t(HIWORD(lParam));
+            const int x = std::clamp(MulDiv(hostX, presenter->width, clientWidth), 0, presenter->width - 1);
+            const int y = std::clamp(MulDiv(hostY, presenter->height, clientHeight), 0, presenter->height - 1);
+            uint32_t guestMessage = 0;
+            if (message == WM_LBUTTONDOWN) {
+                SetFocus(hwnd);
+                SetCapture(hwnd);
+                guestMessage = 0x0201; // WM_LBUTTONDOWN
+            } else if (message == WM_LBUTTONUP) {
+                ReleaseCapture();
+                guestMessage = 0x0202; // WM_LBUTTONUP
+            }
+            presenter->runtime->queueHostMouseMessage(presenter->guestHwnd, guestMessage, x, y);
+        }
+        return 0;
+    }
     if (message == WM_CLOSE) {
         DestroyWindow(hwnd);
         return 0;
@@ -595,6 +692,11 @@ void SyntheticDllRuntime::setFileSystemRoots(std::vector<std::filesystem::path> 
     for (auto& root : roots) {
         if (!root.empty()) fileSystemRoots_.push_back(std::move(root));
     }
+}
+
+void SyntheticDllRuntime::setGpsCommPort(std::string port) {
+    gpsCommPort_ = std::move(port);
+    if (!gpsCommPort_.empty()) spdlog::info("gps comm requested: {}", gpsCommPort_);
 }
 
 void SyntheticDllRuntime::setFramebuffer(uint32_t* bgra, int width, int height) {
@@ -690,10 +792,32 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed() {
     spdlog::info("entering host GUI message loop; close the presenter window to exit");
     MSG message{};
     while (hasHostWindows()) {
-        const BOOL got = GetMessageW(&message, nullptr, 0, 0);
-        if (got <= 0) break;
-        TranslateMessage(&message);
-        DispatchMessageW(&message);
+        enqueueDueTimers();
+        while (!guestMessages_.empty() && hasHostWindows()) {
+            uint32_t pc = 0;
+            uint32_t ra = 0;
+            uc_reg_read(uc_, UC_MIPS_REG_PC, &pc);
+            uc_reg_read(uc_, UC_MIPS_REG_RA, &ra);
+            spdlog::info("resuming guest for queued message pc=0x{:08x} ra=0x{:08x} queued={}",
+                         pc, ra, guestMessages_.size());
+            const uc_err err = uc_emu_start(uc_, pc, 0, 0, 50000000);
+            uc_reg_read(uc_, UC_MIPS_REG_PC, &pc);
+            uc_reg_read(uc_, UC_MIPS_REG_RA, &ra);
+            if (err != UC_ERR_OK) {
+                spdlog::warn("interactive emulation stopped err={} ({}) pc=0x{:08x} ra=0x{:08x}",
+                             int(err), uc_strerror(err), pc, ra);
+                return;
+            }
+            pumpHostMessages();
+            enqueueDueTimers();
+        }
+        const DWORD waitMs = std::max<DWORD>(1, std::min<DWORD>(50, timerWaitMilliseconds()));
+        while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
+            if (message.message == WM_QUIT) return;
+            TranslateMessage(&message);
+            DispatchMessageW(&message);
+        }
+        if (guestMessages_.empty()) MsgWaitForMultipleObjects(0, nullptr, FALSE, waitMs, QS_ALLINPUT);
     }
 #endif
 }
@@ -981,7 +1105,9 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x02BE, "SetForegroundWindow");
     registerExport(module, 0x02C0, "SetFocus");
     registerExport(module, 0x02C2, "GetActiveWindow");
+    registerExport(module, 0x02C3, "GetCapture");
     registerExport(module, 0x02C4, "SetCapture");
+    registerExport(module, 0x02C5, "ReleaseCapture");
     registerExport(module, 0x034B, "RemoveMenu");
     registerExport(module, 0x034E, "LoadMenuW");
     registerExport(module, 0x0350, "CheckMenuItem");
@@ -1295,7 +1421,9 @@ uint32_t SyntheticDllRuntime::closeGuestHandle(uint32_t guestHandle) {
         fonts_.erase(guestHandle);
     } else if (it->second.kind == GuestHandle::Kind::GuestRegistryKey) {
         registryHandles_.erase(guestHandle);
-    } else if (it->second.kind == GuestHandle::Kind::HostFile) {
+    } else if (it->second.kind == GuestHandle::Kind::HostFile ||
+               it->second.kind == GuestHandle::Kind::HostSerialDevice ||
+               it->second.kind == GuestHandle::Kind::GuestSerialDevice) {
         fileHandleDebugNames_.erase(guestHandle);
         fileReadCounts_.erase(guestHandle);
         fileSeekCounts_.erase(guestHandle);
@@ -1549,6 +1677,36 @@ uint32_t SyntheticDllRuntime::handleRegEnumValueW(uint32_t hkey, uint32_t index,
     return dataPtr && capacity < bytes.size() ? 234 : 0;
 }
 
+uint32_t SyntheticDllRuntime::openGuestSerialDevice(const std::string& guestPath, uint32_t access, uint32_t share) {
+#if defined(_WIN32)
+    if (!gpsCommPort_.empty()) {
+        const std::wstring hostPort = normalizeHostCommPort(gpsCommPort_);
+        const DWORD desiredAccess = access ? access : (GENERIC_READ | GENERIC_WRITE);
+        HANDLE host = CreateFileW(hostPort.c_str(), desiredAccess, 0, nullptr, OPEN_EXISTING,
+                                  FILE_ATTRIBUTE_NORMAL, nullptr);
+        const std::string displayName = narrowAsciiLossy(hostPort);
+        if (host != INVALID_HANDLE_VALUE) {
+            const uint32_t guest = makeGuestHandle({GuestHandle::Kind::HostSerialDevice,
+                                                    reinterpret_cast<uintptr_t>(host), 0});
+            fileHandleDebugNames_[guest] = guestPath + " -> " + displayName;
+            lastError_ = 0;
+            spdlog::info("CreateFileW guest device=\"{}\" host=\"{}\" guestHandle=0x{:08x} access=0x{:08x} share=0x{:08x}",
+                         guestPath, displayName, guest, desiredAccess, share);
+            return guest;
+        }
+        spdlog::warn("CreateFileW guest device=\"{}\" host=\"{}\" unavailable lastError={}; using disconnected guest serial device",
+                     guestPath, displayName, GetLastError());
+    }
+#endif
+    const uint32_t guest = makeGuestHandle({GuestHandle::Kind::GuestSerialDevice, 0, 0});
+    fileHandleDebugNames_[guest] = gpsCommPort_.empty() ? guestPath + " -> disconnected"
+                                                       : guestPath + " -> disconnected (" + gpsCommPort_ + ")";
+    lastError_ = 0;
+    spdlog::info("CreateFileW guest device=\"{}\" guestHandle=0x{:08x} disconnected access=0x{:08x} share=0x{:08x}",
+                 guestPath, guest, access, share);
+    return guest;
+}
+
 uint32_t SyntheticDllRuntime::makeGuestDc(uint32_t hwnd) {
     GuestDc dc{};
     dc.hwnd = hwnd;
@@ -1686,7 +1844,7 @@ void SyntheticDllRuntime::ensureHostWindow(uint32_t guestHwnd, GuestWindow& wind
             spdlog::warn("host presenter RegisterClassW failed error={}", GetLastError());
             return;
         }
-        auto* presenter = new HostPresenterWindow{framebuffer_, framebufferWidth_, framebufferHeight_};
+        auto* presenter = new HostPresenterWindow{this, guestHwnd, framebuffer_, framebufferWidth_, framebufferHeight_};
         const std::wstring title = widenLossy(window.title.empty() ? "FakeCE" : window.title);
         RECT rect{0, 0, hostPresenterDisplayWidth(*presenter), hostPresenterDisplayHeight(*presenter)};
         AdjustWindowRectEx(&rect, WS_OVERLAPPEDWINDOW, FALSE, 0);
@@ -1749,6 +1907,133 @@ void SyntheticDllRuntime::pumpHostMessages() {
         DispatchMessageW(&message);
     }
 #endif
+}
+
+void SyntheticDllRuntime::enqueueDueTimers() {
+    const uint64_t now = hostTickMilliseconds();
+    for (auto& [key, timer] : timers_) {
+        (void)key;
+        if (timer.intervalMs == 0 || now < timer.nextDueMs) continue;
+        GuestMessage message{};
+        message.hwnd = timer.hwnd;
+        message.message = 0x0113; // WM_TIMER
+        message.wParam = timer.id;
+        message.lParam = timer.callback;
+        message.time = uint32_t(++tick_ * 16);
+        guestMessages_.push_back(message);
+        const uint32_t interval = std::max<uint32_t>(1, timer.intervalMs);
+        do {
+            timer.nextDueMs += interval;
+        } while (timer.nextDueMs <= now);
+    }
+}
+
+uint32_t SyntheticDllRuntime::timerWaitMilliseconds() const {
+    if (timers_.empty()) return 50;
+    const uint64_t now = hostTickMilliseconds();
+    uint64_t best = 50;
+    for (const auto& [key, timer] : timers_) {
+        (void)key;
+        if (timer.nextDueMs <= now) return 1;
+        best = std::min<uint64_t>(best, timer.nextDueMs - now);
+    }
+    return uint32_t(std::max<uint64_t>(1, best));
+}
+
+uint32_t SyntheticDllRuntime::windowAtPoint(uint32_t rootGuestHwnd, int32_t x, int32_t y,
+                                            int32_t& clientX, int32_t& clientY) const {
+    uint32_t best = windows_.count(rootGuestHwnd) ? rootGuestHwnd : 0;
+    int32_t bestX = 0;
+    int32_t bestY = 0;
+    auto belongsToRoot = [&](uint32_t hwnd) {
+        if (!rootGuestHwnd) return true;
+        for (uint32_t current = hwnd; current;) {
+            if (current == rootGuestHwnd) return true;
+            auto it = windows_.find(current);
+            if (it == windows_.end()) break;
+            current = it->second.parent;
+        }
+        return false;
+    };
+    auto originOf = [&](uint32_t hwnd) {
+        int32_t ox = 0;
+        int32_t oy = 0;
+        for (uint32_t current = hwnd; current;) {
+            auto it = windows_.find(current);
+            if (it == windows_.end()) break;
+            ox += it->second.x;
+            oy += it->second.y;
+            current = it->second.parent;
+        }
+        return std::pair<int32_t, int32_t>{ox, oy};
+    };
+    for (auto it = windows_.rbegin(); it != windows_.rend(); ++it) {
+        const uint32_t hwnd = it->first;
+        const GuestWindow& window = it->second;
+        if (!window.visible || !belongsToRoot(hwnd)) continue;
+        const auto [ox, oy] = originOf(hwnd);
+        if (x < ox || y < oy || x >= ox + window.width || y >= oy + window.height) continue;
+        best = hwnd;
+        bestX = ox;
+        bestY = oy;
+        break;
+    }
+    clientX = x - bestX;
+    clientY = y - bestY;
+    return best;
+}
+
+void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t message,
+                                                int32_t hostX, int32_t hostY) {
+    int32_t clientX = hostX;
+    int32_t clientY = hostY;
+    uint32_t hwnd = 0;
+    if (message == 0x0202 && hostPointerCaptureWindow_ && windows_.count(hostPointerCaptureWindow_)) {
+        hwnd = hostPointerCaptureWindow_;
+    } else if (capturedWindow_ && windows_.count(capturedWindow_)) {
+        hwnd = capturedWindow_;
+    } else {
+        hwnd = windowAtPoint(rootGuestHwnd, hostX, hostY, clientX, clientY);
+    }
+    if (!hwnd) return;
+    auto originOf = [&](uint32_t target) {
+        int32_t x = 0;
+        int32_t y = 0;
+        for (uint32_t current = target; current;) {
+            auto it = windows_.find(current);
+            if (it == windows_.end()) break;
+            x += it->second.x;
+            y += it->second.y;
+            current = it->second.parent;
+        }
+        return std::pair<int32_t, int32_t>{x, y};
+    };
+    const auto [originX, originY] = originOf(hwnd);
+    clientX = hostX - originX;
+    clientY = hostY - originY;
+    if (message == 0x0201) {
+        hostPointerCaptureWindow_ = hwnd;
+        if (focusedWindow_ != hwnd) {
+            if (focusedWindow_ && windows_.count(focusedWindow_)) {
+                guestMessages_.push_back({focusedWindow_, 0x0008, hwnd, 0, uint32_t(++tick_ * 16), 0, 0});
+            }
+            guestMessages_.push_back({hwnd, 0x0007, focusedWindow_, 0, uint32_t(++tick_ * 16), 0, 0});
+            focusedWindow_ = hwnd;
+        }
+    } else if (message == 0x0202) {
+        hostPointerCaptureWindow_ = 0;
+    }
+    GuestMessage guest{};
+    guest.hwnd = hwnd;
+    guest.message = message;
+    guest.wParam = message == 0x0201 ? 1 : 0;
+    guest.lParam = uint32_t(uint16_t(clientX) | (uint32_t(uint16_t(clientY)) << 16));
+    guest.time = uint32_t(++tick_ * 16);
+    guest.x = uint32_t(clientX);
+    guest.y = uint32_t(clientY);
+    guestMessages_.push_back(guest);
+    spdlog::info("queued host mouse msg=0x{:04x} root=0x{:08x} hwnd=0x{:08x} point={},{} client={},{} queued={}",
+                 message, rootGuestHwnd, hwnd, hostX, hostY, clientX, clientY, guestMessages_.size());
 }
 
 uint32_t SyntheticDllRuntime::colorRefToPixel(uint32_t colorRef) const {
@@ -1856,6 +2141,111 @@ void SyntheticDllRuntime::drawFramebufferLine(const GuestDc& dc,
     invalidateHostWindows();
 }
 
+bool SyntheticDllRuntime::readBitmapPixel(const GuestBitmap& bitmap,
+                                          const std::vector<uint8_t>& bits,
+                                          int32_t height,
+                                          int32_t x,
+                                          int32_t y,
+                                          uint32_t& pixel) const {
+    if (x < 0 || x >= bitmap.width || y < 0 || y >= height || bitmap.stride == 0) return false;
+    const int32_t rowIndex = bitmap.heightRaw < 0 ? y : (height - 1 - y);
+    const uint8_t* row = bits.data() + size_t(rowIndex) * size_t(bitmap.stride);
+    if (bitmap.bpp == 32) {
+        const size_t o = size_t(x) * 4;
+        pixel = 0xff000000u | (uint32_t(row[o + 2]) << 16) | (uint32_t(row[o + 1]) << 8) | row[o];
+    } else if (bitmap.bpp == 24) {
+        const size_t o = size_t(x) * 3;
+        pixel = 0xff000000u | (uint32_t(row[o + 2]) << 16) | (uint32_t(row[o + 1]) << 8) | row[o];
+    } else if (bitmap.bpp == 16) {
+        const size_t o = size_t(x) * 2;
+        const uint16_t v = uint16_t(row[o] | (row[o + 1] << 8));
+        const uint8_t r = uint8_t(((v >> 11) & 0x1f) * 255 / 31);
+        const uint8_t g = uint8_t(((v >> 5) & 0x3f) * 255 / 63);
+        const uint8_t b = uint8_t((v & 0x1f) * 255 / 31);
+        pixel = 0xff000000u | (uint32_t(r) << 16) | (uint32_t(g) << 8) | b;
+    } else if (bitmap.bpp == 8 && !bitmap.palette.empty()) {
+        pixel = bitmap.palette[std::min<size_t>(row[x], bitmap.palette.size() - 1)];
+    } else if (bitmap.bpp == 4 && !bitmap.palette.empty()) {
+        const uint8_t packed = row[size_t(x) / 2];
+        const uint8_t index = uint8_t((x & 1) ? (packed & 0x0f) : (packed >> 4));
+        pixel = bitmap.palette[std::min<size_t>(index, bitmap.palette.size() - 1)];
+    } else if (bitmap.bpp == 1 && !bitmap.palette.empty()) {
+        const uint8_t packed = row[size_t(x) / 8];
+        const uint8_t index = uint8_t((packed >> (7 - (x & 7))) & 1);
+        pixel = bitmap.palette[std::min<size_t>(index, bitmap.palette.size() - 1)];
+    } else {
+        return false;
+    }
+    return true;
+}
+
+bool SyntheticDllRuntime::writeBitmapPixel(const GuestBitmap& bitmap,
+                                           std::vector<uint8_t>& bits,
+                                           int32_t height,
+                                           int32_t x,
+                                           int32_t y,
+                                           uint32_t pixel) const {
+    if (x < 0 || x >= bitmap.width || y < 0 || y >= height || bitmap.stride == 0) return false;
+    const int32_t rowIndex = bitmap.heightRaw < 0 ? y : (height - 1 - y);
+    uint8_t* row = bits.data() + size_t(rowIndex) * size_t(bitmap.stride);
+    const uint8_t r = uint8_t((pixel >> 16) & 0xff);
+    const uint8_t g = uint8_t((pixel >> 8) & 0xff);
+    const uint8_t b = uint8_t(pixel & 0xff);
+    if (bitmap.bpp == 32) {
+        const size_t o = size_t(x) * 4;
+        row[o + 0] = b;
+        row[o + 1] = g;
+        row[o + 2] = r;
+        row[o + 3] = 0xff;
+    } else if (bitmap.bpp == 24) {
+        const size_t o = size_t(x) * 3;
+        row[o + 0] = b;
+        row[o + 1] = g;
+        row[o + 2] = r;
+    } else if (bitmap.bpp == 16) {
+        const uint16_t v = uint16_t(((uint16_t(r) * 31 / 255) << 11) |
+                                    ((uint16_t(g) * 63 / 255) << 5) |
+                                    (uint16_t(b) * 31 / 255));
+        const size_t o = size_t(x) * 2;
+        row[o + 0] = uint8_t(v & 0xff);
+        row[o + 1] = uint8_t(v >> 8);
+    } else if ((bitmap.bpp == 8 || bitmap.bpp == 4 || bitmap.bpp == 1) && !bitmap.palette.empty()) {
+        uint32_t bestIndex = 0;
+        uint32_t bestDistance = UINT32_MAX;
+        const uint32_t maxColors = bitmap.bpp == 8 ? 256u : (bitmap.bpp == 4 ? 16u : 2u);
+        const uint32_t limit = std::min<uint32_t>(maxColors, uint32_t(bitmap.palette.size()));
+        for (uint32_t i = 0; i < limit; ++i) {
+            const uint32_t p = bitmap.palette[i];
+            const int32_t dr = int32_t((p >> 16) & 0xff) - int32_t(r);
+            const int32_t dg = int32_t((p >> 8) & 0xff) - int32_t(g);
+            const int32_t db = int32_t(p & 0xff) - int32_t(b);
+            const uint32_t distance = uint32_t(dr * dr + dg * dg + db * db);
+            if (distance < bestDistance) {
+                bestDistance = distance;
+                bestIndex = i;
+                if (!distance) break;
+            }
+        }
+        if (bitmap.bpp == 8) {
+            row[x] = uint8_t(bestIndex);
+        } else if (bitmap.bpp == 4) {
+            uint8_t& packed = row[size_t(x) / 2];
+            if (x & 1) {
+                packed = uint8_t((packed & 0xf0) | (bestIndex & 0x0f));
+            } else {
+                packed = uint8_t((packed & 0x0f) | ((bestIndex & 0x0f) << 4));
+            }
+        } else {
+            uint8_t& packed = row[size_t(x) / 8];
+            const uint8_t mask = uint8_t(1u << (7 - (x & 7)));
+            packed = bestIndex ? uint8_t(packed | mask) : uint8_t(packed & ~mask);
+        }
+    } else {
+        return false;
+    }
+    return true;
+}
+
 bool SyntheticDllRuntime::stretchDibToFramebuffer(const GuestDc& dc,
                                                   int32_t dstX,
                                                   int32_t dstY,
@@ -1941,7 +2331,15 @@ bool SyntheticDllRuntime::stretchDibToFramebuffer(const GuestDc& dc,
                 const uint8_t b = uint8_t((v & 0x1f) * 255 / 31);
                 pixel = 0xff000000u | (uint32_t(r) << 16) | (uint32_t(g) << 8) | b;
             } else if (bpp == 8 && !palette.empty()) {
-                pixel = palette[p[sx]];
+                pixel = palette[std::min<size_t>(p[sx], palette.size() - 1)];
+            } else if (bpp == 4 && !palette.empty()) {
+                const uint8_t packed = p[size_t(sx) / 2];
+                const uint8_t index = uint8_t((sx & 1) ? (packed & 0x0f) : (packed >> 4));
+                pixel = palette[std::min<size_t>(index, palette.size() - 1)];
+            } else if (bpp == 1 && !palette.empty()) {
+                const uint8_t packed = p[size_t(sx) / 8];
+                const uint8_t index = uint8_t((packed >> (7 - (sx & 7))) & 1);
+                pixel = palette[std::min<size_t>(index, palette.size() - 1)];
             } else {
                 return false;
             }
@@ -1950,6 +2348,192 @@ bool SyntheticDllRuntime::stretchDibToFramebuffer(const GuestDc& dc,
     }
     invalidateHostWindows();
     return true;
+}
+
+bool SyntheticDllRuntime::stretchDibToBitmap(const GuestBitmap& dstBitmap,
+                                             int32_t dstX,
+                                             int32_t dstY,
+                                             int32_t dstW,
+                                             int32_t dstH,
+                                             int32_t srcX,
+                                             int32_t srcY,
+                                             int32_t srcW,
+                                             int32_t srcH,
+                                             uint32_t bitsPtr,
+                                             uint32_t infoPtr) {
+    if (!dstBitmap.bits || dstBitmap.width <= 0 || dstBitmap.heightRaw == 0 || dstBitmap.stride == 0 ||
+        !bitsPtr || !infoPtr || dstW == 0 || dstH == 0 || srcW == 0 || srcH == 0) {
+        return false;
+    }
+
+    std::array<uint8_t, 40> header{};
+    if (uc_mem_read(uc_, infoPtr, header.data(), header.size()) != UC_ERR_OK) return false;
+    const uint32_t headerSize = uint32_t(header[0]) | (uint32_t(header[1]) << 8) |
+                                (uint32_t(header[2]) << 16) | (uint32_t(header[3]) << 24);
+    const int32_t dibWidth = int32_t(uint32_t(header[4]) | (uint32_t(header[5]) << 8) |
+                                    (uint32_t(header[6]) << 16) | (uint32_t(header[7]) << 24));
+    const int32_t dibHeightRaw = int32_t(uint32_t(header[8]) | (uint32_t(header[9]) << 8) |
+                                        (uint32_t(header[10]) << 16) | (uint32_t(header[11]) << 24));
+    const uint16_t planes = uint16_t(header[12] | (header[13] << 8));
+    const uint16_t bpp = uint16_t(header[14] | (header[15] << 8));
+    const uint32_t compression = uint32_t(header[16]) | (uint32_t(header[17]) << 8) |
+                                 (uint32_t(header[18]) << 16) | (uint32_t(header[19]) << 24);
+    const uint32_t clrUsed = uint32_t(header[32]) | (uint32_t(header[33]) << 8) |
+                             (uint32_t(header[34]) << 16) | (uint32_t(header[35]) << 24);
+    if (headerSize < 40 || planes != 1 || compression != 0 || dibWidth <= 0 || dibHeightRaw == 0) return false;
+
+    const int32_t dibHeight = std::abs(dibHeightRaw);
+    const bool topDown = dibHeightRaw < 0;
+    const uint32_t paletteEntries = bpp <= 8 ? (clrUsed ? clrUsed : (1u << bpp)) : 0;
+    std::vector<uint32_t> palette(paletteEntries);
+    if (paletteEntries) {
+        std::vector<uint8_t> rawPalette(size_t(paletteEntries) * 4);
+        if (uc_mem_read(uc_, infoPtr + headerSize, rawPalette.data(), rawPalette.size()) != UC_ERR_OK) return false;
+        for (uint32_t i = 0; i < paletteEntries; ++i) {
+            const uint8_t b = rawPalette[size_t(i) * 4 + 0];
+            const uint8_t g = rawPalette[size_t(i) * 4 + 1];
+            const uint8_t r = rawPalette[size_t(i) * 4 + 2];
+            palette[i] = 0xff000000u | (uint32_t(r) << 16) | (uint32_t(g) << 8) | uint32_t(b);
+        }
+    }
+
+    const uint32_t srcStride = ((uint32_t(dibWidth) * uint32_t(bpp) + 31u) / 32u) * 4u;
+    const int32_t dstHeight = std::abs(dstBitmap.heightRaw);
+    const uint64_t srcBytes = uint64_t(srcStride) * uint64_t(dibHeight);
+    const uint64_t dstBytes = uint64_t(dstBitmap.stride) * uint64_t(dstHeight);
+    if (!srcStride || !srcBytes || !dstBytes || srcBytes > 0x2000000ull || dstBytes > 0x2000000ull) return false;
+
+    std::vector<uint8_t> srcBits(static_cast<size_t>(srcBytes));
+    std::vector<uint8_t> dstBits(static_cast<size_t>(dstBytes));
+    if (uc_mem_read(uc_, bitsPtr, srcBits.data(), srcBits.size()) != UC_ERR_OK ||
+        uc_mem_read(uc_, dstBitmap.bits, dstBits.data(), dstBits.size()) != UC_ERR_OK) {
+        return false;
+    }
+
+    auto readDibPixel = [&](int32_t x, int32_t y, uint32_t& pixel) -> bool {
+        if (x < 0 || x >= dibWidth || y < 0 || y >= dibHeight) return false;
+        const int32_t rowIndex = topDown ? y : (dibHeight - 1 - y);
+        const uint8_t* row = srcBits.data() + size_t(rowIndex) * size_t(srcStride);
+        if (bpp == 32) {
+            const size_t o = size_t(x) * 4;
+            pixel = 0xff000000u | (uint32_t(row[o + 2]) << 16) | (uint32_t(row[o + 1]) << 8) | row[o];
+        } else if (bpp == 24) {
+            const size_t o = size_t(x) * 3;
+            pixel = 0xff000000u | (uint32_t(row[o + 2]) << 16) | (uint32_t(row[o + 1]) << 8) | row[o];
+        } else if (bpp == 16) {
+            const size_t o = size_t(x) * 2;
+            const uint16_t v = uint16_t(row[o] | (row[o + 1] << 8));
+            const uint8_t r = uint8_t(((v >> 11) & 0x1f) * 255 / 31);
+            const uint8_t g = uint8_t(((v >> 5) & 0x3f) * 255 / 63);
+            const uint8_t b = uint8_t((v & 0x1f) * 255 / 31);
+            pixel = 0xff000000u | (uint32_t(r) << 16) | (uint32_t(g) << 8) | b;
+        } else if (bpp == 8 && !palette.empty()) {
+            pixel = palette[std::min<size_t>(row[x], palette.size() - 1)];
+        } else if (bpp == 4 && !palette.empty()) {
+            const uint8_t packed = row[size_t(x) / 2];
+            const uint8_t index = uint8_t((x & 1) ? (packed & 0x0f) : (packed >> 4));
+            pixel = palette[std::min<size_t>(index, palette.size() - 1)];
+        } else if (bpp == 1 && !palette.empty()) {
+            const uint8_t packed = row[size_t(x) / 8];
+            const uint8_t index = uint8_t((packed >> (7 - (x & 7))) & 1);
+            pixel = palette[std::min<size_t>(index, palette.size() - 1)];
+        } else {
+            return false;
+        }
+        return true;
+    };
+
+    auto writeDestPixel = [&](int32_t x, int32_t y, uint32_t pixel) -> bool {
+        if (x < 0 || x >= dstBitmap.width || y < 0 || y >= dstHeight) return false;
+        const int32_t rowIndex = dstBitmap.heightRaw < 0 ? y : (dstHeight - 1 - y);
+        uint8_t* row = dstBits.data() + size_t(rowIndex) * size_t(dstBitmap.stride);
+        const uint8_t r = uint8_t((pixel >> 16) & 0xff);
+        const uint8_t g = uint8_t((pixel >> 8) & 0xff);
+        const uint8_t b = uint8_t(pixel & 0xff);
+        if (dstBitmap.bpp == 32) {
+            const size_t o = size_t(x) * 4;
+            row[o + 0] = b;
+            row[o + 1] = g;
+            row[o + 2] = r;
+            row[o + 3] = 0xff;
+        } else if (dstBitmap.bpp == 24) {
+            const size_t o = size_t(x) * 3;
+            row[o + 0] = b;
+            row[o + 1] = g;
+            row[o + 2] = r;
+        } else if (dstBitmap.bpp == 16) {
+            const uint16_t v = uint16_t(((uint16_t(r) * 31 / 255) << 11) |
+                                        ((uint16_t(g) * 63 / 255) << 5) |
+                                        (uint16_t(b) * 31 / 255));
+            const size_t o = size_t(x) * 2;
+            row[o + 0] = uint8_t(v & 0xff);
+            row[o + 1] = uint8_t(v >> 8);
+        } else if (dstBitmap.bpp == 8 && !dstBitmap.palette.empty()) {
+            uint32_t bestIndex = 0;
+            uint32_t bestDistance = UINT32_MAX;
+            for (uint32_t i = 0; i < dstBitmap.palette.size(); ++i) {
+                const uint32_t p = dstBitmap.palette[i];
+                const int32_t dr = int32_t((p >> 16) & 0xff) - int32_t(r);
+                const int32_t dg = int32_t((p >> 8) & 0xff) - int32_t(g);
+                const int32_t db = int32_t(p & 0xff) - int32_t(b);
+                const uint32_t distance = uint32_t(dr * dr + dg * dg + db * db);
+                if (distance < bestDistance) {
+                    bestDistance = distance;
+                    bestIndex = i;
+                    if (!distance) break;
+                }
+            }
+            row[x] = uint8_t(bestIndex);
+        } else if ((dstBitmap.bpp == 4 || dstBitmap.bpp == 1) && !dstBitmap.palette.empty()) {
+            uint32_t bestIndex = 0;
+            uint32_t bestDistance = UINT32_MAX;
+            const uint32_t maxColors = dstBitmap.bpp == 4 ? 16u : 2u;
+            const uint32_t limit = std::min<uint32_t>(maxColors, uint32_t(dstBitmap.palette.size()));
+            for (uint32_t i = 0; i < limit; ++i) {
+                const uint32_t p = dstBitmap.palette[i];
+                const int32_t dr = int32_t((p >> 16) & 0xff) - int32_t(r);
+                const int32_t dg = int32_t((p >> 8) & 0xff) - int32_t(g);
+                const int32_t db = int32_t(p & 0xff) - int32_t(b);
+                const uint32_t distance = uint32_t(dr * dr + dg * dg + db * db);
+                if (distance < bestDistance) {
+                    bestDistance = distance;
+                    bestIndex = i;
+                    if (!distance) break;
+                }
+            }
+            if (dstBitmap.bpp == 4) {
+                uint8_t& packed = row[size_t(x) / 2];
+                if (x & 1) {
+                    packed = uint8_t((packed & 0xf0) | (bestIndex & 0x0f));
+                } else {
+                    packed = uint8_t((packed & 0x0f) | ((bestIndex & 0x0f) << 4));
+                }
+            } else {
+                uint8_t& packed = row[size_t(x) / 8];
+                const uint8_t mask = uint8_t(1u << (7 - (x & 7)));
+                packed = bestIndex ? uint8_t(packed | mask) : uint8_t(packed & ~mask);
+            }
+        } else {
+            return false;
+        }
+        return true;
+    };
+
+    const int32_t outW = std::abs(dstW);
+    const int32_t outH = std::abs(dstH);
+    const int32_t outLeft = dstW < 0 ? dstX + dstW : dstX;
+    const int32_t outTop = dstH < 0 ? dstY + dstH : dstY;
+    for (int32_t y = 0; y < outH; ++y) {
+        const int32_t sy = srcY + (int64_t(y) * srcH) / outH;
+        for (int32_t x = 0; x < outW; ++x) {
+            const int32_t sx = srcX + (int64_t(x) * srcW) / outW;
+            uint32_t pixel = 0;
+            if (readDibPixel(sx, sy, pixel)) {
+                writeDestPixel(outLeft + x, outTop + y, pixel);
+            }
+        }
+    }
+    return uc_mem_write(uc_, dstBitmap.bits, dstBits.data(), dstBits.size()) == UC_ERR_OK;
 }
 
 bool SyntheticDllRuntime::bitBltToFramebuffer(const GuestDc& dstDc,
@@ -1961,11 +2545,13 @@ bool SyntheticDllRuntime::bitBltToFramebuffer(const GuestDc& dstDc,
                                               int32_t srcX,
                                               int32_t srcY,
                                               int32_t srcW,
-                                              int32_t srcH) {
+                                              int32_t srcH,
+                                              uint32_t rop) {
     if (!framebuffer_ || !bitmap.bits || bitmap.width <= 0 || bitmap.heightRaw == 0 ||
         bitmap.stride == 0 || dstW == 0 || dstH == 0 || srcW == 0 || srcH == 0) {
         return false;
     }
+    if (!supportedSourceRasterOp(rop)) return false;
     const int32_t bitmapHeight = std::abs(bitmap.heightRaw);
     const bool topDown = bitmap.heightRaw < 0;
     const int32_t outW = std::abs(dstW);
@@ -2020,10 +2606,19 @@ bool SyntheticDllRuntime::bitBltToFramebuffer(const GuestDc& dstDc,
                 pixel = 0xff000000u | (uint32_t(r) << 16) | (uint32_t(g) << 8) | b;
             } else if (bitmap.bpp == 8 && !bitmap.palette.empty()) {
                 pixel = bitmap.palette[row[sx]];
+            } else if (bitmap.bpp == 4 && !bitmap.palette.empty()) {
+                const uint8_t packed = row[size_t(sx) / 2];
+                const uint8_t index = uint8_t((sx & 1) ? (packed & 0x0f) : (packed >> 4));
+                pixel = bitmap.palette[std::min<size_t>(index, bitmap.palette.size() - 1)];
+            } else if (bitmap.bpp == 1 && !bitmap.palette.empty()) {
+                const uint8_t packed = row[size_t(sx) / 8];
+                const uint8_t index = uint8_t((packed >> (7 - (sx & 7))) & 1);
+                pixel = bitmap.palette[std::min<size_t>(index, bitmap.palette.size() - 1)];
             } else {
                 return false;
             }
-            framebuffer_[size_t(dstPy) * size_t(framebufferWidth_) + size_t(dstPx)] = pixel;
+            uint32_t& dstPixel = framebuffer_[size_t(dstPy) * size_t(framebufferWidth_) + size_t(dstPx)];
+            dstPixel = applySourceRasterOp(rop, pixel, dstPixel);
         }
     }
     invalidateHostWindows();
@@ -2039,12 +2634,14 @@ bool SyntheticDllRuntime::bitBltToBitmap(const GuestBitmap& dstBitmap,
                                          int32_t srcX,
                                          int32_t srcY,
                                          int32_t srcW,
-                                         int32_t srcH) {
+                                         int32_t srcH,
+                                         uint32_t rop) {
     if (!dstBitmap.bits || !srcBitmap.bits || dstBitmap.width <= 0 || srcBitmap.width <= 0 ||
         dstBitmap.heightRaw == 0 || srcBitmap.heightRaw == 0 || dstBitmap.stride == 0 ||
         srcBitmap.stride == 0 || dstW == 0 || dstH == 0 || srcW == 0 || srcH == 0) {
         return false;
     }
+    if (!supportedSourceRasterOp(rop)) return false;
     const int32_t dstHeight = std::abs(dstBitmap.heightRaw);
     const int32_t srcHeight = std::abs(srcBitmap.heightRaw);
     const uint64_t dstBytes = uint64_t(dstBitmap.stride) * uint64_t(dstHeight);
@@ -2058,25 +2655,34 @@ bool SyntheticDllRuntime::bitBltToBitmap(const GuestBitmap& dstBitmap,
         return false;
     }
 
-    auto readSourcePixel = [&](int32_t x, int32_t y, uint32_t& pixel) -> bool {
-        if (x < 0 || x >= srcBitmap.width || y < 0 || y >= srcHeight) return false;
-        const int32_t rowIndex = srcBitmap.heightRaw < 0 ? y : (srcHeight - 1 - y);
-        const uint8_t* row = srcBits.data() + size_t(rowIndex) * size_t(srcBitmap.stride);
-        if (srcBitmap.bpp == 32) {
+    auto readBitmapPixel = [](const GuestBitmap& bitmap, const std::vector<uint8_t>& bits,
+                              int32_t height, int32_t x, int32_t y, uint32_t& pixel) -> bool {
+        if (x < 0 || x >= bitmap.width || y < 0 || y >= height) return false;
+        const int32_t rowIndex = bitmap.heightRaw < 0 ? y : (height - 1 - y);
+        const uint8_t* row = bits.data() + size_t(rowIndex) * size_t(bitmap.stride);
+        if (bitmap.bpp == 32) {
             const size_t o = size_t(x) * 4;
             pixel = 0xff000000u | (uint32_t(row[o + 2]) << 16) | (uint32_t(row[o + 1]) << 8) | row[o];
-        } else if (srcBitmap.bpp == 24) {
+        } else if (bitmap.bpp == 24) {
             const size_t o = size_t(x) * 3;
             pixel = 0xff000000u | (uint32_t(row[o + 2]) << 16) | (uint32_t(row[o + 1]) << 8) | row[o];
-        } else if (srcBitmap.bpp == 16) {
+        } else if (bitmap.bpp == 16) {
             const size_t o = size_t(x) * 2;
             const uint16_t v = uint16_t(row[o] | (row[o + 1] << 8));
             const uint8_t r = uint8_t(((v >> 11) & 0x1f) * 255 / 31);
             const uint8_t g = uint8_t(((v >> 5) & 0x3f) * 255 / 63);
             const uint8_t b = uint8_t((v & 0x1f) * 255 / 31);
             pixel = 0xff000000u | (uint32_t(r) << 16) | (uint32_t(g) << 8) | b;
-        } else if (srcBitmap.bpp == 8 && !srcBitmap.palette.empty()) {
-            pixel = srcBitmap.palette[row[x]];
+        } else if (bitmap.bpp == 8 && !bitmap.palette.empty()) {
+            pixel = bitmap.palette[row[x]];
+        } else if (bitmap.bpp == 4 && !bitmap.palette.empty()) {
+            const uint8_t packed = row[size_t(x) / 2];
+            const uint8_t index = uint8_t((x & 1) ? (packed & 0x0f) : (packed >> 4));
+            pixel = bitmap.palette[std::min<size_t>(index, bitmap.palette.size() - 1)];
+        } else if (bitmap.bpp == 1 && !bitmap.palette.empty()) {
+            const uint8_t packed = row[size_t(x) / 8];
+            const uint8_t index = uint8_t((packed >> (7 - (x & 7))) & 1);
+            pixel = bitmap.palette[std::min<size_t>(index, bitmap.palette.size() - 1)];
         } else {
             return false;
         }
@@ -2124,6 +2730,35 @@ bool SyntheticDllRuntime::bitBltToBitmap(const GuestBitmap& dstBitmap,
                 }
             }
             row[x] = uint8_t(bestIndex);
+        } else if ((dstBitmap.bpp == 4 || dstBitmap.bpp == 1) && !dstBitmap.palette.empty()) {
+            uint32_t bestIndex = 0;
+            uint32_t bestDistance = UINT32_MAX;
+            const uint32_t maxColors = dstBitmap.bpp == 4 ? 16u : 2u;
+            const uint32_t limit = std::min<uint32_t>(maxColors, uint32_t(dstBitmap.palette.size()));
+            for (uint32_t i = 0; i < limit; ++i) {
+                const uint32_t p = dstBitmap.palette[i];
+                const int32_t dr = int32_t((p >> 16) & 0xff) - int32_t(r);
+                const int32_t dg = int32_t((p >> 8) & 0xff) - int32_t(g);
+                const int32_t db = int32_t(p & 0xff) - int32_t(b);
+                const uint32_t distance = uint32_t(dr * dr + dg * dg + db * db);
+                if (distance < bestDistance) {
+                    bestDistance = distance;
+                    bestIndex = i;
+                    if (!distance) break;
+                }
+            }
+            if (dstBitmap.bpp == 4) {
+                uint8_t& packed = row[size_t(x) / 2];
+                if (x & 1) {
+                    packed = uint8_t((packed & 0xf0) | (bestIndex & 0x0f));
+                } else {
+                    packed = uint8_t((packed & 0x0f) | ((bestIndex & 0x0f) << 4));
+                }
+            } else {
+                uint8_t& packed = row[size_t(x) / 8];
+                const uint8_t mask = uint8_t(1u << (7 - (x & 7)));
+                packed = bestIndex ? uint8_t(packed | mask) : uint8_t(packed & ~mask);
+            }
         } else {
             return false;
         }
@@ -2139,7 +2774,118 @@ bool SyntheticDllRuntime::bitBltToBitmap(const GuestBitmap& dstBitmap,
         for (int32_t x = 0; x < outW; ++x) {
             const int32_t sx = srcX + (int64_t(x) * srcW) / outW;
             uint32_t pixel = 0;
-            if (readSourcePixel(sx, sy, pixel)) writeDestPixel(outLeft + x, outTop + y, pixel);
+            uint32_t dstPixel = 0;
+            const int32_t dx = outLeft + x;
+            const int32_t dy = outTop + y;
+            if (readBitmapPixel(srcBitmap, srcBits, srcHeight, sx, sy, pixel) &&
+                readBitmapPixel(dstBitmap, dstBits, dstHeight, dx, dy, dstPixel)) {
+                writeDestPixel(dx, dy, applySourceRasterOp(rop, pixel, dstPixel));
+            }
+        }
+    }
+    return uc_mem_write(uc_, dstBitmap.bits, dstBits.data(), dstBits.size()) == UC_ERR_OK;
+}
+
+bool SyntheticDllRuntime::transparentImageToFramebuffer(const GuestDc& dstDc,
+                                                        const GuestBitmap& srcBitmap,
+                                                        int32_t dstX,
+                                                        int32_t dstY,
+                                                        int32_t dstW,
+                                                        int32_t dstH,
+                                                        int32_t srcX,
+                                                        int32_t srcY,
+                                                        int32_t srcW,
+                                                        int32_t srcH,
+                                                        uint32_t transparentColor) {
+    if (!framebuffer_ || !srcBitmap.bits || srcBitmap.width <= 0 || srcBitmap.heightRaw == 0 ||
+        srcBitmap.stride == 0 || dstW == 0 || dstH == 0 || srcW == 0 || srcH == 0) {
+        return false;
+    }
+    const int32_t srcHeight = std::abs(srcBitmap.heightRaw);
+    const uint64_t srcBytes = uint64_t(srcBitmap.stride) * uint64_t(srcHeight);
+    if (!srcBytes || srcBytes > 0x2000000ull) return false;
+
+    std::vector<uint8_t> srcBits(static_cast<size_t>(srcBytes));
+    if (uc_mem_read(uc_, srcBitmap.bits, srcBits.data(), srcBits.size()) != UC_ERR_OK) return false;
+
+    int32_t originX = 0;
+    int32_t originY = 0;
+    auto window = windows_.find(dstDc.hwnd);
+    if (window != windows_.end()) {
+        originX = window->second.x;
+        originY = window->second.y;
+    }
+
+    const uint32_t transparentPixel = colorRefToPixel(transparentColor) & 0x00ffffffu;
+    const int32_t outW = std::abs(dstW);
+    const int32_t outH = std::abs(dstH);
+    int32_t outLeft = dstW < 0 ? dstX + dstW : dstX;
+    int32_t outTop = dstH < 0 ? dstY + dstH : dstY;
+    outLeft += originX;
+    outTop += originY;
+
+    for (int32_t y = 0; y < outH; ++y) {
+        const int32_t dstPy = outTop + y;
+        if (dstPy < 0 || dstPy >= framebufferHeight_) continue;
+        const int32_t sy = srcY + (int64_t(y) * srcH) / outH;
+        for (int32_t x = 0; x < outW; ++x) {
+            const int32_t dstPx = outLeft + x;
+            if (dstPx < 0 || dstPx >= framebufferWidth_) continue;
+            const int32_t sx = srcX + (int64_t(x) * srcW) / outW;
+            uint32_t pixel = 0;
+            if (readBitmapPixel(srcBitmap, srcBits, srcHeight, sx, sy, pixel) &&
+                ((pixel & 0x00ffffffu) != transparentPixel)) {
+                framebuffer_[size_t(dstPy) * size_t(framebufferWidth_) + size_t(dstPx)] = pixel;
+            }
+        }
+    }
+    invalidateHostWindows();
+    return true;
+}
+
+bool SyntheticDllRuntime::transparentImageToBitmap(const GuestBitmap& dstBitmap,
+                                                   const GuestBitmap& srcBitmap,
+                                                   int32_t dstX,
+                                                   int32_t dstY,
+                                                   int32_t dstW,
+                                                   int32_t dstH,
+                                                   int32_t srcX,
+                                                   int32_t srcY,
+                                                   int32_t srcW,
+                                                   int32_t srcH,
+                                                   uint32_t transparentColor) {
+    if (!dstBitmap.bits || !srcBitmap.bits || dstBitmap.width <= 0 || srcBitmap.width <= 0 ||
+        dstBitmap.heightRaw == 0 || srcBitmap.heightRaw == 0 || dstBitmap.stride == 0 ||
+        srcBitmap.stride == 0 || dstW == 0 || dstH == 0 || srcW == 0 || srcH == 0) {
+        return false;
+    }
+    const int32_t dstHeight = std::abs(dstBitmap.heightRaw);
+    const int32_t srcHeight = std::abs(srcBitmap.heightRaw);
+    const uint64_t dstBytes = uint64_t(dstBitmap.stride) * uint64_t(dstHeight);
+    const uint64_t srcBytes = uint64_t(srcBitmap.stride) * uint64_t(srcHeight);
+    if (!dstBytes || !srcBytes || dstBytes > 0x2000000ull || srcBytes > 0x2000000ull) return false;
+
+    std::vector<uint8_t> dstBits(static_cast<size_t>(dstBytes));
+    std::vector<uint8_t> srcBits(static_cast<size_t>(srcBytes));
+    if (uc_mem_read(uc_, dstBitmap.bits, dstBits.data(), dstBits.size()) != UC_ERR_OK ||
+        uc_mem_read(uc_, srcBitmap.bits, srcBits.data(), srcBits.size()) != UC_ERR_OK) {
+        return false;
+    }
+
+    const uint32_t transparentPixel = colorRefToPixel(transparentColor) & 0x00ffffffu;
+    const int32_t outW = std::abs(dstW);
+    const int32_t outH = std::abs(dstH);
+    const int32_t outLeft = dstW < 0 ? dstX + dstW : dstX;
+    const int32_t outTop = dstH < 0 ? dstY + dstH : dstY;
+    for (int32_t y = 0; y < outH; ++y) {
+        const int32_t sy = srcY + (int64_t(y) * srcH) / outH;
+        for (int32_t x = 0; x < outW; ++x) {
+            const int32_t sx = srcX + (int64_t(x) * srcW) / outW;
+            uint32_t pixel = 0;
+            if (readBitmapPixel(srcBitmap, srcBits, srcHeight, sx, sy, pixel) &&
+                ((pixel & 0x00ffffffu) != transparentPixel)) {
+                writeBitmapPixel(dstBitmap, dstBits, dstHeight, outLeft + x, outTop + y, pixel);
+            }
         }
     }
     return uc_mem_write(uc_, dstBitmap.bits, dstBits.data(), dstBits.size()) == UC_ERR_OK;
@@ -4253,9 +4999,156 @@ bool SyntheticDllRuntime::dispatchRegistryApi(const std::string& name,
     return true;
 }
 
+bool SyntheticDllRuntime::dispatchSimpleHostWin32(const std::string& name,
+                                                  const GuestCallArgs& args,
+                                                  uint32_t& ret) {
+    const uint32_t a0 = args.a0;
+    const uint32_t a1 = args.a1;
+    const uint32_t a2 = args.a2;
+
+    if (name == "ResumeThread") {
+        auto* handle = lookupGuestHandle(a0);
+        ret = handle && handle->kind == GuestHandle::Kind::GuestThread ? 1 : 0xffffffffu;
+        lastError_ = ret == 0xffffffffu ? 6 : 0;
+    } else if (name == "GetCommState" || name == "SetCommState" || name == "SetCommTimeouts" ||
+               name == "SetCommMask" || name == "SetupComm" || name == "PurgeComm" ||
+               name == "ClearCommError") {
+        auto* handle = lookupGuestHandle(a0);
+        if (!handle || (handle->kind != GuestHandle::Kind::GuestSerialDevice &&
+                        handle->kind != GuestHandle::Kind::HostSerialDevice)) {
+            lastError_ = 6;
+            ret = 0;
+        } else if (handle->kind == GuestHandle::Kind::GuestSerialDevice) {
+            auto debugName = fileHandleDebugNames_.find(a0);
+            const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+            lastError_ = 120;
+            ret = 0;
+            spdlog::info("{} guest device handle=0x{:08x} name=\"{}\" has no host serial bridge yet -> 0",
+                         name, a0, debugPath);
+        } else {
+#if defined(_WIN32)
+            HANDLE host = reinterpret_cast<HANDLE>(handle->hostValue);
+            BOOL ok = FALSE;
+            if (name == "GetCommState") {
+                DCB dcb{};
+                dcb.DCBlength = sizeof(dcb);
+                ok = GetCommState(host, &dcb);
+                if (ok && a1) {
+                    uint32_t guestLength = readU32(a1);
+                    if (!guestLength || guestLength > sizeof(dcb)) guestLength = sizeof(dcb);
+                    uc_mem_write(uc_, a1, &dcb, guestLength);
+                    writeU32(a1, guestLength);
+                }
+            } else if (name == "SetCommState") {
+                DCB dcb{};
+                dcb.DCBlength = sizeof(dcb);
+                GetCommState(host, &dcb);
+                if (a1) {
+                    uint32_t guestLength = readU32(a1);
+                    if (!guestLength || guestLength > sizeof(dcb)) guestLength = sizeof(dcb);
+                    uc_mem_read(uc_, a1, &dcb, guestLength);
+                    dcb.DCBlength = sizeof(dcb);
+                    ok = SetCommState(host, &dcb);
+                }
+            } else if (name == "SetCommTimeouts") {
+                COMMTIMEOUTS timeouts{};
+                if (a1 && uc_mem_read(uc_, a1, &timeouts, sizeof(timeouts)) == UC_ERR_OK) {
+                    ok = SetCommTimeouts(host, &timeouts);
+                }
+            } else if (name == "SetCommMask") {
+                ok = SetCommMask(host, a1);
+            } else if (name == "SetupComm") {
+                ok = SetupComm(host, a1, a2);
+            } else if (name == "PurgeComm") {
+                ok = PurgeComm(host, a1);
+            } else if (name == "ClearCommError") {
+                DWORD errors = 0;
+                COMSTAT stat{};
+                ok = ClearCommError(host, &errors, &stat);
+                if (ok && a1) writeU32(a1, errors);
+                if (ok && a2) uc_mem_write(uc_, a2, &stat, sizeof(stat));
+            }
+            ret = ok ? 1 : 0;
+            lastError_ = ok ? 0 : GetLastError();
+#else
+            ret = 0;
+            lastError_ = 6;
+#endif
+        }
+    } else if (name == "SetTimer") {
+        if (a0 && !windows_.count(a0)) {
+            lastError_ = 1400;
+            ret = 0;
+        } else {
+            const uint32_t timerId = a1 ? a1 : uint32_t(++tick_);
+            const uint32_t interval = std::max<uint32_t>(1, a2);
+            timers_[guestTimerKey(a0, timerId)] = GuestTimer{
+                a0, timerId, interval, args.a3, hostTickMilliseconds() + interval,
+            };
+            lastError_ = 0;
+            ret = timerId;
+        }
+    } else if (name == "GetWindowTextLengthW") {
+        auto it = windows_.find(a0);
+        ret = it == windows_.end() ? 0 : uint32_t(it->second.title.size());
+        lastError_ = it == windows_.end() ? 1400 : 0;
+    } else if (name == "GetWindowTextW") {
+        auto it = windows_.find(a0);
+        if (it == windows_.end()) {
+            lastError_ = 1400;
+            ret = 0;
+        } else if (!a1 || !a2) {
+            lastError_ = 0;
+            ret = 0;
+        } else {
+            ret = writeUtf16(a1, it->second.title, a2);
+            lastError_ = 0;
+        }
+    } else if (name == "SetFocus") {
+        if (!a0 || windows_.count(a0)) {
+            ret = focusedWindow_;
+            focusedWindow_ = a0;
+            if (a0) guestMessages_.push_back({a0, 0x0007, 0, 0, uint32_t(++tick_ * 16), 0, 0});
+            lastError_ = 0;
+        } else {
+            lastError_ = 1400;
+            ret = 0;
+        }
+    } else if (name == "SetCapture") {
+        if (!a0 || windows_.count(a0)) {
+            ret = capturedWindow_;
+            capturedWindow_ = a0;
+            lastError_ = 0;
+        } else {
+            lastError_ = 1400;
+            ret = 0;
+        }
+    } else if (name == "GetCapture") {
+        ret = capturedWindow_;
+        lastError_ = 0;
+    } else if (name == "ReleaseCapture") {
+        ret = capturedWindow_ ? 1 : 0;
+        capturedWindow_ = 0;
+        lastError_ = 0;
+    } else if (name == "EnableWindow") {
+        if (windows_.count(a0)) {
+            lastError_ = 0;
+            ret = 1;
+        } else {
+            lastError_ = 1400;
+            ret = 0;
+        }
+    } else {
+        return false;
+    }
+    return true;
+}
+
 bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
                                             const GuestCallArgs& args,
                                             uint32_t& ret) {
+    if (dispatchSimpleHostWin32(name, args, ret)) return true;
+
     const uint32_t a0 = args.a0;
     const uint32_t a1 = args.a1;
     const uint32_t a2 = args.a2;
@@ -4686,19 +5579,11 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
         auto* handle = lookupGuestHandle(a0);
         ret = handle && handle->kind == GuestHandle::Kind::GuestThread ? 251 : 0xffffffffu;
         lastError_ = ret == 0xffffffffu ? 6 : 0;
-    } else if (name == "ResumeThread") {
-        auto* handle = lookupGuestHandle(a0);
-        ret = handle && handle->kind == GuestHandle::Kind::GuestThread ? 1 : 0xffffffffu;
-        lastError_ = ret == 0xffffffffu ? 6 : 0;
     } else if (name == "CreateFileW") {
 #if defined(_WIN32)
         const std::string guestPath = readUtf16(a0);
         if (isGuestDevicePath(guestPath)) {
-            ret = makeGuestHandle({GuestHandle::Kind::GuestSerialDevice, 0, 0});
-            fileHandleDebugNames_[ret] = guestPath;
-            lastError_ = 0;
-            spdlog::info("CreateFileW guest device=\"{}\" guestHandle=0x{:08x} access=0x{:08x} share=0x{:08x}",
-                         guestPath, ret, a1, a2);
+            ret = openGuestSerialDevice(guestPath, a1, a2);
         } else {
             const std::filesystem::path hostPath = resolveGuestPath(guestPath);
             HANDLE host = INVALID_HANDLE_VALUE;
@@ -4722,26 +5607,6 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
         lastError_ = 2;
         ret = 0xffffffffu;
 #endif
-    } else if (name == "GetCommState" || name == "SetCommState" || name == "SetCommTimeouts" ||
-               name == "SetCommMask" || name == "SetupComm" || name == "PurgeComm" ||
-               name == "ClearCommError") {
-        auto* handle = lookupGuestHandle(a0);
-        if (!handle || handle->kind != GuestHandle::Kind::GuestSerialDevice) {
-            lastError_ = 6;
-            ret = 0;
-        } else {
-            if (name == "GetCommState" && a1) {
-                uint32_t length = readU32(a1);
-                if (!length || length > 256) length = 64;
-                fillGuest(a1, 0, length);
-                writeU32(a1, length);
-            } else if (name == "ClearCommError") {
-                if (a1) writeU32(a1, 0);
-                if (a2) fillGuest(a2, 0, 12);
-            }
-            lastError_ = 0;
-            ret = 1;
-        }
     } else if (name == "CreateDirectoryW") {
 #if defined(_WIN32)
         const std::string guestPath = readUtf16(a0);
@@ -4875,7 +5740,9 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
             spdlog::info("{} guest device handle=0x{:08x} name=\"{}\" requested={} transferred=0",
                          name, a0, debugPath, a2);
-        } else if (!handle || handle->kind != GuestHandle::Kind::HostFile || !handle->hostValue) {
+        } else if (!handle || (handle->kind != GuestHandle::Kind::HostFile &&
+                               handle->kind != GuestHandle::Kind::HostSerialDevice) ||
+                   !handle->hostValue) {
             lastError_ = 6;
             ret = 0;
         } else if (!a1 && a2) {
@@ -5341,16 +6208,9 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             lastError_ = 1400;
             ret = 0;
         } else {
+            timers_.erase(guestTimerKey(a0, a1));
             lastError_ = 0;
             ret = 1;
-        }
-    } else if (name == "SetTimer") {
-        if (a0 && !windows_.count(a0)) {
-            lastError_ = 1400;
-            ret = 0;
-        } else {
-            lastError_ = 0;
-            ret = a1 ? a1 : uint32_t(++tick_);
         }
     } else if (name == "BeginPaint") {
         auto it = windows_.find(a0);
@@ -5624,15 +6484,27 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             lastError_ = 6;
             ret = 0xffffffffu;
         } else {
-            const bool ok = stackArg(11) == 0 && stackArg(12) == 0x00cc0020u &&
-                stretchDibToFramebuffer(*dc, int32_t(a1), int32_t(a2), int32_t(a3),
-                                        int32_t(stackArg(4)), int32_t(stackArg(5)),
-                                        int32_t(stackArg(6)), int32_t(stackArg(7)),
-                                        int32_t(stackArg(8)), stackArg(9), stackArg(10));
+            const bool supported = stackArg(11) == 0 && stackArg(12) == 0x00cc0020u;
+            auto dstBitmap = bitmaps_.find(dc->selectedBitmap);
+            const bool ok = supported && (dstBitmap != bitmaps_.end()
+                ? stretchDibToBitmap(dstBitmap->second, int32_t(a1), int32_t(a2), int32_t(a3),
+                                     int32_t(stackArg(4)), int32_t(stackArg(5)),
+                                     int32_t(stackArg(6)), int32_t(stackArg(7)),
+                                     int32_t(stackArg(8)), stackArg(9), stackArg(10))
+                : stretchDibToFramebuffer(*dc, int32_t(a1), int32_t(a2), int32_t(a3),
+                                          int32_t(stackArg(4)), int32_t(stackArg(5)),
+                                          int32_t(stackArg(6)), int32_t(stackArg(7)),
+                                          int32_t(stackArg(8)), stackArg(9), stackArg(10)));
             if (ok) {
                 ret = uint32_t(std::abs(int32_t(stackArg(8))));
                 lastError_ = 0;
             } else {
+                spdlog::info("StretchDIBits failed dst=0x{:08x} dstBitmap=0x{:08x} "
+                             "dst={}x{} src={}x{} srcOrigin={},{} bits=0x{:08x} info=0x{:08x} "
+                             "usage={} rop=0x{:08x}",
+                             a0, dc->selectedBitmap, int32_t(a3), int32_t(stackArg(4)),
+                             int32_t(stackArg(7)), int32_t(stackArg(8)), int32_t(stackArg(5)),
+                             int32_t(stackArg(6)), stackArg(9), stackArg(10), stackArg(11), stackArg(12));
                 lastError_ = 120;
                 ret = 0xffffffffu;
             }
@@ -5685,21 +6557,43 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
         const int32_t srcH = stretch ? int32_t(stackArg(9)) : dstH;
         auto srcBitmap = srcDc ? bitmaps_.find(srcDc->selectedBitmap) : bitmaps_.end();
         auto dstBitmap = dstDc ? bitmaps_.find(dstDc->selectedBitmap) : bitmaps_.end();
-        if (!dstDc || !srcDc || srcBitmap == bitmaps_.end() || rop != 0x00cc0020u) {
-            spdlog::info("{} unsupported dst=0x{:08x} src=0x{:08x} srcBitmap=0x{:08x} rop=0x{:08x}",
-                         name, a0, stackArg(5), srcDc ? srcDc->selectedBitmap : 0, rop);
+        if (!dstDc || !srcDc || srcBitmap == bitmaps_.end() || !supportedSourceRasterOp(rop)) {
+            spdlog::info("{} unsupported dst=0x{:08x} dstBitmap=0x{:08x} src=0x{:08x} srcBitmap=0x{:08x} "
+                         "dst={}x{} src={}x{} srcOrigin={},{} rop=0x{:08x}",
+                         name, a0, dstDc ? dstDc->selectedBitmap : 0, stackArg(5),
+                         srcDc ? srcDc->selectedBitmap : 0, dstW, dstH, srcW, srcH,
+                         srcX, srcY, rop);
             lastError_ = dstDc && srcDc ? 120 : 6;
             ret = 0;
         } else if (dstBitmap != bitmaps_.end()) {
             const bool ok = bitBltToBitmap(dstBitmap->second, srcBitmap->second,
                                            int32_t(a1), int32_t(a2), dstW, dstH,
-                                           srcX, srcY, srcW, srcH);
+                                           srcX, srcY, srcW, srcH, rop);
+            if (!ok) {
+                spdlog::info("{} bitmap blit failed dst=0x{:08x} dstBitmap=0x{:08x} "
+                             "dstBits=0x{:08x} dstSize={}x{} dstBpp={} src=0x{:08x} "
+                             "srcBitmap=0x{:08x} srcBits=0x{:08x} srcSize={}x{} srcBpp={} "
+                             "dst={}x{} src={}x{} srcOrigin={},{} rop=0x{:08x}",
+                             name, a0, dstDc->selectedBitmap, dstBitmap->second.bits,
+                             dstBitmap->second.width, dstBitmap->second.heightRaw, dstBitmap->second.bpp,
+                             stackArg(5), srcDc->selectedBitmap, srcBitmap->second.bits,
+                             srcBitmap->second.width, srcBitmap->second.heightRaw, srcBitmap->second.bpp,
+                             dstW, dstH, srcW, srcH, srcX, srcY, rop);
+            }
             lastError_ = ok ? 0 : 120;
             ret = ok ? 1 : 0;
         } else {
             const bool ok = bitBltToFramebuffer(*dstDc, srcBitmap->second,
                                                 int32_t(a1), int32_t(a2), dstW, dstH,
-                                                srcX, srcY, srcW, srcH);
+                                                srcX, srcY, srcW, srcH, rop);
+            if (!ok) {
+                spdlog::info("{} framebuffer blit failed dst=0x{:08x} src=0x{:08x} "
+                             "srcBitmap=0x{:08x} srcBits=0x{:08x} srcSize={}x{} srcBpp={} "
+                             "dst={}x{} src={}x{} srcOrigin={},{} rop=0x{:08x}",
+                             name, a0, stackArg(5), srcDc->selectedBitmap, srcBitmap->second.bits,
+                             srcBitmap->second.width, srcBitmap->second.heightRaw, srcBitmap->second.bpp,
+                             dstW, dstH, srcW, srcH, srcX, srcY, rop);
+            }
             lastError_ = ok ? 0 : 120;
             ret = ok ? 1 : 0;
         }
@@ -5720,22 +6614,6 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
         } else {
             lastError_ = 0;
             ret = setWindowLongValue(it->second, int32_t(a1), a2);
-        }
-    } else if (name == "GetWindowTextLengthW") {
-        auto it = windows_.find(a0);
-        ret = it == windows_.end() ? 0 : uint32_t(it->second.title.size());
-        lastError_ = it == windows_.end() ? 1400 : 0;
-    } else if (name == "GetWindowTextW") {
-        auto it = windows_.find(a0);
-        if (it == windows_.end()) {
-            lastError_ = 1400;
-            ret = 0;
-        } else if (!a1 || !a2) {
-            lastError_ = 0;
-            ret = 0;
-        } else {
-            ret = writeUtf16(a1, it->second.title, a2);
-            lastError_ = 0;
         }
     } else if (name == "GetParent") {
         auto it = windows_.find(a0);
@@ -6037,6 +6915,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
     } else if (name == "GetMessageW" || name == "GetMessageWNoWait" || name == "PeekMessageW") {
         const bool peek = name == "PeekMessageW" || name == "GetMessageWNoWait";
         const uint32_t removeFlags = peek ? stackArg(4) : 1;
+        enqueueDueTimers();
         GuestMessage message{};
         bool haveMessage = false;
         if (!guestMessages_.empty()) {
@@ -6068,36 +6947,9 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             lastError_ = 1400;
             ret = 0;
         }
-    } else if (name == "SetFocus") {
-        if (!a0 || windows_.count(a0)) {
-            ret = focusedWindow_;
-            focusedWindow_ = a0;
-            if (a0) guestMessages_.push_back({a0, 0x0007, 0, 0, uint32_t(++tick_ * 16), 0, 0});
-            lastError_ = 0;
-        } else {
-            lastError_ = 1400;
-            ret = 0;
-        }
-    } else if (name == "SetCapture") {
-        if (!a0 || windows_.count(a0)) {
-            ret = capturedWindow_;
-            capturedWindow_ = a0;
-            lastError_ = 0;
-        } else {
-            lastError_ = 1400;
-            ret = 0;
-        }
     } else if (name == "GetActiveWindow") {
         ret = firstWindow();
         lastError_ = ret ? 0 : 1400;
-    } else if (name == "EnableWindow") {
-        if (windows_.count(a0)) {
-            lastError_ = 0;
-            ret = 1;
-        } else {
-            lastError_ = 1400;
-            ret = 0;
-        }
     } else if (name == "IsWindowEnabled") {
         ret = windows_.count(a0) ? 1 : 0;
         lastError_ = ret ? 0 : 1400;
@@ -6211,100 +7063,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
         ret = 0;
 #endif
     } else if (name == "LoadIconW" || name == "LoadImageW") {
-#if defined(_WIN32)
-        const uint32_t imageType = name == "LoadImageW" ? a2 : IMAGE_ICON;
-        const uint32_t desiredCx = name == "LoadImageW" ? a3 : 0;
-        const uint32_t desiredCy = name == "LoadImageW" ? stackArg(4) : 0;
-        const uint32_t loadFlags = name == "LoadImageW" ? stackArg(5) : LR_DEFAULTCOLOR;
-        auto createIconFromMainResource = [&](uint32_t nameArg) -> HICON {
-            const ResourceEntry* group = findResource(14, nameArg); // RT_GROUP_ICON
-            if (!group || group->data.size() < 6) return nullptr;
-            const uint16_t count = readLe16(group->data, 4);
-            const uint32_t targetCx = desiredCx ? desiredCx : uint32_t(GetSystemMetrics(SM_CXICON));
-            const uint32_t targetCy = desiredCy ? desiredCy : uint32_t(GetSystemMetrics(SM_CYICON));
-            const ResourceEntry* iconResource = nullptr;
-            int bestScore = 0x7fffffff;
-            for (uint16_t i = 0; i < count; ++i) {
-                const size_t offset = 6 + size_t(i) * 14;
-                if (offset + 14 > group->data.size()) break;
-                const uint32_t width = group->data[offset] ? group->data[offset] : 256;
-                const uint32_t height = group->data[offset + 1] ? group->data[offset + 1] : 256;
-                const uint32_t bytesInResource = readLe32(group->data, offset + 8);
-                const uint32_t iconId = readLe16(group->data, offset + 12);
-                const ResourceEntry* candidate = findResource(3, iconId); // RT_ICON
-                if (!candidate || candidate->data.empty()) continue;
-                const int score = std::abs(int(width) - int(targetCx)) + std::abs(int(height) - int(targetCy));
-                if (!iconResource || score < bestScore ||
-                    (score == bestScore && bytesInResource > iconResource->data.size())) {
-                    iconResource = candidate;
-                    bestScore = score;
-                }
-            }
-            if (!iconResource) return nullptr;
-            return CreateIconFromResourceEx(const_cast<BYTE*>(iconResource->data.data()),
-                                            DWORD(iconResource->data.size()), TRUE, 0x00030000,
-                                            int(desiredCx), int(desiredCy),
-                                            loadFlags & (LR_DEFAULTCOLOR | LR_MONOCHROME));
-        };
-        auto createBitmapFromMainResource = [&](uint32_t nameArg) -> HBITMAP {
-            const ResourceEntry* bitmap = findResource(2, nameArg); // RT_BITMAP
-            if (!bitmap || bitmap->data.size() < 40) return nullptr;
-            const uint32_t headerSize = readLe32(bitmap->data, 0);
-            if (headerSize < 40 || headerSize > bitmap->data.size()) return nullptr;
-            const uint16_t bitCount = readLe16(bitmap->data, 14);
-            const uint32_t compression = readLe32(bitmap->data, 16);
-            const uint32_t clrUsed = readLe32(bitmap->data, 32);
-            uint32_t colorCount = clrUsed;
-            if (!colorCount && bitCount <= 8) colorCount = 1u << bitCount;
-            size_t bitsOffset = size_t(headerSize) + size_t(colorCount) * 4;
-            if (compression == BI_BITFIELDS && !colorCount && (bitCount == 16 || bitCount == 32)) {
-                bitsOffset += 12;
-            }
-            if (bitsOffset > bitmap->data.size()) return nullptr;
-            HDC dc = GetDC(nullptr);
-            if (!dc) return nullptr;
-            HBITMAP result = CreateDIBitmap(dc,
-                                            reinterpret_cast<const BITMAPINFOHEADER*>(bitmap->data.data()),
-                                            CBM_INIT,
-                                            bitmap->data.data() + bitsOffset,
-                                            reinterpret_cast<const BITMAPINFO*>(bitmap->data.data()),
-                                            DIB_RGB_COLORS);
-            ReleaseDC(nullptr, dc);
-            if (result && (desiredCx || desiredCy)) {
-                HANDLE scaled = CopyImage(result, IMAGE_BITMAP, int(desiredCx), int(desiredCy),
-                                          loadFlags & (LR_COPYDELETEORG | LR_COPYRETURNORG | LR_MONOCHROME));
-                if (scaled && scaled != result) result = reinterpret_cast<HBITMAP>(scaled);
-            }
-            return result;
-        };
-
-        if (imageType == IMAGE_ICON) {
-            HICON icon = createIconFromMainResource(a1);
-            if (icon) {
-                ret = makeGuestHandle({GuestHandle::Kind::HostIcon, reinterpret_cast<uintptr_t>(icon), 0});
-                lastError_ = 0;
-            } else {
-                ret = 0;
-                lastError_ = 1814;
-            }
-        } else if (imageType == IMAGE_BITMAP) {
-            HBITMAP bitmap = createBitmapFromMainResource(a1);
-            if (bitmap) {
-                ret = makeGuestHandle({GuestHandle::Kind::HostBitmap, reinterpret_cast<uintptr_t>(bitmap), 0});
-                lastError_ = 0;
-            } else {
-                ret = 0;
-                lastError_ = 1814;
-            }
-        } else {
-            ret = 0;
-            lastError_ = 1814;
-        }
-#else
-        const uint32_t type = name == "LoadImageW" ? a2 : 1;
-        lastError_ = findResource(type == 0 ? 2 : 14, a1) ? 120 : 1814;
-        ret = 0;
-#endif
+        ret = handleLoadImageApi(name, a0, a1, a2, a3, stackArg(4), stackArg(5));
     } else if (name == "LoadMenuW") {
         ret = loadMenuResourceHandle(a1);
     } else if (name == "RemoveMenu" || name == "CheckMenuItem" || name == "CheckMenuRadioItem") {
@@ -7309,8 +8068,13 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
                 uc_mem_read(uc_, a0 + 8, &wParam, sizeof(wParam));
                 uc_mem_read(uc_, a0 + 12, &lParam, sizeof(lParam));
             }
-            auto it = windows_.find(hwnd);
-            wndProc = it == windows_.end() ? 0 : it->second.wndProc;
+            if (msg == 0x0113 && lParam) {
+                wndProc = lParam;
+                if (a0) uc_mem_read(uc_, a0 + 16, &lParam, sizeof(lParam));
+            } else {
+                auto it = windows_.find(hwnd);
+                wndProc = it == windows_.end() ? 0 : it->second.wndProc;
+            }
         } else if (name == "SendMessageW") {
             auto it = windows_.find(a0);
             wndProc = it == windows_.end() ? 0 : it->second.wndProc;

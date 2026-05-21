@@ -548,6 +548,7 @@ struct ModuleLoader {
 static int runImage(PeImage& pe, const std::vector<fs::path>& dllSearchDirs,
                     const std::vector<fs::path>& fileSystemRoots,
                     const std::optional<fs::path>& registryPath, Framebuffer& fb,
+                    const std::optional<std::string>& gpsCommPort,
                     bool headless, uint64_t instructionLimit) {
     uc_engine* uc=nullptr;
     uc_err err = uc_open(UC_ARCH_MIPS, static_cast<uc_mode>(UC_MODE_MIPS32 | UC_MODE_LITTLE_ENDIAN), &uc);
@@ -559,6 +560,7 @@ static int runImage(PeImage& pe, const std::vector<fs::path>& dllSearchDirs,
         synthetic.setFileSystemRoots(fileSystemRoots);
         synthetic.setFramebuffer(fb.bgra.data(), fb.w, fb.h);
         if (registryPath) synthetic.setRegistryPath(*registryPath);
+        if (gpsCommPort) synthetic.setGpsCommPort(*gpsCommPort);
         uc_hook syntheticHook{};
         uc_hook_add(uc, &syntheticHook, UC_HOOK_CODE, (void*)SyntheticDllRuntime::hookCode, &synthetic, 0x70000000, 0x70ffffff);
         std::vector<uc_hook> asmDiagHooks;
@@ -613,11 +615,12 @@ int wmain(int argc, wchar_t** argv) {
     spdlog::set_level(spdlog::level::info);
     try {
         if (argc < 2) {
-            spdlog::error("usage: iNavi_Unicorn_Emulator.exe <primary.exe> [--registry regs.json] [--fs-root data_dir] [--headless] [dll_search_dir ...]");
+            spdlog::error("usage: iNavi_Unicorn_Emulator.exe <primary.exe> [--registry regs.json] [--fs-root data_dir] [--gps-comm COM10] [--headless] [dll_search_dir ...]");
             return 1;
         }
         fs::path exe = fs::path(argv[1]);
         std::optional<fs::path> registryPath;
+        std::optional<std::string> gpsCommPort;
         std::vector<fs::path> dllSearchDirs;
         std::vector<fs::path> fileSystemRoots;
         bool headless = false;
@@ -636,6 +639,16 @@ int wmain(int argc, wchar_t** argv) {
                     return 1;
                 }
                 fileSystemRoots.emplace_back(argv[++i]);
+            } else if (arg == L"--gps-comm") {
+                if (i + 1 >= argc) {
+                    spdlog::error("--gps-comm requires a host COM port such as COM10");
+                    return 1;
+                }
+                std::wstring value = argv[++i];
+                std::string narrowValue;
+                narrowValue.reserve(value.size());
+                for (wchar_t ch : value) narrowValue.push_back(ch >= 0 && ch <= 0x7f ? char(ch) : '?');
+                gpsCommPort = std::move(narrowValue);
             } else if (arg == L"--instructions") {
                 if (i + 1 >= argc) {
                     spdlog::error("--instructions requires a count");
@@ -651,11 +664,12 @@ int wmain(int argc, wchar_t** argv) {
         spdlog::info("iNavi Unicorn Emulator v2 fresh project");
         spdlog::info("target: {}", exe.string());
         if (registryPath) spdlog::info("registry: {}", registryPath->string());
+        if (gpsCommPort) spdlog::info("gps comm: {}", *gpsCommPort);
         for (const auto& root : fileSystemRoots) spdlog::info("fs root: {}", root.string());
         for (const auto& dir : dllSearchDirs) spdlog::info("dll search dir: {}", dir.string());
         auto pe = parsePe(exe);
         Framebuffer fb; writePpm("frame_000_loader.ppm", fb, 0);
-        int rc = runImage(pe, dllSearchDirs, fileSystemRoots, registryPath, fb, headless, instructionLimit);
+        int rc = runImage(pe, dllSearchDirs, fileSystemRoots, registryPath, fb, gpsCommPort, headless, instructionLimit);
         writePpm("frame_001_after_unicorn.ppm", fb, 1);
         return rc;
     } catch (const std::exception& e) {
