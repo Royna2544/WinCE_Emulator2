@@ -57,6 +57,13 @@
 - Evidence: GUI smoke52 logs `created host presenter HWND=... for guest HWND=0x00010007 800x480`, then `entering host GUI message loop` after the guest destroys the HWND. Splash-frame probes confirmed the real two-slice splash bitmap is decoded and blitted into the framebuffer, but an interactive report still saw delayed splash presentation.
 - Limitation: Child common controls are guest HWND records, command-bar menus can attach to host `HMENU`, and the framebuffer can be painted by implemented GDI paths, but there is no full host child-control hierarchy or complete host input-to-guest event translation yet.
 
+### Map data loads but map view does not render
+
+- Status: Open; next priority.
+- Evidence: User-driven run `v2_synth_inavi_userdrive_reverted.log` reached route/search UI, then crashed after custom `SendMessageW` calls `0x5783/0x5773` into guest HWND `0x00010008`. The fault was a null object dereference at `pc=0x00144524` (`lw a0,0x14(s7)` in the delay slot after a `jal`, with `s7/a0=0`). Earlier in that same log, the app successfully found/read map payload files including `INavi\mapdata\mapinfo.bin`, `INavi\mapdata\cross\FullData.dat`, and multiple `INavi\mapdata\MRData\*.bin` files.
+- Current interpretation: The map failure is not currently a missing filesystem-root problem. Investigate the route/map object initialization and drawing path after the map files are loaded, plus any GDI operations that should transfer map surfaces into the framebuffer.
+- Related fix: The same run showed route/search child windows created through `CreateWindowExW` with raw zero sizes but normalized to full-screen `800x480`, which could cause duplicate full-screen content and wrong hit/message targeting. The bridge now preserves zero-sized child windows while keeping top-level zero-size CE windows at framebuffer size.
+
 ### Possible remaining bitmap color-format mismatch
 
 - Status: Mostly fixed; keep watching specific assets.

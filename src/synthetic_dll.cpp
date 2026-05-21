@@ -6729,10 +6729,17 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
         auto normalizePos = [](uint32_t value) -> int32_t {
             return value == 0x80000000u ? 0 : int32_t(value);
         };
-        auto normalizeSize = [](uint32_t value, int32_t fallback) -> int32_t {
+        auto normalizeSize = [](uint32_t value, int32_t fallback, bool topLevel) -> int32_t {
             const int32_t signedValue = int32_t(value);
-            return value == 0x80000000u || signedValue <= 0 ? fallback : signedValue;
+            if (topLevel && (value == 0x80000000u || signedValue <= 0)) return fallback;
+            if (value == 0x80000000u) return 0;
+            return std::max<int32_t>(0, signedValue);
         };
+        const bool topLevel = parent == 0;
+        const uint32_t rawX = stackArg(4);
+        const uint32_t rawY = stackArg(5);
+        const uint32_t rawWidth = stackArg(6);
+        const uint32_t rawHeight = stackArg(7);
         uint32_t wndProc = 0;
         auto cls = windowClassesByName_.find(className);
         if (cls != windowClassesByName_.end()) {
@@ -6750,15 +6757,16 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
         window.instance = instance;
         window.param = param;
         window.wndProc = wndProc;
-        window.x = normalizePos(stackArg(4));
-        window.y = normalizePos(stackArg(5));
-        window.width = normalizeSize(stackArg(6), framebufferWidth_ > 0 ? framebufferWidth_ : 800);
-        window.height = normalizeSize(stackArg(7), framebufferHeight_ > 0 ? framebufferHeight_ : 480);
+        window.x = normalizePos(rawX);
+        window.y = normalizePos(rawY);
+        window.width = normalizeSize(rawWidth, framebufferWidth_ > 0 ? framebufferWidth_ : 800, topLevel);
+        window.height = normalizeSize(rawHeight, framebufferHeight_ > 0 ? framebufferHeight_ : 480, topLevel);
         window.visible = (a3 & 0x10000000u) != 0; // WS_VISIBLE
         spdlog::info("CreateWindowExW guest=0x{:08x} class=\"{}\" title=\"{}\" parent=0x{:08x} id/menu=0x{:08x} "
-                     "style=0x{:08x} ex=0x{:08x} wndproc=0x{:08x} param=0x{:08x} rect={},{} {}x{}",
+                     "style=0x{:08x} ex=0x{:08x} wndproc=0x{:08x} param=0x{:08x} rect={},{} {}x{} raw=0x{:08x},0x{:08x} 0x{:08x}x0x{:08x}",
                      ret, className, window.title, parent, menu, window.style, window.exStyle,
-                     wndProc, param, window.x, window.y, window.width, window.height);
+                     wndProc, param, window.x, window.y, window.width, window.height,
+                     rawX, rawY, rawWidth, rawHeight);
         const uint32_t createStruct = allocate(48, true);
         if (createStruct) {
             writeU32(createStruct, param);
