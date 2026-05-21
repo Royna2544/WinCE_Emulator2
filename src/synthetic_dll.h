@@ -2,6 +2,8 @@
 
 #include <unicorn/unicorn.h>
 
+#include <nlohmann/json.hpp>
+
 #include <array>
 #include <cstdint>
 #include <deque>
@@ -26,6 +28,8 @@ public:
 
     void setMainModulePath(std::string path);
     void setFramebuffer(uint32_t* bgra, int width, int height);
+    void setRegistryPath(const std::filesystem::path& path);
+    void flushRegistry();
     std::optional<SyntheticModule> createModule(const std::string& dllName);
     static void hookCode(uc_engine* uc, uint64_t address, uint32_t size, void* user);
 
@@ -54,8 +58,10 @@ private:
             HostAccelerator,
             HostIcon,
             HostBitmap,
+            HostSocket,
             GuestHeap,
             GuestResource,
+            GuestRegistryKey,
             GuestWindow,
             GuestDc,
             GuestBrush,
@@ -161,6 +167,7 @@ private:
     std::map<uint32_t, GuestFont> fonts_;
     std::map<int32_t, uint32_t> stockObjects_;
     std::map<uint32_t, HostWaveBuffer> hostWaveBuffers_;
+    std::map<uint32_t, std::string> registryHandles_;
     std::deque<GuestMessage> guestMessages_;
     std::vector<ResourceEntry> mainResources_;
     std::map<uint32_t, uint32_t> loadedResourceMemory_;
@@ -169,6 +176,9 @@ private:
     uint32_t* framebuffer_{};
     int32_t framebufferWidth_{};
     int32_t framebufferHeight_{};
+    std::filesystem::path registryPath_;
+    nlohmann::json registry_;
+    bool registryDirty_{};
 
     std::optional<SyntheticModule> createCoredll();
     std::optional<SyntheticModule> createGenericOrdinalDll(const std::string& moduleName, uint16_t maxOrdinal);
@@ -177,6 +187,9 @@ private:
     void dispatch(const ExportEntry& entry);
     bool dispatchHostWin32(const std::string& name, const GuestCallArgs& args, uint32_t& ret);
     bool dispatchGuestMemoryApi(const std::string& name, const GuestCallArgs& args, uint32_t& ret);
+    bool dispatchWinsock(const std::string& name, const GuestCallArgs& args, uint32_t& ret);
+    bool dispatchOle32(const std::string& name, const GuestCallArgs& args, uint32_t& ret);
+    bool dispatchOleAut32(const std::string& name, const GuestCallArgs& args, uint32_t& ret);
     uint32_t handleWNetGetUserW(uint32_t providerName, uint32_t userName, uint32_t lengthPtr);
 
     uint32_t makeGuestHandle(GuestHandle handle);
@@ -195,6 +208,15 @@ private:
     bool stretchDibToFramebuffer(const GuestDc& dc, int32_t dstX, int32_t dstY, int32_t dstW, int32_t dstH,
                                  int32_t srcX, int32_t srcY, int32_t srcW, int32_t srcH,
                                  uint32_t bitsPtr, uint32_t infoPtr);
+    std::optional<std::string> registryPathFromHandle(uint32_t hkey, const std::string& subKey) const;
+    bool registryKeyExists(const std::string& path) const;
+    void registryEnsureKey(const std::string& path);
+    uint32_t makeRegistryHandle(const std::string& path);
+    std::vector<std::string> registryChildNames(const std::string& path) const;
+    nlohmann::json* registryValue(const std::string& path, const std::string& valueName);
+    const nlohmann::json* registryValue(const std::string& path, const std::string& valueName) const;
+    std::vector<uint8_t> registryValueBytes(const nlohmann::json& value) const;
+    nlohmann::json registryJsonFromBytes(uint32_t type, uint32_t dataPtr, uint32_t dataSize) const;
     void loadMainResources(const std::filesystem::path& path);
     const ResourceEntry* findResource(uint32_t typeArg, uint32_t nameArg) const;
     const ResourceEntry* resourceFromHandle(uint32_t guestHandle) const;
@@ -204,6 +226,7 @@ private:
     void setReg(int regId, uint32_t value) const;
     uint32_t stackArg(uint32_t index) const;
     uint32_t allocate(uint32_t size, bool zeroFill);
+    uint32_t readU32(uint32_t address) const;
     void writeU32(uint32_t address, uint32_t value) const;
     bool copyGuest(uint32_t dst, uint32_t src, uint32_t size) const;
     bool fillGuest(uint32_t dst, uint8_t value, uint32_t size) const;
