@@ -57,6 +57,7 @@ private:
         enum class Kind {
             HostFile,
             HostFind,
+            HostCrtFile,
             HostWaveIn,
             HostEvent,
             HostMutex,

@@ -776,6 +776,7 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x02B4, "GetDlgItem");
     registerExport(module, 0x02B5, "GetDlgCtrlID");
     registerExport(module, 0x02CD, "GetVersionExW");
+    registerExport(module, 0x02CF, "sprintf");
     registerExport(module, 0x02DD, "LocalAllocTrace");
     registerExport(module, 0x02DE, "GetCursorPos");
     registerExport(module, 0x02D8, "LoadIconW");
@@ -828,7 +829,19 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x0449, "swprintf");
     registerExport(module, 0x044B, "vswprintf");
     registerExport(module, 0x044E, "printf");
+    registerExport(module, 0x0454, "fgetc");
+    registerExport(module, 0x0455, "fgets");
+    registerExport(module, 0x0459, "fopen");
+    registerExport(module, 0x045E, "fclose");
+    registerExport(module, 0x0460, "fread");
+    registerExport(module, 0x0461, "fwrite");
+    registerExport(module, 0x0462, "fflush");
+    registerExport(module, 0x0465, "feof");
+    registerExport(module, 0x0466, "ferror");
+    registerExport(module, 0x046A, "fseek");
+    registerExport(module, 0x046B, "ftell");
     registerExport(module, 0x046C, "_vsnwprintf");
+    registerExport(module, 0x0479, "_wfopen");
     registerExport(module, 0x01C7, "RegCloseKey");
     registerExport(module, 0x01CD, "RegOpenKeyExW");
     registerExport(module, 0x01CF, "RegQueryValueExW");
@@ -1041,6 +1054,8 @@ uint32_t SyntheticDllRuntime::closeGuestHandle(uint32_t guestHandle) {
         fileHandleDebugNames_.erase(guestHandle);
         fileReadCounts_.erase(guestHandle);
         fileSeekCounts_.erase(guestHandle);
+    } else if (it->second.kind == GuestHandle::Kind::HostCrtFile) {
+        fileHandleDebugNames_.erase(guestHandle);
     } else if (it->second.kind == GuestHandle::Kind::HostFind) {
         fileHandleDebugNames_.erase(guestHandle);
     } else if (it->second.kind == GuestHandle::Kind::GuestFileMapping) {
@@ -1056,6 +1071,8 @@ uint32_t SyntheticDllRuntime::closeGuestHandle(uint32_t guestHandle) {
             closesocket(SOCKET(it->second.hostValue));
         } else if (it->second.kind == GuestHandle::Kind::HostFind) {
             FindClose(reinterpret_cast<HANDLE>(it->second.hostValue));
+        } else if (it->second.kind == GuestHandle::Kind::HostCrtFile) {
+            std::fclose(reinterpret_cast<FILE*>(it->second.hostValue));
         } else if (it->second.kind == GuestHandle::Kind::HostWaveIn) {
             auto& winmm = winmmBridge();
             if (winmm.waveInClose) winmm.waveInClose(reinterpret_cast<HWAVEIN>(it->second.hostValue));
@@ -2309,7 +2326,108 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(const std::string& name,
     const uint32_t a2 = args.a2;
     const uint32_t a3 = args.a3;
 
-    if (name == "FindNextFileW") {
+    if (name == "fopen" || name == "_wfopen") {
+        const std::string guestPath = name == "_wfopen" ? readUtf16(a0, 2048) : readAscii(a0, 2048);
+        const std::string mode = name == "_wfopen" ? readUtf16(a1, 64) : readAscii(a1, 64);
+        const std::filesystem::path hostPath = resolveGuestPath(guestPath);
+        FILE* host = nullptr;
+        if (!hostPath.empty()) {
+#if defined(_WIN32)
+            _wfopen_s(&host, hostPath.wstring().c_str(), widenLossy(mode).c_str());
+#else
+            host = std::fopen(hostPath.string().c_str(), mode.c_str());
+#endif
+        }
+        if (!host) {
+            ret = 0;
+            spdlog::warn("{} miss guest=\"{}\" host=\"{}\" mode=\"{}\"",
+                         name, guestPath, hostPath.string(), mode);
+        } else {
+            ret = makeGuestHandle({GuestHandle::Kind::HostCrtFile, reinterpret_cast<uintptr_t>(host), 0});
+            fileHandleDebugNames_[ret] = hostPath.string();
+            spdlog::info("{} hit guest=\"{}\" host=\"{}\" mode=\"{}\" guestHandle=0x{:08x}",
+                         name, guestPath, hostPath.string(), mode, ret);
+        }
+    } else if (name == "fclose") {
+        auto it = guestHandles_.find(a0);
+        if (it == guestHandles_.end() || it->second.kind != GuestHandle::Kind::HostCrtFile || !it->second.hostValue) {
+            ret = 0xffffffffu;
+        } else {
+            FILE* host = reinterpret_cast<FILE*>(it->second.hostValue);
+            ret = uint32_t(std::fclose(host));
+            fileHandleDebugNames_.erase(a0);
+            guestHandles_.erase(it);
+        }
+    } else if (name == "fread") {
+        auto* handle = lookupGuestHandle(a3);
+        if (!handle || handle->kind != GuestHandle::Kind::HostCrtFile || !handle->hostValue || !a0 || !a1) {
+            ret = 0;
+        } else {
+            const uint64_t total = uint64_t(a1) * uint64_t(a2);
+            std::vector<uint8_t> bytes(size_t(std::min<uint64_t>(total, 0x1000000u)));
+            const size_t readBytes = bytes.empty()
+                ? 0
+                : std::fread(bytes.data(), 1, bytes.size(), reinterpret_cast<FILE*>(handle->hostValue));
+            if (readBytes) uc_mem_write(uc_, a0, bytes.data(), readBytes);
+            ret = uint32_t(readBytes / a1);
+            auto debugName = fileHandleDebugNames_.find(a3);
+            const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+            spdlog::info("fread handle=0x{:08x} path=\"{}\" size={} count={} bytes={} elements={}",
+                         a3, debugPath, a1, a2, readBytes, ret);
+        }
+    } else if (name == "fwrite") {
+        auto* handle = lookupGuestHandle(a3);
+        if (!handle || handle->kind != GuestHandle::Kind::HostCrtFile || !handle->hostValue || !a0 || !a1) {
+            ret = 0;
+        } else {
+            const uint64_t total = uint64_t(a1) * uint64_t(a2);
+            std::vector<uint8_t> bytes(size_t(std::min<uint64_t>(total, 0x1000000u)));
+            if (!bytes.empty()) uc_mem_read(uc_, a0, bytes.data(), bytes.size());
+            const size_t writtenBytes = bytes.empty()
+                ? 0
+                : std::fwrite(bytes.data(), 1, bytes.size(), reinterpret_cast<FILE*>(handle->hostValue));
+            ret = uint32_t(writtenBytes / a1);
+        }
+    } else if (name == "fseek") {
+        auto* handle = lookupGuestHandle(a0);
+        ret = handle && handle->kind == GuestHandle::Kind::HostCrtFile && handle->hostValue
+            ? uint32_t(std::fseek(reinterpret_cast<FILE*>(handle->hostValue), int32_t(a1), int(a2)))
+            : 0xffffffffu;
+    } else if (name == "ftell") {
+        auto* handle = lookupGuestHandle(a0);
+        ret = handle && handle->kind == GuestHandle::Kind::HostCrtFile && handle->hostValue
+            ? uint32_t(std::ftell(reinterpret_cast<FILE*>(handle->hostValue)))
+            : 0xffffffffu;
+    } else if (name == "fflush") {
+        auto* handle = lookupGuestHandle(a0);
+        ret = (!a0 || (handle && handle->kind == GuestHandle::Kind::HostCrtFile && handle->hostValue))
+            ? uint32_t(std::fflush(a0 ? reinterpret_cast<FILE*>(handle->hostValue) : nullptr))
+            : 0xffffffffu;
+    } else if (name == "feof" || name == "ferror") {
+        auto* handle = lookupGuestHandle(a0);
+        if (!handle || handle->kind != GuestHandle::Kind::HostCrtFile || !handle->hostValue) {
+            ret = 0;
+        } else if (name == "feof") {
+            ret = uint32_t(std::feof(reinterpret_cast<FILE*>(handle->hostValue)));
+        } else {
+            ret = uint32_t(std::ferror(reinterpret_cast<FILE*>(handle->hostValue)));
+        }
+    } else if (name == "fgetc") {
+        auto* handle = lookupGuestHandle(a0);
+        ret = handle && handle->kind == GuestHandle::Kind::HostCrtFile && handle->hostValue
+            ? uint32_t(std::fgetc(reinterpret_cast<FILE*>(handle->hostValue)))
+            : 0xffffffffu;
+    } else if (name == "fgets") {
+        auto* handle = lookupGuestHandle(a2);
+        if (!handle || handle->kind != GuestHandle::Kind::HostCrtFile || !handle->hostValue || !a0 || !a1) {
+            ret = 0;
+        } else {
+            std::vector<char> bytes(a1);
+            char* result = std::fgets(bytes.data(), int(a1), reinterpret_cast<FILE*>(handle->hostValue));
+            if (result) uc_mem_write(uc_, a0, bytes.data(), std::strlen(bytes.data()) + 1);
+            ret = result ? a0 : 0;
+        }
+    } else if (name == "FindNextFileW") {
 #if defined(_WIN32)
         auto* handle = lookupGuestHandle(a0);
         if (!handle || handle->kind != GuestHandle::Kind::HostFind || !handle->hostValue) {
@@ -2431,14 +2549,16 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(const std::string& name,
             spdlog::info("synthetic coredll.dll!{} formatted \"{}\" -> 0x{:08x}",
                          name, out, a0);
         }
-    } else if (name == "printf") {
-        std::vector<uint32_t> values = {a1, a2, a3};
+    } else if (name == "printf" || name == "sprintf") {
+        std::vector<uint32_t> values = name == "sprintf"
+            ? std::vector<uint32_t>{a2, a3}
+            : std::vector<uint32_t>{a1, a2, a3};
         for (uint32_t i = 4; i < 16; ++i) values.push_back(stackArg(i));
         size_t argIndex = 0;
         auto nextArg = [&]() -> uint32_t {
             return argIndex < values.size() ? values[argIndex++] : 0;
         };
-        const std::string format = readAscii(a0, 2048);
+        const std::string format = readAscii(name == "sprintf" ? a1 : a0, 2048);
         std::string out;
         for (size_t i = 0; i < format.size(); ++i) {
             if (format[i] != '%' || i + 1 >= format.size()) {
@@ -2508,7 +2628,16 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(const std::string& name,
                 break;
             }
         }
-        if (!out.empty()) spdlog::info("printf: {}", out);
+        if (name == "sprintf") {
+            writeAscii(a0, out);
+            if (out.find(".db") != std::string::npos || out.find(".bin") != std::string::npos ||
+                out.find("\\") != std::string::npos || out.find("/") != std::string::npos) {
+                spdlog::info("synthetic coredll.dll!sprintf formatted \"{}\" -> 0x{:08x}",
+                             out, a0);
+            }
+        } else if (!out.empty()) {
+            spdlog::info("printf: {}", out);
+        }
         ret = uint32_t(out.size());
     } else if (name == "_wtol") {
         const std::string value = readUtf16(a0, 128);
