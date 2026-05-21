@@ -65,6 +65,7 @@ private:
             GuestWindow,
             GuestDc,
             GuestBrush,
+            GuestPen,
             GuestFont,
         };
 
@@ -99,6 +100,7 @@ private:
     struct GuestDc {
         uint32_t hwnd{};
         uint32_t selectedBrush{};
+        uint32_t selectedPen{};
         uint32_t selectedFont{};
         uint32_t textColor{0x00000000};
         uint32_t bkColor{0x00ffffff};
@@ -108,6 +110,12 @@ private:
         int32_t y{};
     };
     struct GuestBrush {
+        uint32_t colorRef{};
+        bool stock{};
+    };
+    struct GuestPen {
+        uint32_t style{};
+        uint32_t width{};
         uint32_t colorRef{};
         bool stock{};
     };
@@ -150,6 +158,7 @@ private:
     uint32_t processHeapHandle_ = 0;
     uint64_t tick_ = 0;
     bool quitPosted_ = false;
+    uint32_t currentCursor_ = 0;
     std::string mainModulePath_ = "\\INavi\\INavi.exe";
     std::filesystem::path hostBaseDir_;
     uint16_t nextAtom_ = 0xc000;
@@ -164,6 +173,7 @@ private:
     std::map<uint32_t, GuestWindow> windows_;
     std::map<uint32_t, GuestDc> dcs_;
     std::map<uint32_t, GuestBrush> brushes_;
+    std::map<uint32_t, GuestPen> pens_;
     std::map<uint32_t, GuestFont> fonts_;
     std::map<int32_t, uint32_t> stockObjects_;
     std::map<uint32_t, HostWaveBuffer> hostWaveBuffers_;
@@ -198,6 +208,7 @@ private:
     uint32_t makeGuestDc(uint32_t hwnd);
     GuestDc* lookupGuestDc(uint32_t hdc);
     uint32_t makeGuestBrush(uint32_t colorRef, bool stock = false);
+    uint32_t makeGuestPen(uint32_t style, uint32_t width, uint32_t colorRef, bool stock = false);
     uint32_t makeGuestFont(const std::array<uint8_t, 92>& logFont, bool stock = false);
     uint32_t makeStockObject(int32_t index);
     uint32_t colorRefToPixel(uint32_t colorRef) const;

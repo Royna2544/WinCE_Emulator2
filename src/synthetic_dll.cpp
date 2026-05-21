@@ -352,9 +352,11 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x005E, "LoadAcceleratorsW");
     registerExport(module, 0x005F, "RegisterClassW");
     registerExport(module, 0x0060, "CopyRect");
+    registerExport(module, 0x0061, "EqualRect");
     registerExport(module, 0x0062, "InflateRect");
     registerExport(module, 0x0064, "IsRectEmpty");
     registerExport(module, 0x0066, "PtInRect");
+    registerExport(module, 0x0067, "SetRect");
     registerExport(module, 0x0068, "SetRectEmpty");
     registerExport(module, 0x00A5, "DeleteFileW");
     registerExport(module, 0x00A7, "FindFirstFileW");
@@ -369,11 +371,14 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x00C1, "iswctype");
     registerExport(module, 0x00C4, "MultiByteToWideChar");
     registerExport(module, 0x00E5, "_wcsnicmp");
+    registerExport(module, 0x00EA, "FormatMessageW");
     registerExport(module, 0x00F6, "CreateWindowExW");
     registerExport(module, 0x00F7, "SetWindowPos");
+    registerExport(module, 0x00F8, "GetWindowRect");
     registerExport(module, 0x00F9, "GetClientRect");
     registerExport(module, 0x00FA, "InvalidateRect");
     registerExport(module, 0x00FB, "GetWindow");
+    registerExport(module, 0x00FF, "ScreenToClient");
     registerExport(module, 0x0102, "SetWindowLongW");
     registerExport(module, 0x0103, "GetWindowLongW");
     registerExport(module, 0x0104, "BeginPaint");
@@ -385,7 +390,9 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x010A, "ShowWindow");
     registerExport(module, 0x010B, "UpdateWindow");
     registerExport(module, 0x010D, "GetParent");
+    registerExport(module, 0x0100, "ScreenToClient");
     registerExport(module, 0x0116, "ValidateRect");
+    registerExport(module, 0x0120, "IsWindowEnabled");
     registerExport(module, 0x011D, "CallWindowProcW");
     registerExport(module, 0x011E, "FindWindowW");
     registerExport(module, 0x0143, "GetStoreInformation");
@@ -422,16 +429,21 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x0229, "CloseHandle");
     registerExport(module, 0x022B, "CreateMutexW");
     registerExport(module, 0x022C, "ReleaseMutex");
+    registerExport(module, 0x02AA, "SetCursor");
     registerExport(module, 0x02B4, "GetDlgItem");
+    registerExport(module, 0x02B5, "GetDlgCtrlID");
     registerExport(module, 0x02CD, "GetVersionExW");
     registerExport(module, 0x02DD, "LocalAllocTrace");
     registerExport(module, 0x02DE, "GetCursorPos");
     registerExport(module, 0x02D8, "LoadIconW");
     registerExport(module, 0x02DA, "LoadImageW");
+    registerExport(module, 0x02BE, "SetForegroundWindow");
+    registerExport(module, 0x02C2, "GetActiveWindow");
     registerExport(module, 0x034B, "RemoveMenu");
     registerExport(module, 0x034E, "LoadMenuW");
     registerExport(module, 0x0350, "CheckMenuItem");
     registerExport(module, 0x0351, "CheckMenuRadioItem");
+    registerExport(module, 0x035A, "MessageBoxW");
     registerExport(module, 0x036A, "LoadStringW");
     registerExport(module, 0x036C, "KillTimer");
     registerExport(module, 0x036E, "GetClassInfoW");
@@ -446,6 +458,7 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x0366, "TranslateMessage");
     registerExport(module, 0x0375, "GetSystemMetrics");
     registerExport(module, 0x0376, "IsWindowVisible");
+    registerExport(module, 0x0377, "AdjustWindowRectEx");
     registerExport(module, 0x0379, "GetSysColor");
     registerExport(module, 0x037F, "CreateFontIndirectW");
     registerExport(module, 0x0380, "ExtTextOutW");
@@ -457,6 +470,7 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x039A, "SetBkColor");
     registerExport(module, 0x039B, "SetBkMode");
     registerExport(module, 0x039C, "SetTextColor");
+    registerExport(module, 0x039E, "CreatePen");
     registerExport(module, 0x03A3, "CreateSolidBrush");
     registerExport(module, 0x03A7, "FillRect");
     registerExport(module, 0x03AA, "PatBlt");
@@ -514,6 +528,10 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x0683, "StretchDIBits");
     registerExport(module, 0x07D0, "_setjmp");
     registerExport(module, 0x07D5, "__ll_div");
+    registerExport(module, 0x0628, "__ehvec_ctor");
+    registerExport(module, 0x07F0, "__litofp");
+    registerExport(module, 0x07FC, "__eqs");
+    registerExport(module, 0x07FF, "__nes");
     registerExport(module, 0x0532, "operator_new");
     registerExport(module, 0x0533, "operator_vector_new");
     registerExport(module, 0x0535, "operator_new_nothrow");
@@ -757,6 +775,7 @@ uint32_t SyntheticDllRuntime::makeGuestDc(uint32_t hwnd) {
     GuestDc dc{};
     dc.hwnd = hwnd;
     dc.selectedBrush = makeStockObject(4); // BLACK_BRUSH
+    dc.selectedPen = makeStockObject(7); // BLACK_PEN
     dc.selectedFont = makeStockObject(17); // DEFAULT_GUI_FONT
     const uint32_t handle = makeGuestHandle({GuestHandle::Kind::GuestDc, 0, 0});
     dcs_[handle] = dc;
@@ -773,6 +792,12 @@ SyntheticDllRuntime::GuestDc* SyntheticDllRuntime::lookupGuestDc(uint32_t hdc) {
 uint32_t SyntheticDllRuntime::makeGuestBrush(uint32_t colorRef, bool stock) {
     const uint32_t handle = makeGuestHandle({GuestHandle::Kind::GuestBrush, 0, stock ? 1u : 0u});
     brushes_[handle] = GuestBrush{colorRef, stock};
+    return handle;
+}
+
+uint32_t SyntheticDllRuntime::makeGuestPen(uint32_t style, uint32_t width, uint32_t colorRef, bool stock) {
+    const uint32_t handle = makeGuestHandle({GuestHandle::Kind::GuestPen, 0, stock ? 1u : 0u});
+    pens_[handle] = GuestPen{style, width, colorRef, stock};
     return handle;
 }
 
@@ -794,9 +819,9 @@ uint32_t SyntheticDllRuntime::makeStockObject(int32_t index) {
     case 3: handle = makeGuestBrush(0x00404040, true); break; // DKGRAY_BRUSH
     case 4: handle = makeGuestBrush(0x00000000, true); break; // BLACK_BRUSH
     case 5: handle = makeGuestBrush(0xffffffffu, true); break; // NULL_BRUSH
-    case 6: handle = makeGuestBrush(0x00ffffff, true); break; // WHITE_PEN
-    case 7: handle = makeGuestBrush(0x00000000, true); break; // BLACK_PEN
-    case 8: handle = makeGuestBrush(0xffffffffu, true); break; // NULL_PEN
+    case 6: handle = makeGuestPen(0, 1, 0x00ffffff, true); break; // WHITE_PEN
+    case 7: handle = makeGuestPen(0, 1, 0x00000000, true); break; // BLACK_PEN
+    case 8: handle = makeGuestPen(5, 1, 0xffffffffu, true); break; // NULL_PEN
     case 13:
     case 17: {
         std::array<uint8_t, 92> font{};
@@ -1676,6 +1701,13 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(const std::string& name,
         ret = uint32_t(value);
     } else if (name == "CopyRect") {
         ret = copyGuest(a0, a1, 16) ? 1 : 0;
+    } else if (name == "EqualRect") {
+        int32_t left[4]{};
+        int32_t right[4]{};
+        ret = a0 && a1 &&
+              uc_mem_read(uc_, a0, left, sizeof(left)) == UC_ERR_OK &&
+              uc_mem_read(uc_, a1, right, sizeof(right)) == UC_ERR_OK &&
+              std::memcmp(left, right, sizeof(left)) == 0 ? 1 : 0;
     } else if (name == "InflateRect") {
         int32_t rect[4]{};
         if (a0 && uc_mem_read(uc_, a0, rect, sizeof(rect)) == UC_ERR_OK) {
@@ -1700,6 +1732,14 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(const std::string& name,
         ret = a0 && uc_mem_read(uc_, a0, rect, sizeof(rect)) == UC_ERR_OK &&
               int32_t(a1) >= rect[0] && int32_t(a1) < rect[2] &&
               int32_t(a2) >= rect[1] && int32_t(a2) < rect[3] ? 1 : 0;
+    } else if (name == "SetRect") {
+        if (a0) {
+            writeGuestRect(a0, int32_t(a1), int32_t(a2), int32_t(a3), int32_t(stackArg(4)));
+            ret = 1;
+        } else {
+            lastError_ = 87;
+            ret = 0;
+        }
     } else if (name == "GetAPIAddress") {
         if (!a0 && !a1 && !a2 && a3 == 0x1c) {
             ret = allocate(0x38, true);
@@ -1776,6 +1816,20 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(const std::string& name,
         const int64_t quotient = divisor ? (dividend / divisor) : 0;
         ret = uint32_t(uint64_t(quotient));
         setReg(UC_MIPS_REG_V1, uint32_t(uint64_t(quotient) >> 32));
+    } else if (name == "__litofp") {
+        const float value = static_cast<float>(int32_t(a0));
+        std::memcpy(&ret, &value, sizeof(ret));
+    } else if (name == "__eqs" || name == "__nes") {
+        float left = 0.0f;
+        float right = 0.0f;
+        std::memcpy(&left, &a0, sizeof(left));
+        std::memcpy(&right, &a1, sizeof(right));
+        const bool equal = left == right;
+        ret = (name == "__eqs" ? equal : !equal) ? 1 : 0;
+    } else if (name == "__ehvec_ctor") {
+        // Full vector construction needs repeated guest callback transfers. The
+        // current callers survive a fail-closed no-construction result.
+        ret = 0;
     } else if (name == "GetCRTFlags") {
         ret = 0;
     } else if (name == "GetCRTStorageEx") {
@@ -1826,6 +1880,24 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
         default: window.extraLongs[index] = value; break;
         }
         return previous;
+    };
+    auto windowOrigin = [&](uint32_t hwnd) {
+        int32_t x = 0;
+        int32_t y = 0;
+        for (uint32_t current = hwnd; current;) {
+            auto it = windows_.find(current);
+            if (it == windows_.end()) break;
+            x += it->second.x;
+            y += it->second.y;
+            current = it->second.parent;
+        }
+        return std::pair<int32_t, int32_t>{x, y};
+    };
+    auto firstWindow = [&]() -> uint32_t {
+        for (const auto& [hwnd, window] : windows_) {
+            if (!window.parent) return hwnd;
+        }
+        return windows_.empty() ? 0 : windows_.begin()->first;
     };
 
     if (name == "IsProcessDying") {
@@ -2169,6 +2241,29 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
     } else if (name == "OutputDebugStringW") {
         spdlog::info("OutputDebugStringW: {}", readUtf16(a0));
         ret = 0;
+    } else if (name == "FormatMessageW") {
+        const uint32_t bufferPtr = stackArg(4);
+        const uint32_t capacity = stackArg(5);
+        std::string message = "Error " + std::to_string(a2);
+#if defined(_WIN32)
+        wchar_t hostBuffer[512]{};
+        const DWORD flags = a0 & ~0x00000100u;
+        const DWORD written = ::FormatMessageW(flags, nullptr, a2, a3, hostBuffer,
+                                               DWORD(std::size(hostBuffer)), nullptr);
+        if (written) {
+            message.clear();
+            for (const wchar_t* p = hostBuffer; *p; ++p) message.push_back(*p < 0x80 ? char(*p) : '?');
+        }
+#endif
+        if (a0 & 0x00000100u) {
+            const uint32_t guestText = allocate(uint32_t((message.size() + 1) * 2), true);
+            writeUtf16(guestText, message, uint32_t(message.size() + 1));
+            if (bufferPtr) writeU32(bufferPtr, guestText);
+            ret = uint32_t(message.size());
+        } else {
+            ret = bufferPtr && capacity ? writeUtf16(bufferPtr, message, capacity) : 0;
+        }
+        lastError_ = ret ? 0 : 122;
     } else if (name == "LoadLibraryW" || name == "GetModuleHandleW") {
         const std::string dll = lowerAscii(readUtf16(a0));
         ret = dll.empty() || dll == "coredll.dll" ? 0x70000000 : 0;
@@ -2193,6 +2288,18 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             ret = 1;
 #endif
         }
+    } else if (name == "SetCursor") {
+        ret = currentCursor_;
+        currentCursor_ = a0;
+#if defined(_WIN32)
+        auto handle = guestHandles_.find(a0);
+        HCURSOR hostCursor = nullptr;
+        if (handle != guestHandles_.end() && handle->second.hostValue) {
+            hostCursor = reinterpret_cast<HCURSOR>(handle->second.hostValue);
+        }
+        ::SetCursor(hostCursor);
+#endif
+        lastError_ = 0;
     } else if (name == "GetSystemMetrics") {
 #if defined(_WIN32)
         if (a0 == 0 && framebufferWidth_ > 0) ret = uint32_t(framebufferWidth_);
@@ -2344,6 +2451,17 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
         size.time = uint32_t(++tick_ * 16);
         guestMessages_.push_back(size);
         lastError_ = 0;
+    } else if (name == "GetWindowRect") {
+        auto it = windows_.find(a0);
+        if (!a1 || it == windows_.end()) {
+            lastError_ = it == windows_.end() ? 1400 : 87;
+            ret = 0;
+        } else {
+            const auto [x, y] = windowOrigin(a0);
+            writeGuestRect(a1, x, y, x + it->second.width, y + it->second.height);
+            lastError_ = 0;
+            ret = 1;
+        }
     } else if (name == "GetClientRect") {
         auto it = windows_.find(a0);
         if (!a1 || it == windows_.end()) {
@@ -2353,6 +2471,26 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             writeGuestRect(a1, 0, 0, it->second.width, it->second.height);
             lastError_ = 0;
             ret = 1;
+        }
+    } else if (name == "AdjustWindowRectEx") {
+        int32_t rect[4]{};
+        if (!a0 || uc_mem_read(uc_, a0, rect, sizeof(rect)) != UC_ERR_OK) {
+            lastError_ = 87;
+            ret = 0;
+        } else {
+#if defined(_WIN32)
+            RECT hostRect{rect[0], rect[1], rect[2], rect[3]};
+            ret = ::AdjustWindowRectEx(&hostRect, a1, a2 != 0, a3) ? 1 : 0;
+            if (ret) {
+                writeGuestRect(a0, hostRect.left, hostRect.top, hostRect.right, hostRect.bottom);
+                lastError_ = 0;
+            } else {
+                lastError_ = ::GetLastError();
+            }
+#else
+            lastError_ = 0;
+            ret = 1;
+#endif
         }
     } else if (name == "GetDlgItem") {
         auto parent = windows_.find(a0);
@@ -2368,6 +2506,15 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
                 }
             }
             lastError_ = ret ? 0 : 1421;
+        }
+    } else if (name == "GetDlgCtrlID") {
+        auto it = windows_.find(a0);
+        if (it == windows_.end()) {
+            lastError_ = 1400;
+            ret = 0xffffffffu;
+        } else {
+            lastError_ = 0;
+            ret = it->second.menu;
         }
     } else if (name == "InvalidateRect") {
         if (!windows_.count(a0)) {
@@ -2385,6 +2532,20 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
     } else if (name == "ValidateRect") {
         ret = windows_.count(a0) ? 1 : 0;
         lastError_ = ret ? 0 : 1400;
+    } else if (name == "ScreenToClient") {
+        auto it = windows_.find(a0);
+        if (!a1 || it == windows_.end()) {
+            lastError_ = it == windows_.end() ? 1400 : 87;
+            ret = 0;
+        } else {
+            int32_t x = int32_t(readU32(a1));
+            int32_t y = int32_t(readU32(a1 + 4));
+            const auto [originX, originY] = windowOrigin(a0);
+            writeU32(a1, uint32_t(x - originX));
+            writeU32(a1 + 4, uint32_t(y - originY));
+            lastError_ = 0;
+            ret = 1;
+        }
     } else if (name == "KillTimer") {
         if (a0 && !windows_.count(a0)) {
             lastError_ = 1400;
@@ -2437,6 +2598,9 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             lastError_ = 0;
             ret = 1;
         }
+    } else if (name == "CreatePen") {
+        ret = makeGuestPen(a0, a1, a2);
+        lastError_ = 0;
     } else if (name == "CreateSolidBrush") {
         ret = makeGuestBrush(a0);
         lastError_ = 0;
@@ -2462,6 +2626,10 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             ret = dc->selectedBrush;
             dc->selectedBrush = a1;
             lastError_ = 0;
+        } else if (object->second.kind == GuestHandle::Kind::GuestPen) {
+            ret = dc->selectedPen;
+            dc->selectedPen = a1;
+            lastError_ = 0;
         } else if (object->second.kind == GuestHandle::Kind::GuestFont) {
             ret = dc->selectedFont;
             dc->selectedFont = a1;
@@ -2480,6 +2648,11 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             lastError_ = 6;
         } else if (object->second.kind == GuestHandle::Kind::GuestBrush) {
             brushes_.erase(a0);
+            guestHandles_.erase(object);
+            ret = 1;
+            lastError_ = 0;
+        } else if (object->second.kind == GuestHandle::Kind::GuestPen) {
+            pens_.erase(a0);
             guestHandles_.erase(object);
             ret = 1;
             lastError_ = 0;
@@ -2584,13 +2757,15 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
         }
     } else if (name == "LineTo") {
         GuestDc* dc = lookupGuestDc(a0);
+        auto pen = dc ? pens_.find(dc->selectedPen) : pens_.end();
         auto brush = dc ? brushes_.find(dc->selectedBrush) : brushes_.end();
-        if (!dc || brush == brushes_.end()) {
+        if (!dc || (pen == pens_.end() && brush == brushes_.end())) {
             lastError_ = dc ? 87 : 6;
             ret = 0;
         } else {
+            const uint32_t colorRef = pen != pens_.end() ? pen->second.colorRef : brush->second.colorRef;
             drawFramebufferLine(*dc, dc->x, dc->y, int32_t(a1), int32_t(a2),
-                                colorRefToPixel(brush->second.colorRef));
+                                colorRefToPixel(colorRef));
             dc->x = int32_t(a1);
             dc->y = int32_t(a2);
             lastError_ = 0;
@@ -2839,6 +3014,27 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             writeGuestMessage(a0, message);
             ret = 1;
         }
+    } else if (name == "SetForegroundWindow") {
+        if (windows_.count(a0)) {
+            guestMessages_.push_back({a0, 0x0006, 1, 0, uint32_t(++tick_ * 16), 0, 0});
+            guestMessages_.push_back({a0, 0x0007, 0, 0, uint32_t(++tick_ * 16), 0, 0});
+            lastError_ = 0;
+            ret = 1;
+        } else {
+            lastError_ = 1400;
+            ret = 0;
+        }
+    } else if (name == "GetActiveWindow") {
+        ret = firstWindow();
+        lastError_ = ret ? 0 : 1400;
+    } else if (name == "IsWindowEnabled") {
+        ret = windows_.count(a0) ? 1 : 0;
+        lastError_ = ret ? 0 : 1400;
+    } else if (name == "MessageBoxW") {
+        spdlog::info("MessageBoxW caption=\"{}\" text=\"{}\" flags=0x{:08x}",
+                     readUtf16(a2), readUtf16(a1), a3);
+        ret = 1;
+        lastError_ = 0;
     } else if (name == "IsWindowVisible") {
         auto it = windows_.find(a0);
         if (it == windows_.end()) {
