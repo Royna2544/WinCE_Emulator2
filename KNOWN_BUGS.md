@@ -39,9 +39,17 @@
 ### Message loop blocks without a host event pump
 
 - Status: Open.
-- Evidence: Smoke52 no longer stops at null PC or spins on fabricated `WM_NULL`. It dispatches guest window messages through MFC, the app hides and destroys its main HWND after the Korean-language warning, then stops at `GetMessageW` blocking on an empty guest queue with `UC_ERR_OK pc=0x70002ae8 ra=0x500245c8`. GUI smoke52 enters a host presenter message loop after the guest stop.
+- Evidence: Smoke52 no longer stops at null PC or spins on fabricated `WM_NULL`. It dispatches guest window messages through MFC, the app hides and destroys its main HWND after the Korean-language warning, then stops at `GetMessageW` blocking on an empty guest queue with `UC_ERR_OK pc=0x70002ae8 ra=0x500245c8`. GUI smoke52 enters a host presenter message loop after the guest stop. Later clean smoke `v2_synth_inavi_destroy_sync_clean_500m.log` also exits with `UC_ERR_OK` after serial-failure dialog teardown instead of crashing during MFC destroy.
 - Interpretation: The host presenter can stay open for inspection, but host input is not yet translated back into guest messages and the emulator cannot resume the blocked guest `GetMessageW` from host events.
 - Previous null-PC theory: Confirmed. `GetMessageW -> 0` caused normal app teardown, then the directly entered PE returned to `RA=0`.
+- Previous MFC destroy crash: Fixed by dispatching `DestroyWindow` messages synchronously and using the current WNDPROC for `WM_NCDESTROY`. The old failure was `unmapped memory addr=0 pc=0x50024e8c` after an asynchronously queued destroy reached a torn-down MFC window object.
+
+### GPS serial port not connected by default
+
+- Status: Open.
+- Evidence: `v2_synth_inavi_destroy_sync_clean_500m.log` shows the app opening guest device `COM7:`, then calling `GetCommState`, `SetCommState`, `SetCommTimeouts`, and `SetCommMask` on a disconnected guest serial handle. The app then follows its serial-port failure dialog path.
+- Effect: iNavi can launch and tear down the failure UI cleanly, but cannot proceed into live GPS behavior without a host serial bridge.
+- Constraint: Do not fabricate GPS data in the emulator. When a host virtual COM producer exists, bridge the guest COM handle to `--gps-comm` and let guest reads consume the host stream.
 
 ### Host presenter is not the full CE GUI yet
 

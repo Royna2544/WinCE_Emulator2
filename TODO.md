@@ -10,6 +10,7 @@
 - Continue the app-level HWInfoDB investigation at the profile matcher before `values.dat` lookup. Current assembly diagnostics show `0x129204 -> 0x299544` fails to select a profile, so `0x000594a4` stores id `0`/empty name and `0x0006bd18` later scans 118 `values.dat` records for missing id `0`. Do not bypass the warning by hardcoding iNavi state.
 - TODO: Verify the real-device contract for `KernelIoControl(0x01012ef4)` (`device=0x0101`, `function=0xbbd`). Current diagnostic bridge writes configured string results as raw NUL-terminated bytes from external registry JSON entries under `hklm\system\emulator\kernelioctl\<entry>` where `ioctlcmd` is the command and `return` is the result; keep this table synced with the real device dump once available.
 - Continue the real drawing/paint bridge. A host presenter now displays the framebuffer and survives guest teardown for inspection, but text rendering, richer common controls, and host input-to-guest message translation are still incomplete.
+- Implement the real host serial/GPS bridge for `--gps-comm`. Current iNavi dump-backed smoke opens guest `COM7:` and calls normal comm APIs; without an explicit host COM port it remains disconnected and the app follows its serial-port failure UI path.
 - Fix CE-style filesystem root enumeration/volume merging so `--fs-root C:\Users\royna\Downloads\DUMPPLZ\FILES` and the INAVI payload can coexist without ordering hacks. Current `\*` enumeration only reports the first resolved host root, which can hide `iNaviData`/`mapdata` from the app.
 
 ## Weird Ordinals To Verify Later
@@ -28,6 +29,7 @@
 
 - Reverse or trace the profile predicates inside `0x299544` far enough to identify which real registry/ioctl/file values select a nonzero HWInfo id. Known predicate inputs include `HKLM\SOFTWARE\TubeNavi\PRODUCT\ModelID`, `KernelIoControl(0x0101207c)`, and `KernelIoControl(0x01012ef4)`.
 - Continue using `iSearch.exe` as a second launch target. Next useful bridge work is host input/event delivery into the blocked `GetMessageW` loop and any file-mapping view paths if `MapViewOfFile` appears beyond the initial `CreateFileMappingW`.
+- Re-run `INavi.exe` with a real/virtual host GPS serial port via `--gps-comm` once available. Confirm that guest `COM7:` or the configured CE port maps to the host port and that `ReadFile` receives NMEA-like data from the host stream rather than fabricated test data.
 - CE_MANAGER launch is blocked by missing real `WININET.dll`. Do not synthesize `WININET.dll` unless explicitly requested; if a real CE/MIPS `WININET.dll` is supplied, rerun `CE_Manager.exe` with that directory in the explicit DLL search path.
 - Audit remaining called coredll paths that are still minimal guest-side implementations, especially `_setjmp`/`longjmp`, `__ehvec_ctor`, and locale/NLS APIs. Do not invent ABI layouts; preserve SDK names and fail closed or document evidence when exact behavior is not known.
 - Extend COM proxying only from real callers: current bridge supports host COM creation and `IUnknown` proxy stubs, but arbitrary interface methods require per-interface guest vtables and dispatch methods.
