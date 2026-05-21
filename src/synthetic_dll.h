@@ -30,6 +30,7 @@ public:
     void setMainModuleBase(uint32_t base);
     void setFramebuffer(uint32_t* bgra, int width, int height);
     void setRegistryPath(const std::filesystem::path& path);
+    void setFileSystemRoots(std::vector<std::filesystem::path> roots);
     void registerLoadedModule(const std::string& moduleName, const std::filesystem::path& path, uint32_t base,
                               const std::map<std::string, uint32_t>& exportsByName = {},
                               const std::map<uint16_t, uint32_t>& exportsByOrdinal = {});
@@ -59,6 +60,7 @@ private:
             HostFind,
             HostCrtFile,
             HostWaveIn,
+            HostWaveOut,
             HostEvent,
             HostMutex,
             HostMenu,
@@ -66,6 +68,7 @@ private:
             HostIcon,
             HostCursor,
             HostBitmap,
+            HostRegion,
             HostSocket,
             HostComInterface,
             GuestFileMapping,
@@ -73,6 +76,8 @@ private:
             GuestHeap,
             GuestResource,
             GuestRegistryKey,
+            GuestProcess,
+            GuestThread,
             GuestWindow,
             GuestDc,
             GuestBrush,
@@ -189,6 +194,7 @@ private:
     uint64_t tick_ = 0;
     bool quitPosted_ = false;
     uint32_t currentCursor_ = 0;
+    uint32_t strtokNext_ = 0;
     uint32_t comProxyVtable_ = 0;
     uint32_t comQueryInterfaceStub_ = 0;
     uint32_t comAddRefStub_ = 0;
@@ -196,9 +202,12 @@ private:
     std::string mainModulePath_ = "\\INavi\\INavi.exe";
     uint32_t mainModuleBase_ = 0;
     std::filesystem::path hostBaseDir_;
+    std::vector<std::filesystem::path> fileSystemRoots_;
     uint16_t nextAtom_ = 0xc000;
     std::map<uint32_t, ExportEntry> exportsByAddress_;
     std::map<uint32_t, uint32_t> allocationSizes_;
+    std::map<uint32_t, uint32_t> allocationCapacities_;
+    std::multimap<uint32_t, uint32_t> freeBlocksBySize_;
     std::map<uint32_t, uint32_t> tlsValues_;
     std::map<uint32_t, uint32_t> criticalSectionDepth_;
     std::map<uint32_t, uint32_t> syntheticHandleValues_;
@@ -243,9 +252,11 @@ private:
     bool dispatchHostWin32(const std::string& name, const GuestCallArgs& args, uint32_t& ret);
     bool dispatchGuestMemoryApi(const std::string& name, const GuestCallArgs& args, uint32_t& ret);
     bool dispatchCommctrl(const std::string& name, const GuestCallArgs& args, uint32_t& ret);
+    bool dispatchRegistryApi(const std::string& name, const GuestCallArgs& args, uint32_t& ret);
     bool dispatchWinsock(const std::string& name, const GuestCallArgs& args, uint32_t& ret);
     bool dispatchOle32(const std::string& name, const GuestCallArgs& args, uint32_t& ret);
     bool dispatchOleAut32(const std::string& name, const GuestCallArgs& args, uint32_t& ret);
+    bool dispatchWinmm(const std::string& name, const GuestCallArgs& args, uint32_t& ret);
     uint32_t handleWNetGetUserW(uint32_t providerName, uint32_t userName, uint32_t lengthPtr);
     uint32_t handleWaveInGetID(uint32_t waveInHandle, uint32_t deviceIdPtr);
     uint32_t handleWaveInBuffer(const std::string& name, uint32_t waveInHandle, uint32_t headerPtr);
@@ -258,6 +269,7 @@ private:
     uint32_t handleMapViewOfFile(uint32_t mappingHandle, uint32_t desiredAccess, uint32_t offsetHigh, uint32_t offsetLow);
     uint32_t handleUnmapViewOfFile(uint32_t baseAddress);
     uint32_t handleFlushViewOfFile(uint32_t baseAddress, uint32_t bytesToFlush);
+    uint32_t handleRegEnumValueW(uint32_t hkey, uint32_t index, uint32_t valueNamePtr, uint32_t valueNameSizePtr);
 
     uint32_t makeGuestHandle(GuestHandle handle);
     GuestHandle* lookupGuestHandle(uint32_t guestHandle);
@@ -304,6 +316,8 @@ private:
     void setReg(int regId, uint32_t value) const;
     uint32_t stackArg(uint32_t index) const;
     uint32_t allocate(uint32_t size, bool zeroFill);
+    void releaseAllocation(uint32_t address);
+    uint32_t allocationSize(uint32_t address) const;
     uint32_t readU32(uint32_t address) const;
     void writeU32(uint32_t address, uint32_t value) const;
     bool isGuestRangeReadable(uint32_t address, uint32_t size) const;
@@ -314,4 +328,6 @@ private:
     std::string readUtf16(uint32_t address, size_t maxChars = 512) const;
     uint32_t writeUtf16(uint32_t address, const std::string& value, uint32_t maxChars) const;
     std::filesystem::path resolveGuestPath(const std::string& guestPath) const;
+    bool isUnderFileSystemRoot(const std::filesystem::path& path) const;
+    uint32_t normalizeVirtualFileMiss(const std::filesystem::path& hostPath, uint32_t error) const;
 };

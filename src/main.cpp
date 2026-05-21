@@ -546,8 +546,9 @@ struct ModuleLoader {
 };
 
 static int runImage(PeImage& pe, const std::vector<fs::path>& dllSearchDirs,
+                    const std::vector<fs::path>& fileSystemRoots,
                     const std::optional<fs::path>& registryPath, Framebuffer& fb,
-                    bool headless) {
+                    bool headless, uint64_t instructionLimit) {
     uc_engine* uc=nullptr;
     uc_err err = uc_open(UC_ARCH_MIPS, static_cast<uc_mode>(UC_MODE_MIPS32 | UC_MODE_LITTLE_ENDIAN), &uc);
     if (err) throw std::runtime_error(std::string("uc_open: ")+uc_strerror(err));
@@ -555,6 +556,7 @@ static int runImage(PeImage& pe, const std::vector<fs::path>& dllSearchDirs,
     try {
         SyntheticDllRuntime synthetic(uc);
         synthetic.setMainModulePath(pe.path.string());
+        synthetic.setFileSystemRoots(fileSystemRoots);
         synthetic.setFramebuffer(fb.bgra.data(), fb.w, fb.h);
         if (registryPath) synthetic.setRegistryPath(*registryPath);
         uc_hook syntheticHook{};
@@ -597,8 +599,8 @@ static int runImage(PeImage& pe, const std::vector<fs::path>& dllSearchDirs,
         uc_hook h2{};
         uc_hook_add(uc,&h2,UC_HOOK_MEM_INVALID,(void*)hookInvalid,nullptr,1,0);
         uint32_t entry=main->loadBase+main->entryRva;
-        spdlog::info("starting Unicorn at 0x{:08x}", entry);
-        err=uc_emu_start(uc, entry, 0, 0, 2500000);
+        spdlog::info("starting Unicorn at 0x{:08x} instructionLimit={}", entry, instructionLimit);
+        err=uc_emu_start(uc, entry, 0, 0, instructionLimit);
         uint32_t pc=0, ra=0; uc_reg_read(uc, UC_MIPS_REG_PC, &pc); uc_reg_read(uc, UC_MIPS_REG_RA, &ra);
         spdlog::warn("emulation stopped err={} ({}) pc=0x{:08x} ra=0x{:08x}", int(err), uc_strerror(err), pc, ra);
         synthetic.flushRegistry();
@@ -611,13 +613,15 @@ int wmain(int argc, wchar_t** argv) {
     spdlog::set_level(spdlog::level::info);
     try {
         if (argc < 2) {
-            spdlog::error("usage: iNavi_Unicorn_Emulator.exe <primary.exe> [--registry regs.json] [--headless] [dll_search_dir ...]");
+            spdlog::error("usage: iNavi_Unicorn_Emulator.exe <primary.exe> [--registry regs.json] [--fs-root data_dir] [--headless] [dll_search_dir ...]");
             return 1;
         }
         fs::path exe = fs::path(argv[1]);
         std::optional<fs::path> registryPath;
         std::vector<fs::path> dllSearchDirs;
+        std::vector<fs::path> fileSystemRoots;
         bool headless = false;
+        uint64_t instructionLimit = 2500000;
         for (int i = 2; i < argc; ++i) {
             std::wstring arg = argv[i];
             if (arg == L"--registry") {
@@ -626,6 +630,18 @@ int wmain(int argc, wchar_t** argv) {
                     return 1;
                 }
                 registryPath = fs::path(argv[++i]);
+            } else if (arg == L"--fs-root") {
+                if (i + 1 >= argc) {
+                    spdlog::error("--fs-root requires a data directory");
+                    return 1;
+                }
+                fileSystemRoots.emplace_back(argv[++i]);
+            } else if (arg == L"--instructions") {
+                if (i + 1 >= argc) {
+                    spdlog::error("--instructions requires a count");
+                    return 1;
+                }
+                instructionLimit = std::stoull(std::wstring(argv[++i]));
             } else if (arg == L"--headless") {
                 headless = true;
             } else {
@@ -635,10 +651,11 @@ int wmain(int argc, wchar_t** argv) {
         spdlog::info("iNavi Unicorn Emulator v2 fresh project");
         spdlog::info("target: {}", exe.string());
         if (registryPath) spdlog::info("registry: {}", registryPath->string());
+        for (const auto& root : fileSystemRoots) spdlog::info("fs root: {}", root.string());
         for (const auto& dir : dllSearchDirs) spdlog::info("dll search dir: {}", dir.string());
         auto pe = parsePe(exe);
         Framebuffer fb; writePpm("frame_000_loader.ppm", fb, 0);
-        int rc = runImage(pe, dllSearchDirs, registryPath, fb, headless);
+        int rc = runImage(pe, dllSearchDirs, fileSystemRoots, registryPath, fb, headless, instructionLimit);
         writePpm("frame_001_after_unicorn.ppm", fb, 1);
         return rc;
     } catch (const std::exception& e) {
