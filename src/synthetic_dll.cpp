@@ -1210,6 +1210,8 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x02AB, "LoadCursorW");
     registerExport(module, 0x02B4, "GetDlgItem");
     registerExport(module, 0x02B5, "GetDlgCtrlID");
+    registerExport(module, 0x02BA, "IsDialogMessageW");
+    registerExport(module, 0x02BD, "GetForegroundWindow");
     registerExport(module, 0x02CD, "GetVersionExW");
     registerExport(module, 0x02CF, "sprintf");
     registerExport(module, 0x02DD, "LocalAllocTrace");
@@ -1218,6 +1220,7 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x02D9, "_snprintf");
     registerExport(module, 0x02DA, "LoadImageW");
     registerExport(module, 0x02BE, "SetForegroundWindow");
+    registerExport(module, 0x02BF, "SetActiveWindow");
     registerExport(module, 0x02C0, "SetFocus");
     registerExport(module, 0x02C1, "GetFocus");
     registerExport(module, 0x02C2, "GetActiveWindow");
@@ -1369,6 +1372,7 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x07E7, "__dpadd");
     registerExport(module, 0x07E9, "__dpsub");
     registerExport(module, 0x07EA, "__fpmul");
+    registerExport(module, 0x07EC, "__fpdiv");
     registerExport(module, 0x07EB, "__dpmul");
     registerExport(module, 0x07ED, "__dpdiv");
     registerExport(module, 0x07EE, "__fptoli");
@@ -5398,12 +5402,12 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(const std::string& name,
         float value = 0.0f;
         std::memcpy(&value, &a0, sizeof(value));
         setGuestDoubleReturn(uc_, static_cast<double>(value), ret);
-    } else if (name == "__fpmul") {
+    } else if (name == "__fpmul" || name == "__fpdiv") {
         float left = 0.0f;
         float right = 0.0f;
         std::memcpy(&left, &a0, sizeof(left));
         std::memcpy(&right, &a1, sizeof(right));
-        const float value = left * right;
+        const float value = name == "__fpmul" ? left * right : (right == 0.0f ? 0.0f : left / right);
         std::memcpy(&ret, &value, sizeof(ret));
     } else if (name == "fmodf") {
         float left = 0.0f;
@@ -5930,6 +5934,33 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
         }
         return 0;
     };
+
+    if (name == "IsDialogMessageW") {
+        // CE/MFC uses this in PreTranslateMessage. The emulator queues and
+        // dispatches messages itself, so only report that the message was not
+        // consumed by dialog navigation.
+        ret = 0;
+        lastError_ = windows_.count(a0) || !a0 ? 0 : 1400;
+        return true;
+    }
+    if (name == "GetForegroundWindow") {
+        ret = focusedWindow_ ? focusedWindow_ : firstWindow();
+        lastError_ = ret ? 0 : 1400;
+        return true;
+    }
+    if (name == "SetActiveWindow") {
+        const uint32_t previous = focusedWindow_;
+        auto target = windows_.find(a0);
+        if (!a0 || (target != windows_.end() && !target->second.destroyed)) {
+            focusedWindow_ = a0;
+            ret = previous;
+            lastError_ = 0;
+        } else {
+            ret = 0;
+            lastError_ = 1400;
+        }
+        return true;
+    }
 
     if (name == "IsProcessDying") {
         ret = 0;
