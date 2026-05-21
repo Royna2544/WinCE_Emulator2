@@ -152,6 +152,76 @@ WinmmBridge& winmmBridge() {
         GetProcAddress(bridge.module, "mixerGetControlDetailsW"));
     return bridge;
 }
+
+struct HostPresenterWindow {
+    uint32_t* framebuffer{};
+    int width{};
+    int height{};
+};
+
+std::wstring widenLossy(const std::string& value) {
+    std::wstring wide;
+    wide.reserve(value.size());
+    for (unsigned char ch : value) wide.push_back(wchar_t(ch));
+    return wide;
+}
+
+const wchar_t* hostPresenterClassName() {
+    return L"FakeCEHostPresenterWindow";
+}
+
+LRESULT CALLBACK hostPresenterWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
+    if (message == WM_NCCREATE) {
+        auto* create = reinterpret_cast<CREATESTRUCTW*>(lParam);
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(create->lpCreateParams));
+        return TRUE;
+    }
+    auto* presenter = reinterpret_cast<HostPresenterWindow*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+    if (message == WM_PAINT) {
+        PAINTSTRUCT paint{};
+        HDC dc = BeginPaint(hwnd, &paint);
+        if (presenter && presenter->framebuffer && presenter->width > 0 && presenter->height > 0) {
+            RECT client{};
+            GetClientRect(hwnd, &client);
+            BITMAPINFO info{};
+            info.bmiHeader.biSize = sizeof(info.bmiHeader);
+            info.bmiHeader.biWidth = presenter->width;
+            info.bmiHeader.biHeight = -presenter->height;
+            info.bmiHeader.biPlanes = 1;
+            info.bmiHeader.biBitCount = 32;
+            info.bmiHeader.biCompression = BI_RGB;
+            StretchDIBits(dc, 0, 0, client.right - client.left, client.bottom - client.top,
+                          0, 0, presenter->width, presenter->height,
+                          presenter->framebuffer, &info, DIB_RGB_COLORS, SRCCOPY);
+        }
+        EndPaint(hwnd, &paint);
+        return 0;
+    }
+    if (message == WM_ERASEBKGND) return 1;
+    if (message == WM_CLOSE) {
+        DestroyWindow(hwnd);
+        return 0;
+    }
+    if (message == WM_NCDESTROY) {
+        delete presenter;
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+        return 0;
+    }
+    return DefWindowProcW(hwnd, message, wParam, lParam);
+}
+
+ATOM registerHostPresenterClass() {
+    static ATOM atom = [] {
+        WNDCLASSW wc{};
+        wc.lpfnWndProc = hostPresenterWndProc;
+        wc.hInstance = GetModuleHandleW(nullptr);
+        wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+        wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+        wc.lpszClassName = hostPresenterClassName();
+        return RegisterClassW(&wc);
+    }();
+    return atom;
+}
 #endif
 }
 
@@ -211,9 +281,53 @@ void SyntheticDllRuntime::flushRegistry() {
     registryDirty_ = false;
 }
 
+bool SyntheticDllRuntime::hasHostWindows() const {
+#if defined(_WIN32)
+    for (const auto& [guestHwnd, window] : windows_) {
+        (void)guestHwnd;
+        HWND hwnd = reinterpret_cast<HWND>(window.hostHwnd);
+        if (hwnd && IsWindow(hwnd)) return true;
+    }
+    for (uintptr_t hostHwnd : retainedHostWindows_) {
+        HWND hwnd = reinterpret_cast<HWND>(hostHwnd);
+        if (hwnd && IsWindow(hwnd)) return true;
+    }
+#endif
+    return false;
+}
+
+void SyntheticDllRuntime::runHostMessageLoopUntilClosed() {
+#if defined(_WIN32)
+    if (!hasHostWindows()) return;
+    for (auto& [guestHwnd, window] : windows_) {
+        (void)guestHwnd;
+        HWND hwnd = reinterpret_cast<HWND>(window.hostHwnd);
+        if (!hwnd || !IsWindow(hwnd)) continue;
+        ShowWindow(hwnd, SW_SHOWNORMAL);
+        InvalidateRect(hwnd, nullptr, FALSE);
+        UpdateWindow(hwnd);
+    }
+    for (uintptr_t hostHwnd : retainedHostWindows_) {
+        HWND hwnd = reinterpret_cast<HWND>(hostHwnd);
+        if (!hwnd || !IsWindow(hwnd)) continue;
+        ShowWindow(hwnd, SW_SHOWNORMAL);
+        InvalidateRect(hwnd, nullptr, FALSE);
+        UpdateWindow(hwnd);
+    }
+    spdlog::info("entering host GUI message loop; close the presenter window to exit");
+    MSG message{};
+    while (hasHostWindows()) {
+        const BOOL got = GetMessageW(&message, nullptr, 0, 0);
+        if (got <= 0) break;
+        TranslateMessage(&message);
+        DispatchMessageW(&message);
+    }
+#endif
+}
+
 std::optional<SyntheticModule> SyntheticDllRuntime::createModule(const std::string& dllName) {
     if (sameModule(dllName, "coredll.dll")) return createCoredll();
-    if (sameModule(dllName, "commctrl.dll")) return createGenericOrdinalDll("commctrl.dll", 512);
+    if (sameModule(dllName, "commctrl.dll")) return createCommctrl();
     if (sameModule(dllName, "winsock.dll")) {
         auto module = createGenericOrdinalDll("WINSOCK.dll", 128);
         if (module) {
@@ -552,6 +666,67 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     return module;
 }
 
+std::optional<SyntheticModule> SyntheticDllRuntime::createCommctrl() {
+    SyntheticModule module;
+    module.moduleName = "commctrl.dll";
+    module.imageBase = nextModuleBase_;
+    module.imageSize = 0x00010000;
+    nextModuleBase_ += 0x00010000;
+
+    if (uc_mem_map(uc_, module.imageBase, module.imageSize, UC_PROT_ALL) != UC_ERR_OK) {
+        throw std::runtime_error("cannot map synthetic commctrl.dll");
+    }
+    for (uint16_t ordinal = 1; ordinal <= 128; ++ordinal) {
+        registerExport(module, ordinal, {});
+    }
+
+    // Names and ordinals are from the Windows CE 4.2 Standard SDK MIPSII
+    // commctrl.lib COFF import-object headers, not from /LINKERMEMBER.
+    registerExport(module, 0x0001, "InitCommonControls");
+    registerExport(module, 0x0002, "InitCommonControlsEx");
+    registerExport(module, 0x0003, "CommandBar_Create");
+    registerExport(module, 0x0004, "CommandBar_Show");
+    registerExport(module, 0x0005, "CommandBar_AddBitmap");
+    registerExport(module, 0x0006, "CommandBar_InsertComboBox");
+    registerExport(module, 0x0007, "CommandBar_InsertControl");
+    registerExport(module, 0x0008, "CommandBar_InsertMenubar");
+    registerExport(module, 0x0009, "CommandBar_GetMenu");
+    registerExport(module, 0x000A, "CommandBar_AddAdornments");
+    registerExport(module, 0x000B, "CommandBar_GetItemWindow");
+    registerExport(module, 0x000C, "CommandBar_Height");
+    registerExport(module, 0x000D, "IsCommandBarMessage");
+    registerExport(module, 0x000E, "CreateUpDownControl");
+    registerExport(module, 0x000F, "?CreateToolbar@@YAPAUHWND__@@PAU1@KIHPAUHINSTANCE__@@IPBU_TBBUTTON@@H@Z");
+    registerExport(module, 0x0010, "CreateToolbarEx");
+    registerExport(module, 0x0011, "CreateStatusWindowW");
+    registerExport(module, 0x0012, "PropertySheetW");
+    registerExport(module, 0x0013, "CreatePropertySheetPageW");
+    registerExport(module, 0x0014, "DestroyPropertySheetPage");
+    registerExport(module, 0x0015, "DrawStatusTextW");
+    registerExport(module, 0x0016, "InvertRect");
+    registerExport(module, 0x002A, "CommandBar_InsertMenubarEx");
+    registerExport(module, 0x002B, "CommandBar_DrawMenuBar");
+    registerExport(module, 0x002C, "CommandBar_AlignAdornments");
+    registerExport(module, 0x0030, "InitCapEdit");
+    registerExport(module, 0x0033, "InitDateClasses");
+    registerExport(module, 0x0034, "InitProgressClass");
+    registerExport(module, 0x0035, "InitReBarClass");
+    registerExport(module, 0x0036, "InitSBEdit");
+    registerExport(module, 0x0037, "InitStatusClass");
+    registerExport(module, 0x0038, "InitTTButton");
+    registerExport(module, 0x0039, "InitTTStatic");
+    registerExport(module, 0x003A, "InitToolTipsClass");
+    registerExport(module, 0x003B, "InitToolbarClass");
+    registerExport(module, 0x003C, "InitTrackBar");
+    registerExport(module, 0x003D, "InitUpDownClass");
+    registerExport(module, 0x0041, "ListView_SetItemSpacing");
+    registerExport(module, 0x0045, "Tab_Init");
+
+    spdlog::info("mapped synthetic commctrl.dll base=0x{:08x} ordinals={}",
+                 module.imageBase, module.exportsByOrdinal.size());
+    return module;
+}
+
 std::optional<SyntheticModule> SyntheticDllRuntime::createGenericOrdinalDll(
     const std::string& moduleName, uint16_t maxOrdinal) {
     SyntheticModule module;
@@ -619,6 +794,8 @@ uint32_t SyntheticDllRuntime::closeGuestHandle(uint32_t guestHandle) {
         return 0;
     }
     if (it->second.kind == GuestHandle::Kind::GuestWindow) {
+        auto window = windows_.find(guestHandle);
+        if (window != windows_.end()) destroyHostWindow(window->second);
         windows_.erase(guestHandle);
     } else if (it->second.kind == GuestHandle::Kind::GuestDc) {
         dcs_.erase(guestHandle);
@@ -858,6 +1035,125 @@ uint32_t SyntheticDllRuntime::makeStockObject(int32_t index) {
     return handle;
 }
 
+uint32_t SyntheticDllRuntime::makeGuestWindow(const std::string& className, const std::string& title,
+                                              uint32_t style, uint32_t exStyle, uint32_t parent,
+                                              uint32_t menu, uint32_t instance, uint32_t param,
+                                              int32_t x, int32_t y, int32_t width, int32_t height,
+                                              bool visible, uint32_t wndProc) {
+    const uint32_t hwnd = makeGuestHandle({GuestHandle::Kind::GuestWindow, 0, 0});
+    GuestWindow window{};
+    window.hwnd = hwnd;
+    window.className = lowerAscii(className);
+    window.title = title;
+    window.style = style;
+    window.exStyle = exStyle;
+    window.parent = parent;
+    window.menu = menu;
+    window.instance = instance;
+    window.param = param;
+    window.wndProc = wndProc;
+    window.x = x;
+    window.y = y;
+    window.width = std::max<int32_t>(1, width);
+    window.height = std::max<int32_t>(1, height);
+    window.visible = visible;
+    windows_[hwnd] = window;
+    ensureHostWindow(hwnd, windows_[hwnd]);
+    return hwnd;
+}
+
+uint32_t SyntheticDllRuntime::loadMenuResourceHandle(uint32_t nameArg) {
+    const ResourceEntry* resource = findResource(4, nameArg);
+#if defined(_WIN32)
+    if (!resource || resource->data.empty()) {
+        lastError_ = 1814;
+        return 0;
+    }
+    HMENU menu = LoadMenuIndirectW(reinterpret_cast<const MENUTEMPLATEW*>(resource->data.data()));
+    if (!menu) {
+        lastError_ = GetLastError();
+        return 0;
+    }
+    lastError_ = 0;
+    return makeGuestHandle({GuestHandle::Kind::HostMenu, reinterpret_cast<uintptr_t>(menu), 0});
+#else
+    lastError_ = resource ? 0 : 1814;
+    return 0;
+#endif
+}
+
+void SyntheticDllRuntime::ensureHostWindow(uint32_t guestHwnd, GuestWindow& window) {
+#if defined(_WIN32)
+    if (window.parent || !framebuffer_ || framebufferWidth_ <= 0 || framebufferHeight_ <= 0) return;
+    if (!window.hostHwnd) {
+        if (!registerHostPresenterClass()) {
+            spdlog::warn("host presenter RegisterClassW failed error={}", GetLastError());
+            return;
+        }
+        auto* presenter = new HostPresenterWindow{framebuffer_, framebufferWidth_, framebufferHeight_};
+        const std::wstring title = widenLossy(window.title.empty() ? "FakeCE" : window.title);
+        RECT rect{0, 0, std::max(1, window.width), std::max(1, window.height)};
+        AdjustWindowRectEx(&rect, WS_OVERLAPPEDWINDOW, FALSE, 0);
+        HWND hwnd = CreateWindowExW(0, hostPresenterClassName(), title.c_str(),
+                                    WS_OVERLAPPEDWINDOW,
+                                    CW_USEDEFAULT, CW_USEDEFAULT,
+                                    rect.right - rect.left, rect.bottom - rect.top,
+                                    nullptr, nullptr, GetModuleHandleW(nullptr), presenter);
+        if (!hwnd) {
+            spdlog::warn("host presenter CreateWindowExW failed guest=0x{:08x} error={}", guestHwnd, GetLastError());
+            delete presenter;
+            return;
+        }
+        window.hostHwnd = reinterpret_cast<uintptr_t>(hwnd);
+        spdlog::info("created host presenter HWND={} for guest HWND=0x{:08x} {}x{}",
+                     static_cast<void*>(hwnd), guestHwnd, window.width, window.height);
+    }
+    HWND hwnd = reinterpret_cast<HWND>(window.hostHwnd);
+    if (window.visible) ShowWindow(hwnd, SW_SHOWNORMAL);
+    InvalidateRect(hwnd, nullptr, FALSE);
+    UpdateWindow(hwnd);
+#else
+    (void)guestHwnd;
+    (void)window;
+#endif
+}
+
+void SyntheticDllRuntime::destroyHostWindow(GuestWindow& window) {
+#if defined(_WIN32)
+    if (window.hostHwnd) {
+        HWND hwnd = reinterpret_cast<HWND>(window.hostHwnd);
+        if (IsWindow(hwnd)) {
+            SetWindowTextW(hwnd, L"FakeCE presenter (guest HWND destroyed)");
+            ShowWindow(hwnd, SW_SHOWNORMAL);
+            InvalidateRect(hwnd, nullptr, FALSE);
+            retainedHostWindows_.push_back(window.hostHwnd);
+        }
+        window.hostHwnd = 0;
+    }
+#else
+    (void)window;
+#endif
+}
+
+void SyntheticDllRuntime::invalidateHostWindows() {
+#if defined(_WIN32)
+    for (auto& [guestHwnd, window] : windows_) {
+        (void)guestHwnd;
+        if (window.hostHwnd) InvalidateRect(reinterpret_cast<HWND>(window.hostHwnd), nullptr, FALSE);
+    }
+#endif
+}
+
+void SyntheticDllRuntime::pumpHostMessages() {
+#if defined(_WIN32)
+    MSG message{};
+    while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
+        TranslateMessage(&message);
+        DispatchMessageW(&message);
+    }
+#endif
+}
+
 uint32_t SyntheticDllRuntime::colorRefToPixel(uint32_t colorRef) const {
     if (colorRef == 0xffffffffu) return 0;
     return 0xff000000u | ((colorRef & 0x000000ffu) << 16) |
@@ -919,6 +1215,7 @@ void SyntheticDllRuntime::fillFramebufferRect(const GuestDc& dc,
         uint32_t* row = framebuffer_ + size_t(y) * size_t(framebufferWidth_);
         for (int32_t x = left; x < right; ++x) row[x] = pixel;
     }
+    invalidateHostWindows();
 }
 
 void SyntheticDllRuntime::drawFramebufferLine(const GuestDc& dc,
@@ -959,6 +1256,7 @@ void SyntheticDllRuntime::drawFramebufferLine(const GuestDc& dc,
             y0 += sy;
         }
     }
+    invalidateHostWindows();
 }
 
 bool SyntheticDllRuntime::stretchDibToFramebuffer(const GuestDc& dc,
@@ -1053,6 +1351,7 @@ bool SyntheticDllRuntime::stretchDibToFramebuffer(const GuestDc& dc,
             framebuffer_[size_t(dstPy) * size_t(framebufferWidth_) + size_t(dstPx)] = pixel;
         }
     }
+    invalidateHostWindows();
     return true;
 }
 
@@ -2446,6 +2745,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
         window.height = normalizeSize(stackArg(7), framebufferHeight_ > 0 ? framebufferHeight_ : 480);
         window.visible = (a3 & 0x10000000u) != 0; // WS_VISIBLE
         windows_[ret] = window;
+        ensureHostWindow(ret, windows_[ret]);
         const uint32_t createStruct = allocate(48, true);
         if (createStruct) {
             writeU32(createStruct, param);
@@ -2917,6 +3217,20 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             }
             if (flags & 0x0040u) it->second.visible = true;  // SWP_SHOWWINDOW
             if (flags & 0x0080u) it->second.visible = false; // SWP_HIDEWINDOW
+#if defined(_WIN32)
+            if (it->second.hostHwnd) {
+                HWND hwnd = reinterpret_cast<HWND>(it->second.hostHwnd);
+                if (!(flags & 0x0001u) || !(flags & 0x0002u)) {
+                    SetWindowPos(hwnd, nullptr, it->second.x, it->second.y,
+                                 std::max(1, it->second.width), std::max(1, it->second.height),
+                                 SWP_NOZORDER | SWP_NOACTIVATE);
+                }
+                ShowWindow(hwnd, it->second.visible ? SW_SHOWNORMAL : SW_HIDE);
+                InvalidateRect(hwnd, nullptr, FALSE);
+            } else {
+                ensureHostWindow(a0, it->second);
+            }
+#endif
             if (sizeChanged) {
                 GuestMessage message{};
                 message.hwnd = a0;
@@ -2947,6 +3261,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             message.message = 0x0002; // WM_DESTROY
             message.time = uint32_t(++tick_ * 16);
             guestMessages_.push_back(message);
+            destroyHostWindow(it->second);
             windows_.erase(it);
             guestHandles_.erase(a0);
             lastError_ = 0;
@@ -2960,6 +3275,13 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
         } else {
             const bool wasVisible = it->second.visible;
             it->second.visible = a1 != 0;
+            ensureHostWindow(a0, it->second);
+#if defined(_WIN32)
+            if (it->second.hostHwnd) {
+                ShowWindow(reinterpret_cast<HWND>(it->second.hostHwnd), it->second.visible ? SW_SHOWNORMAL : SW_HIDE);
+                InvalidateRect(reinterpret_cast<HWND>(it->second.hostHwnd), nullptr, FALSE);
+            }
+#endif
             if (it->second.visible != wasVisible) {
                 GuestMessage message{};
                 message.hwnd = a0;
@@ -2982,6 +3304,8 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             message.message = 0x000f; // WM_PAINT
             message.time = uint32_t(++tick_ * 16);
             guestMessages_.push_back(message);
+            ensureHostWindow(a0, it->second);
+            invalidateHostWindows();
             lastError_ = 0;
             ret = 1;
         }
@@ -3254,25 +3578,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
         ret = 0;
 #endif
     } else if (name == "LoadMenuW") {
-        const ResourceEntry* resource = findResource(4, a1);
-#if defined(_WIN32)
-        if (!resource || resource->data.empty()) {
-            lastError_ = 1814;
-            ret = 0;
-        } else {
-            HMENU menu = LoadMenuIndirectW(reinterpret_cast<const MENUTEMPLATEW*>(resource->data.data()));
-            if (menu) {
-                ret = makeGuestHandle({GuestHandle::Kind::HostMenu, reinterpret_cast<uintptr_t>(menu), 0});
-                lastError_ = 0;
-            } else {
-                lastError_ = GetLastError();
-                ret = 0;
-            }
-        }
-#else
-        lastError_ = resource ? 0 : 1814;
-        ret = 0;
-#endif
+        ret = loadMenuResourceHandle(a1);
     } else if (name == "RemoveMenu" || name == "CheckMenuItem" || name == "CheckMenuRadioItem") {
         auto* handle = lookupGuestHandle(a0);
 #if defined(_WIN32)
@@ -3622,6 +3928,207 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
         return false;
     }
 
+    return true;
+}
+
+bool SyntheticDllRuntime::dispatchCommctrl(const std::string& name,
+                                           const GuestCallArgs& args,
+                                           uint32_t& ret) {
+    const uint32_t a0 = args.a0;
+    const uint32_t a1 = args.a1;
+    const uint32_t a2 = args.a2;
+    const uint32_t a3 = args.a3;
+
+    auto commandBarHeight = [] { return 26; };
+    auto parentSize = [&](uint32_t hwnd, int32_t fallbackWidth, int32_t fallbackHeight) {
+        auto parent = windows_.find(hwnd);
+        if (parent == windows_.end()) return std::pair<int32_t, int32_t>{fallbackWidth, fallbackHeight};
+        return std::pair<int32_t, int32_t>{std::max<int32_t>(1, parent->second.width),
+                                           std::max<int32_t>(1, parent->second.height)};
+    };
+    auto topLevelWindow = [&](uint32_t hwnd) -> GuestWindow* {
+        uint32_t current = hwnd;
+        for (;;) {
+            auto it = windows_.find(current);
+            if (it == windows_.end()) return nullptr;
+            if (!it->second.parent) return &it->second;
+            current = it->second.parent;
+        }
+    };
+    auto drawCommandBarMenu = [&](GuestWindow& commandBar) -> bool {
+#if defined(_WIN32)
+        auto* menuHandle = lookupGuestHandle(commandBar.menu);
+        auto* top = topLevelWindow(commandBar.hwnd);
+        if (!menuHandle || menuHandle->kind != GuestHandle::Kind::HostMenu || !menuHandle->hostValue ||
+            !top || !top->hostHwnd) {
+            return true;
+        }
+        HWND hostHwnd = reinterpret_cast<HWND>(top->hostHwnd);
+        if (!IsWindow(hostHwnd)) return true;
+        SetMenu(hostHwnd, reinterpret_cast<HMENU>(menuHandle->hostValue));
+        DrawMenuBar(hostHwnd);
+#endif
+        return true;
+    };
+
+    if (name == "InitCommonControls") {
+        ret = 0;
+    } else if (name == "InitCommonControlsEx" ||
+               name == "InitCapEdit" ||
+               name == "InitDateClasses" ||
+               name == "InitProgressClass" ||
+               name == "InitReBarClass" ||
+               name == "InitSBEdit" ||
+               name == "InitStatusClass" ||
+               name == "InitTTButton" ||
+               name == "InitTTStatic" ||
+               name == "InitToolTipsClass" ||
+               name == "InitToolbarClass" ||
+               name == "InitTrackBar" ||
+               name == "InitUpDownClass" ||
+               name == "?Header_Init@@YAHPAUHINSTANCE__@@@Z" ||
+               name == "?ListView_Init@@YAHPAUHINSTANCE__@@@Z" ||
+               name == "?TV_Init@@YAHPAUHINSTANCE__@@@Z" ||
+               name == "Tab_Init") {
+        ret = 1;
+    } else if (name == "CommandBar_Create") {
+        const auto [width, ignoredHeight] = parentSize(a1, framebufferWidth_ > 0 ? framebufferWidth_ : 800, 480);
+        (void)ignoredHeight;
+        ret = makeGuestWindow("CommandBar", {}, 0x50000000u, 0, a1, uint32_t(a2), a0, 0,
+                              0, 0, width, commandBarHeight(), true);
+        lastError_ = ret ? 0 : 8;
+    } else if (name == "CommandBar_Show") {
+        auto it = windows_.find(a0);
+        if (it == windows_.end()) {
+            lastError_ = 1400;
+            ret = 0;
+        } else {
+            it->second.visible = a1 != 0;
+            lastError_ = 0;
+            ret = 1;
+        }
+    } else if (name == "CommandBar_Height") {
+        ret = windows_.count(a0) ? uint32_t(commandBarHeight()) : 0;
+        lastError_ = ret ? 0 : 1400;
+    } else if (name == "CommandBar_InsertComboBox" || name == "CommandBar_InsertControl") {
+        auto it = windows_.find(a0);
+        if (it == windows_.end()) {
+            lastError_ = 1400;
+            ret = 0;
+        } else {
+            const int32_t width = name == "CommandBar_InsertComboBox" ? std::max<int32_t>(1, int32_t(a2)) : 80;
+            const uint32_t style = name == "CommandBar_InsertComboBox" ? a3 : 0x50000000u;
+            const uint32_t id = name == "CommandBar_InsertComboBox" ? stackArg(4) : a2;
+            ret = makeGuestWindow(name == "CommandBar_InsertComboBox" ? "ComboBox" : "CommandBarControl",
+                                  {}, style | 0x50000000u, 0, a0, id, a1, 0,
+                                  0, 0, width, 22, it->second.visible);
+            lastError_ = ret ? 0 : 8;
+        }
+    } else if (name == "CommandBar_AddBitmap") {
+        ret = findResource(2, a2) ? 0 : 0xffffffffu;
+        lastError_ = ret == 0xffffffffu ? 1814 : 0;
+    } else if (name == "CommandBar_InsertMenubar" || name == "CommandBar_InsertMenubarEx") {
+        auto it = windows_.find(a0);
+        if (it == windows_.end()) {
+            lastError_ = 1400;
+            ret = 0;
+        } else {
+            const uint32_t nameArg = name == "CommandBar_InsertMenubar" ? a2 : a2;
+            const uint32_t menu = loadMenuResourceHandle(nameArg);
+            if (!menu) {
+                ret = 0;
+            } else {
+                it->second.menu = menu;
+                drawCommandBarMenu(it->second);
+                lastError_ = 0;
+                ret = 1;
+            }
+        }
+    } else if (name == "CommandBar_GetMenu") {
+        auto it = windows_.find(a0);
+        if (it == windows_.end()) {
+            lastError_ = 1400;
+            ret = 0;
+        } else {
+            lastError_ = it->second.menu ? 0 : 1401;
+            ret = it->second.menu;
+        }
+    } else if (name == "CommandBar_AddAdornments" ||
+               name == "CommandBar_DrawMenuBar" ||
+               name == "CommandBar_AlignAdornments") {
+        auto it = windows_.find(a0);
+        if (it == windows_.end()) {
+            lastError_ = 1400;
+            ret = name == "CommandBar_AlignAdornments" ? 0 : 0;
+        } else {
+            if (name == "CommandBar_DrawMenuBar") drawCommandBarMenu(it->second);
+            lastError_ = 0;
+            ret = name == "CommandBar_AlignAdornments" ? 0 : 1;
+        }
+    } else if (name == "IsCommandBarMessage") {
+        ret = 0;
+        lastError_ = 0;
+    } else if (name == "CreateStatusWindowW") {
+        const auto [parentWidth, parentHeight] = parentSize(a2, framebufferWidth_ > 0 ? framebufferWidth_ : 800,
+                                                           framebufferHeight_ > 0 ? framebufferHeight_ : 480);
+        const int32_t height = 22;
+        ret = makeGuestWindow("msctls_statusbar32", readUtf16(a1), a0 | 0x50000000u, 0, a2, a3, 0, 0,
+                              0, std::max<int32_t>(0, parentHeight - height), parentWidth, height, true);
+        lastError_ = ret ? 0 : 8;
+    } else if (name == "CreateToolbarEx" ||
+               name == "?CreateToolbar@@YAPAUHWND__@@PAU1@KIHPAUHINSTANCE__@@IPBU_TBBUTTON@@H@Z" ||
+               name == "CreateUpDownControl") {
+        const uint32_t parent = name == "CreateUpDownControl" ? stackArg(9) : a0;
+        const auto [parentWidth, ignoredHeight] = parentSize(parent, framebufferWidth_ > 0 ? framebufferWidth_ : 800, 480);
+        (void)ignoredHeight;
+        ret = makeGuestWindow(name == "CreateUpDownControl" ? "msctls_updown32" : "ToolbarWindow32",
+                              {}, 0x50000000u, 0, parent, a2, a3, 0,
+                              0, 0, parentWidth, commandBarHeight(), true);
+        lastError_ = ret ? 0 : 8;
+    } else if (name == "DrawStatusTextW") {
+        GuestDc* dc = lookupGuestDc(a0);
+        int32_t left = 0, top = 0, right = 0, bottom = 0;
+        if (!dc || !readGuestRect(a1, left, top, right, bottom)) {
+            lastError_ = 87;
+            ret = 0;
+        } else {
+            fillFramebufferRect(*dc, left, top, right, bottom, colorRefToPixel(0x00c0c0c0));
+            lastError_ = 0;
+            ret = 0;
+        }
+    } else if (name == "InvertRect") {
+        GuestDc* dc = lookupGuestDc(a0);
+        int32_t left = 0, top = 0, right = 0, bottom = 0;
+        if (!dc || !readGuestRect(a1, left, top, right, bottom)) {
+            lastError_ = 87;
+            ret = 0;
+        } else {
+            fillFramebufferRect(*dc, left, top, right, bottom, colorRefToPixel(0x00000000));
+            lastError_ = 0;
+            ret = 1;
+        }
+    } else if (name == "CreatePropertySheetPageW") {
+        ret = makeGuestHandle({GuestHandle::Kind::GuestPropertySheetPage, 0, 0});
+        lastError_ = ret ? 0 : 8;
+    } else if (name == "DestroyPropertySheetPage") {
+        auto it = guestHandles_.find(a0);
+        if (it == guestHandles_.end() || it->second.kind != GuestHandle::Kind::GuestPropertySheetPage) {
+            lastError_ = 6;
+            ret = 0;
+        } else {
+            guestHandles_.erase(it);
+            lastError_ = 0;
+            ret = 1;
+        }
+    } else if (name == "PropertySheetW") {
+        lastError_ = 120;
+        ret = 0xffffffffu;
+    } else if (name == "ListView_SetItemSpacing") {
+        lastError_ = windows_.count(a0) ? 0 : 1400;
+        ret = 0;
+    } else {
+        return false;
+    }
     return true;
 }
 
@@ -4121,6 +4628,7 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         if (!wndProc) {
             ret = 0;
             setReg(UC_MIPS_REG_V0, ret);
+            pumpHostMessages();
             return;
         }
         if (mutableEntry.calls <= 128) {
@@ -4140,6 +4648,7 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
             spdlog::info("synthetic {}!{} -> 0x{:08x}", mutableEntry.moduleName, name, ret);
         }
         setReg(UC_MIPS_REG_V0, ret);
+        pumpHostMessages();
         return;
     }
     if (mutableEntry.moduleName == "coredll.dll") {
@@ -4149,6 +4658,7 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
             spdlog::warn("synthetic coredll.dll!{} unsupported by translate layer -> 0", name);
         }
         setReg(UC_MIPS_REG_V0, ret);
+        pumpHostMessages();
         return;
     }
 
@@ -4156,8 +4666,7 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
     if (sameModule(mutableEntry.moduleName, "winsock.dll")) {
         handled = dispatchWinsock(name, args, ret);
     } else if (sameModule(mutableEntry.moduleName, "commctrl.dll")) {
-        ret = 1;
-        handled = true;
+        handled = dispatchCommctrl(name, args, ret);
     } else if (sameModule(mutableEntry.moduleName, "ole32.dll")) {
         handled = dispatchOle32(name, args, ret);
     } else if (sameModule(mutableEntry.moduleName, "oleaut32.dll")) {
@@ -4177,4 +4686,5 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         spdlog::info("synthetic {}!{} -> 0x{:08x}", mutableEntry.moduleName, name, ret);
     }
     setReg(UC_MIPS_REG_V0, ret);
+    pumpHostMessages();
 }

@@ -434,7 +434,8 @@ struct ModuleLoader {
 };
 
 static int runImage(PeImage& pe, const std::vector<fs::path>& dllSearchDirs,
-                    const std::optional<fs::path>& registryPath, Framebuffer& fb) {
+                    const std::optional<fs::path>& registryPath, Framebuffer& fb,
+                    bool headless) {
     uc_engine* uc=nullptr;
     uc_err err = uc_open(UC_ARCH_MIPS, static_cast<uc_mode>(UC_MODE_MIPS32 | UC_MODE_LITTLE_ENDIAN), &uc);
     if (err) throw std::runtime_error(std::string("uc_open: ")+uc_strerror(err));
@@ -472,6 +473,7 @@ static int runImage(PeImage& pe, const std::vector<fs::path>& dllSearchDirs,
         uint32_t pc=0, ra=0; uc_reg_read(uc, UC_MIPS_REG_PC, &pc); uc_reg_read(uc, UC_MIPS_REG_RA, &ra);
         spdlog::warn("emulation stopped err={} ({}) pc=0x{:08x} ra=0x{:08x}", int(err), uc_strerror(err), pc, ra);
         synthetic.flushRegistry();
+        if (!headless) synthetic.runHostMessageLoopUntilClosed();
         close(); return err == UC_ERR_OK ? 0 : 2;
     } catch (...) { close(); throw; }
 }
@@ -480,12 +482,13 @@ int wmain(int argc, wchar_t** argv) {
     spdlog::set_level(spdlog::level::info);
     try {
         if (argc < 2) {
-            spdlog::error("usage: iNavi_Unicorn_Emulator.exe <primary.exe> [--registry regs.json] [dll_search_dir ...]");
+            spdlog::error("usage: iNavi_Unicorn_Emulator.exe <primary.exe> [--registry regs.json] [--headless] [dll_search_dir ...]");
             return 1;
         }
         fs::path exe = fs::path(argv[1]);
         std::optional<fs::path> registryPath;
         std::vector<fs::path> dllSearchDirs;
+        bool headless = false;
         for (int i = 2; i < argc; ++i) {
             std::wstring arg = argv[i];
             if (arg == L"--registry") {
@@ -494,6 +497,8 @@ int wmain(int argc, wchar_t** argv) {
                     return 1;
                 }
                 registryPath = fs::path(argv[++i]);
+            } else if (arg == L"--headless") {
+                headless = true;
             } else {
                 dllSearchDirs.emplace_back(argv[i]);
             }
@@ -504,7 +509,7 @@ int wmain(int argc, wchar_t** argv) {
         for (const auto& dir : dllSearchDirs) spdlog::info("dll search dir: {}", dir.string());
         auto pe = parsePe(exe);
         Framebuffer fb; writePpm("frame_000_loader.ppm", fb, 0);
-        int rc = runImage(pe, dllSearchDirs, registryPath, fb);
+        int rc = runImage(pe, dllSearchDirs, registryPath, fb, headless);
         writePpm("frame_001_after_unicorn.ppm", fb, 1);
         return rc;
     } catch (const std::exception& e) {

@@ -30,6 +30,8 @@ public:
     void setFramebuffer(uint32_t* bgra, int width, int height);
     void setRegistryPath(const std::filesystem::path& path);
     void flushRegistry();
+    bool hasHostWindows() const;
+    void runHostMessageLoopUntilClosed();
     std::optional<SyntheticModule> createModule(const std::string& dllName);
     static void hookCode(uc_engine* uc, uint64_t address, uint32_t size, void* user);
 
@@ -60,6 +62,7 @@ private:
             HostBitmap,
             HostSocket,
             HostComInterface,
+            GuestPropertySheetPage,
             GuestHeap,
             GuestResource,
             GuestRegistryKey,
@@ -95,6 +98,7 @@ private:
         int32_t y{};
         int32_t width{800};
         int32_t height{480};
+        uintptr_t hostHwnd{};
         bool visible{};
         std::map<int32_t, uint32_t> extraLongs;
     };
@@ -184,6 +188,7 @@ private:
     std::map<uint32_t, HostWaveBuffer> hostWaveBuffers_;
     std::map<uint32_t, std::string> registryHandles_;
     std::deque<GuestMessage> guestMessages_;
+    std::vector<uintptr_t> retainedHostWindows_;
     std::vector<ResourceEntry> mainResources_;
     std::map<uint32_t, uint32_t> loadedResourceMemory_;
     std::map<std::string, uint16_t> atomsByName_;
@@ -196,12 +201,14 @@ private:
     bool registryDirty_{};
 
     std::optional<SyntheticModule> createCoredll();
+    std::optional<SyntheticModule> createCommctrl();
     std::optional<SyntheticModule> createGenericOrdinalDll(const std::string& moduleName, uint16_t maxOrdinal);
     void registerExport(SyntheticModule& module, uint16_t ordinal, const std::string& name);
     void writeStub(uint32_t address);
     void dispatch(const ExportEntry& entry);
     bool dispatchHostWin32(const std::string& name, const GuestCallArgs& args, uint32_t& ret);
     bool dispatchGuestMemoryApi(const std::string& name, const GuestCallArgs& args, uint32_t& ret);
+    bool dispatchCommctrl(const std::string& name, const GuestCallArgs& args, uint32_t& ret);
     bool dispatchWinsock(const std::string& name, const GuestCallArgs& args, uint32_t& ret);
     bool dispatchOle32(const std::string& name, const GuestCallArgs& args, uint32_t& ret);
     bool dispatchOleAut32(const std::string& name, const GuestCallArgs& args, uint32_t& ret);
@@ -217,6 +224,15 @@ private:
     uint32_t makeGuestFont(const std::array<uint8_t, 92>& logFont, bool stock = false);
     uint32_t makeGuestComProxy(uintptr_t hostInterface);
     uint32_t makeStockObject(int32_t index);
+    uint32_t makeGuestWindow(const std::string& className, const std::string& title, uint32_t style,
+                             uint32_t exStyle, uint32_t parent, uint32_t menu, uint32_t instance,
+                             uint32_t param, int32_t x, int32_t y, int32_t width, int32_t height,
+                             bool visible, uint32_t wndProc = 0);
+    uint32_t loadMenuResourceHandle(uint32_t nameArg);
+    void ensureHostWindow(uint32_t guestHwnd, GuestWindow& window);
+    void destroyHostWindow(GuestWindow& window);
+    void invalidateHostWindows();
+    void pumpHostMessages();
     uint32_t colorRefToPixel(uint32_t colorRef) const;
     bool readGuestRect(uint32_t address, int32_t& left, int32_t& top, int32_t& right, int32_t& bottom) const;
     void writeGuestRect(uint32_t address, int32_t left, int32_t top, int32_t right, int32_t bottom) const;
