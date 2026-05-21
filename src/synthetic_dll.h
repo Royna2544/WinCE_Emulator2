@@ -40,7 +40,7 @@ private:
         uint32_t ra{};
     };
     struct GuestHandle {
-        enum class Kind { HostFile, HostEvent, HostMutex, Pseudo };
+        enum class Kind { HostFile, HostFind, HostEvent, HostMutex, Pseudo };
 
         Kind kind{Kind::Pseudo};
         uintptr_t hostValue{};

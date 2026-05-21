@@ -11,6 +11,7 @@
 #include <array>
 #include <cctype>
 #include <chrono>
+#include <cstdlib>
 #include <ctime>
 #include <set>
 #include <stdexcept>
@@ -142,112 +143,130 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     }
 
     // Ordinals and names are from the Windows CE 4.2 Standard SDK MIPSII
-    // coredll.lib /LINKERMEMBER table. The function signatures are the CE
-    // winbase/kfuncs declarations for the APIs implemented in dispatch().
-    // The SDK import libraries expose more than one ordinal dialect. These
-    // low ordinals are the values observed in the real MFC/ATL DLL import
-    // thunks, where #2-#5 are the critical-section primitives.
+    // coredll.lib COFF import-object headers. Keep these SDK ordinals
+    // authoritative; runtime surprises belong in TODO.md until verified.
     registerExport(module, 0x0002, "InitializeCriticalSection");
     registerExport(module, 0x0003, "DeleteCriticalSection");
     registerExport(module, 0x0004, "EnterCriticalSection");
     registerExport(module, 0x0005, "LeaveCriticalSection");
-    registerExport(module, 0x0006, "InitializeCriticalSection");
-    registerExport(module, 0x0007, "DeleteCriticalSection");
-    registerExport(module, 0x0008, "EnterCriticalSection");
-    registerExport(module, 0x0009, "LeaveCriticalSection");
-    registerExport(module, 0x000F, "IsProcessDying");
-    registerExport(module, 0x0010, "InterlockedTestExchange");
-    registerExport(module, 0x0011, "InterlockedIncrement");
-    registerExport(module, 0x0012, "InterlockedDecrement");
-    registerExport(module, 0x0013, "InterlockedExchange");
-    registerExport(module, 0x0014, "InterlockedExchangeAdd");
-    registerExport(module, 0x0015, "InterlockedCompareExchange");
-    registerExport(module, 0x001A, "TlsGetValue");
-    registerExport(module, 0x001B, "TlsSetValue");
-    registerExport(module, 0x001D, "GetVersionExW");
+    registerExport(module, 0x0006, "ExitThread");
+    registerExport(module, 0x0009, "InterlockedTestExchange");
+    registerExport(module, 0x000A, "InterlockedIncrement");
+    registerExport(module, 0x000B, "InterlockedDecrement");
+    registerExport(module, 0x000C, "InterlockedExchange");
+    registerExport(module, 0x000F, "TlsGetValue");
+    registerExport(module, 0x0010, "TlsSetValue");
+    registerExport(module, 0x0017, "GetLocalTime");
+    registerExport(module, 0x0019, "GetSystemTime");
+    registerExport(module, 0x0020, "GetAPIAddress");
     registerExport(module, 0x0021, "LocalAlloc");
     registerExport(module, 0x0022, "LocalReAlloc");
-    registerExport(module, 0x0023, "GetLocalTime");
+    registerExport(module, 0x0023, "LocalSize");
     registerExport(module, 0x0024, "LocalFree");
-    registerExport(module, 0x0025, "GetSystemTime");
-    registerExport(module, 0x002C, "GetAPIAddress");
-    registerExport(module, 0x002D, "GetCRTStorageEx");
-    registerExport(module, 0x002E, "GetCRTFlags");
-    registerExport(module, 0x0031, "LocalAlloc");
-    registerExport(module, 0x0032, "LocalAllocTrace");
-    registerExport(module, 0x0033, "LocalReAlloc");
-    registerExport(module, 0x0034, "LocalSize");
-    registerExport(module, 0x0035, "LocalFree");
-    registerExport(module, 0x0038, "RemoteHeapFree");
-    registerExport(module, 0x003B, "RemoteLocalReAlloc");
-    registerExport(module, 0x0041, "HeapCreate");
-    registerExport(module, 0x0043, "HeapDestroy");
-    registerExport(module, 0x0045, "HeapAlloc");
-    registerExport(module, 0x0048, "HeapReAlloc");
-    registerExport(module, 0x004A, "HeapSize");
-    registerExport(module, 0x004C, "HeapFree");
-    registerExport(module, 0x004E, "GetProcessHeap");
-    registerExport(module, 0x0055, "wcschr");
-    registerExport(module, 0x0057, "wcscpy");
-    registerExport(module, 0x0058, "wcscspn");
-    registerExport(module, 0x0059, "wcslen");
-    registerExport(module, 0x005B, "wcsncmp");
-    registerExport(module, 0x005F, "wcsrchr");
-    registerExport(module, 0x006C, "strtol");
-    registerExport(module, 0x0077, "_stricmp");
-    registerExport(module, 0x0078, "_strnicmp");
-    registerExport(module, 0x00A3, "CopyRect");
-    registerExport(module, 0x00A5, "InflateRect");
-    registerExport(module, 0x00A7, "IsRectEmpty");
-    registerExport(module, 0x00A9, "PtInRect");
-    registerExport(module, 0x00F2, "CreateFileW");
-    registerExport(module, 0x00F4, "ReadFile");
-    registerExport(module, 0x00F5, "WriteFile");
-    registerExport(module, 0x00F6, "GetFileSize");
-    registerExport(module, 0x00F7, "SetFilePointer");
-    registerExport(module, 0x00FB, "SetFileTime");
-    registerExport(module, 0x011E, "IsDBCSLeadByteEx");
-    registerExport(module, 0x011F, "iswctype");
-    registerExport(module, 0x0208, "waveInReset");
-    registerExport(module, 0x0204, "waveInUnprepareHeader");
-    registerExport(module, 0x0205, "waveInAddBuffer");
-    registerExport(module, 0x020B, "waveInMessage");
-    registerExport(module, 0x020C, "waveInOpen");
-    registerExport(module, 0x020D, "mixerGetControlDetails");
-    registerExport(module, 0x021D, "WNetGetUniversalNameW");
-    registerExport(module, 0x021E, "WNetGetUserW");
-    registerExport(module, 0x0219, "WNetConnectionDialog1W");
-    registerExport(module, 0x07D0, "MfcStartupProbe");
-    registerExport(module, 0x0288, "GetLastError");
-    registerExport(module, 0x0289, "SetLastError");
-    registerExport(module, 0x0290, "VirtualAlloc");
-    registerExport(module, 0x0291, "VirtualFree");
-    registerExport(module, 0x0294, "LoadLibraryW");
-    registerExport(module, 0x0297, "GetProcAddressW");
-    registerExport(module, 0x02A0, "GetTickCount");
-    registerExport(module, 0x02A2, "GetModuleFileNameW");
-    registerExport(module, 0x02A3, "GetModuleHandleW");
-    registerExport(module, 0x02A4, "QueryPerformanceCounter");
-    registerExport(module, 0x02A5, "QueryPerformanceFrequency");
-    registerExport(module, 0x02A8, "OutputDebugStringW");
-    registerExport(module, 0x02BA, "CloseHandle");
-    registerExport(module, 0x02BC, "CreateMutexW");
-    registerExport(module, 0x02BD, "ReleaseMutex");
-    registerExport(module, 0x02C4, "GetProcAddressA");
-    registerExport(module, 0x02C7, "TryEnterCriticalSection");
-    registerExport(module, 0x0414, "LoadMenuW");
-    registerExport(module, 0x0411, "RemoveMenu");
-    registerExport(module, 0x0416, "CheckMenuItem");
-    registerExport(module, 0x0417, "CheckMenuRadioItem");
-    registerExport(module, 0x0446, "RegisterWindowMessageW");
-    registerExport(module, 0x0447, "RegisterTaskBar");
-    registerExport(module, 0x0449, "RegisterDesktop");
-    registerExport(module, 0x044E, "GlobalAddAtomW");
-    registerExport(module, 0x044F, "GlobalDeleteAtom");
-    registerExport(module, 0x0450, "GlobalFindAtomW");
-    registerExport(module, 0x0269, "CreateEventW");
-    registerExport(module, 0x026E, "Sleep");
-    registerExport(module, 0x026F, "WaitForSingleObject");
+    registerExport(module, 0x0026, "RemoteLocalReAlloc");
+    registerExport(module, 0x002C, "HeapCreate");
+    registerExport(module, 0x002D, "HeapDestroy");
+    registerExport(module, 0x002E, "HeapAlloc");
+    registerExport(module, 0x002F, "HeapReAlloc");
+    registerExport(module, 0x0030, "HeapSize");
+    registerExport(module, 0x0031, "HeapFree");
+    registerExport(module, 0x0032, "GetProcessHeap");
+    registerExport(module, 0x003B, "wcschr");
+    registerExport(module, 0x003D, "wcscpy");
+    registerExport(module, 0x003E, "wcscspn");
+    registerExport(module, 0x003F, "wcslen");
+    registerExport(module, 0x0041, "wcsncmp");
+    registerExport(module, 0x0045, "wcsrchr");
+    registerExport(module, 0x004A, "_wcsdup");
+    registerExport(module, 0x0058, "GlobalMemoryStatus");
+    registerExport(module, 0x0060, "CopyRect");
+    registerExport(module, 0x0062, "InflateRect");
+    registerExport(module, 0x0064, "IsRectEmpty");
+    registerExport(module, 0x0066, "PtInRect");
+    registerExport(module, 0x00A5, "DeleteFileW");
+    registerExport(module, 0x00A7, "FindFirstFileW");
+    registerExport(module, 0x00A8, "CreateFileW");
+    registerExport(module, 0x00AA, "ReadFile");
+    registerExport(module, 0x00AB, "WriteFile");
+    registerExport(module, 0x00AC, "GetFileSize");
+    registerExport(module, 0x00AD, "SetFilePointer");
+    registerExport(module, 0x00B1, "SetFileTime");
+    registerExport(module, 0x00B4, "FindClose");
+    registerExport(module, 0x00C0, "IsDBCSLeadByteEx");
+    registerExport(module, 0x00C1, "iswctype");
+    registerExport(module, 0x011D, "CallWindowProcW");
+    registerExport(module, 0x0195, "waveInUnprepareHeader");
+    registerExport(module, 0x0196, "waveInAddBuffer");
+    registerExport(module, 0x0199, "waveInReset");
+    registerExport(module, 0x019C, "waveInMessage");
+    registerExport(module, 0x019D, "waveInOpen");
+    registerExport(module, 0x01BE, "WNetConnectionDialog1W");
+    registerExport(module, 0x01C2, "WNetGetUniversalNameW");
+    registerExport(module, 0x01C3, "WNetGetUserW");
+    registerExport(module, 0x01EF, "CreateEventW");
+    registerExport(module, 0x01F0, "Sleep");
+    registerExport(module, 0x01F1, "WaitForSingleObject");
+    registerExport(module, 0x0204, "GetLastError");
+    registerExport(module, 0x0205, "SetLastError");
+    registerExport(module, 0x0208, "TlsCall");
+    registerExport(module, 0x020C, "VirtualAlloc");
+    registerExport(module, 0x020D, "VirtualFree");
+    registerExport(module, 0x0210, "LoadLibraryW");
+    registerExport(module, 0x0212, "GetProcAddressW");
+    registerExport(module, 0x0214, "FindResourceW");
+    registerExport(module, 0x0217, "GetTickCount");
+    registerExport(module, 0x0219, "GetModuleFileNameW");
+    registerExport(module, 0x021A, "QueryPerformanceCounter");
+    registerExport(module, 0x021B, "QueryPerformanceFrequency");
+    registerExport(module, 0x021D, "OutputDebugStringW");
+    registerExport(module, 0x0229, "CloseHandle");
+    registerExport(module, 0x022B, "CreateMutexW");
+    registerExport(module, 0x022C, "ReleaseMutex");
+    registerExport(module, 0x02CD, "GetVersionExW");
+    registerExport(module, 0x02DD, "LocalAllocTrace");
+    registerExport(module, 0x02DE, "GetCursorPos");
+    registerExport(module, 0x034B, "RemoveMenu");
+    registerExport(module, 0x034E, "LoadMenuW");
+    registerExport(module, 0x0350, "CheckMenuItem");
+    registerExport(module, 0x0351, "CheckMenuRadioItem");
+    registerExport(module, 0x036A, "LoadStringW");
+    registerExport(module, 0x036E, "GetClassInfoW");
+    registerExport(module, 0x0375, "GetSystemMetrics");
+    registerExport(module, 0x0376, "IsWindowVisible");
+    registerExport(module, 0x0379, "GetSysColor");
+    registerExport(module, 0x037B, "RegisterWindowMessageW");
+    registerExport(module, 0x037C, "RegisterTaskBar");
+    registerExport(module, 0x03FA, "free");
+    registerExport(module, 0x040C, "longjmp");
+    registerExport(module, 0x0411, "malloc");
+    registerExport(module, 0x0414, "memcpy");
+    registerExport(module, 0x0416, "memmove");
+    registerExport(module, 0x0417, "memset");
+    registerExport(module, 0x041E, "realloc");
+    registerExport(module, 0x0429, "strcmp");
+    registerExport(module, 0x042A, "strcpy");
+    registerExport(module, 0x042B, "strcspn");
+    registerExport(module, 0x042C, "strlen");
+    registerExport(module, 0x0446, "operator_delete");
+    registerExport(module, 0x0447, "operator_new");
+    registerExport(module, 0x0499, "GetModuleHandleW");
+    registerExport(module, 0x04BD, "IsProcessDying");
+    registerExport(module, 0x04CB, "GetCRTStorageEx");
+    registerExport(module, 0x04CC, "GetCRTFlags");
+    registerExport(module, 0x04CE, "GetProcAddressA");
+    registerExport(module, 0x04D1, "TryEnterCriticalSection");
+    registerExport(module, 0x057C, "strtol");
+    registerExport(module, 0x0582, "_stricmp");
+    registerExport(module, 0x0583, "_strnicmp");
+    registerExport(module, 0x05D3, "InterlockedExchangeAdd");
+    registerExport(module, 0x05D4, "InterlockedCompareExchange");
+    registerExport(module, 0x05E3, "RegisterDesktop");
+    registerExport(module, 0x05EF, "GlobalAddAtomW");
+    registerExport(module, 0x05F0, "GlobalDeleteAtom");
+    registerExport(module, 0x05F1, "GlobalFindAtomW");
+    registerExport(module, 0x0635, "mixerGetControlDetails");
+    registerExport(module, 0x0646, "RemoteHeapFree");
+    registerExport(module, 0x07D0, "_setjmp");
     registerExport(module, 0x0532, "operator_new");
     registerExport(module, 0x0533, "operator_vector_new");
     registerExport(module, 0x0535, "operator_new_nothrow");
@@ -330,7 +349,11 @@ uint32_t SyntheticDllRuntime::closeGuestHandle(uint32_t guestHandle) {
     }
 #if defined(_WIN32)
     if (it->second.hostValue) {
-        CloseHandle(reinterpret_cast<HANDLE>(it->second.hostValue));
+        if (it->second.kind == GuestHandle::Kind::HostFind) {
+            FindClose(reinterpret_cast<HANDLE>(it->second.hostValue));
+        } else {
+            CloseHandle(reinterpret_cast<HANDLE>(it->second.hostValue));
+        }
     }
 #endif
     guestHandles_.erase(it);
@@ -465,7 +488,7 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(const std::string& name,
     const uint32_t a2 = args.a2;
     const uint32_t a3 = args.a3;
 
-    if (name == "memcpy") {
+    if (name == "memcpy" || name == "memmove") {
         copyGuest(a0, a1, a2);
         ret = a0;
     } else if (name == "memset") {
@@ -473,6 +496,8 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(const std::string& name,
         ret = a0;
     } else if (name == "LocalAlloc") {
         ret = allocate(a1, (a0 & 0x0040u) != 0);
+    } else if (name == "malloc") {
+        ret = allocate(a0, false);
     } else if (name == "LocalAllocTrace") {
         if (a2 == 0x38 && a1) {
             uint32_t firstWord = 0;
@@ -480,14 +505,14 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(const std::string& name,
         } else {
             ret = allocate(a1 ? a1 : 1, false);
         }
-    } else if (name == "LocalFree") {
+    } else if (name == "LocalFree" || name == "free") {
         ret = 0;
     } else if (name == "LocalSize" || name == "HeapSize") {
         auto it = allocationSizes_.find(name == "HeapSize" ? a2 : a0);
         ret = it == allocationSizes_.end() ? 0 : it->second;
-    } else if (name == "LocalReAlloc" || name == "RemoteLocalReAlloc") {
+    } else if (name == "LocalReAlloc" || name == "RemoteLocalReAlloc" || name == "realloc") {
         const uint32_t oldSize = allocationSizes_.count(a0) ? allocationSizes_[a0] : 0;
-        ret = allocate(a1, (a2 & 0x0040u) != 0);
+        ret = allocate(a1, name == "realloc" ? false : (a2 & 0x0040u) != 0);
         if (a0 && ret && oldSize) {
             std::vector<uint8_t> bytes(std::min(oldSize, a1));
             uc_mem_read(uc_, a0, bytes.data(), bytes.size());
@@ -546,6 +571,39 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(const std::string& name,
             if (!ch) break;
         }
         ret = a0;
+    } else if (name == "_wcsdup") {
+        const std::string value = readUtf16(a0);
+        ret = allocate(uint32_t((value.size() + 1) * 2), false);
+        writeUtf16(ret, value, uint32_t(value.size() + 1));
+    } else if (name == "strlen") {
+        ret = uint32_t(readAscii(a0).size());
+    } else if (name == "strcpy") {
+        uint32_t offset = 0;
+        for (;; ++offset) {
+            char ch = 0;
+            uc_mem_read(uc_, a1 + offset, &ch, sizeof(ch));
+            uc_mem_write(uc_, a0 + offset, &ch, sizeof(ch));
+            if (!ch) break;
+        }
+        ret = a0;
+    } else if (name == "strcmp") {
+        uint32_t offset = 0;
+        for (;; ++offset) {
+            unsigned char left = 0;
+            unsigned char right = 0;
+            uc_mem_read(uc_, a0 + offset, &left, sizeof(left));
+            uc_mem_read(uc_, a1 + offset, &right, sizeof(right));
+            if (left != right || !left || !right) {
+                ret = uint32_t(int(left) - int(right));
+                break;
+            }
+        }
+    } else if (name == "strcspn") {
+        const std::string source = readAscii(a0);
+        const std::string reject = readAscii(a1);
+        size_t count = 0;
+        while (count < source.size() && reject.find(source[count]) == std::string::npos) ++count;
+        ret = uint32_t(count);
     } else if (name == "GetAPIAddress") {
         if (!a0 && !a1 && !a2 && a3 == 0x1c) {
             ret = allocate(0x38, true);
@@ -561,6 +619,10 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(const std::string& name,
         ret = 0;
     } else if (name == "GetCRTStorageEx") {
         ret = a1 && a2 == 0x38 ? 0 : allocate(0x100, true);
+    } else if (name == "_setjmp") {
+        ret = 0;
+    } else if (name == "longjmp") {
+        ret = a1 ? a1 : 1;
     } else {
         return false;
     }
@@ -589,6 +651,36 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
 #else
         ret = uint32_t(++tick_ * 16);
 #endif
+    } else if (name == "GlobalMemoryStatus") {
+        if (!a0) {
+            lastError_ = 87;
+            ret = 0;
+        } else {
+#if defined(_WIN32)
+            MEMORYSTATUS status{};
+            status.dwLength = sizeof(status);
+            GlobalMemoryStatus(&status);
+            writeU32(a0, 32);
+            writeU32(a0 + 4, status.dwMemoryLoad);
+            writeU32(a0 + 8, status.dwTotalPhys);
+            writeU32(a0 + 12, status.dwAvailPhys);
+            writeU32(a0 + 16, status.dwTotalPageFile);
+            writeU32(a0 + 20, status.dwAvailPageFile);
+            writeU32(a0 + 24, status.dwTotalVirtual);
+            writeU32(a0 + 28, status.dwAvailVirtual);
+#else
+            writeU32(a0, 32);
+            writeU32(a0 + 4, 50);
+            writeU32(a0 + 8, 64u * 1024u * 1024u);
+            writeU32(a0 + 12, 32u * 1024u * 1024u);
+            writeU32(a0 + 16, 64u * 1024u * 1024u);
+            writeU32(a0 + 20, 32u * 1024u * 1024u);
+            writeU32(a0 + 24, heapLimit_ - heapBase_);
+            writeU32(a0 + 28, heapLimit_ - nextHeap_);
+#endif
+            ret = 0;
+            lastError_ = 0;
+        }
     } else if (name == "Sleep") {
 #if defined(_WIN32)
         Sleep(a0);
@@ -642,6 +734,8 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
         ret = 0;
 #endif
     } else if (name == "CloseHandle") {
+        ret = closeGuestHandle(a0);
+    } else if (name == "FindClose") {
         ret = closeGuestHandle(a0);
     } else if (name == "ReleaseMutex") {
         auto* handle = lookupGuestHandle(a0);
@@ -701,6 +795,49 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             ret = 0xffffffffu;
         } else {
             ret = makeGuestHandle({GuestHandle::Kind::HostFile, reinterpret_cast<uintptr_t>(host), 0});
+            lastError_ = 0;
+        }
+#else
+        lastError_ = 2;
+        ret = 0xffffffffu;
+#endif
+    } else if (name == "DeleteFileW") {
+#if defined(_WIN32)
+        const std::filesystem::path hostPath = resolveGuestPath(readUtf16(a0));
+        const BOOL ok = !hostPath.empty() && DeleteFileW(hostPath.wstring().c_str());
+        ret = ok ? 1 : 0;
+        lastError_ = ret ? 0 : GetLastError();
+#else
+        lastError_ = 2;
+        ret = 0;
+#endif
+    } else if (name == "FindFirstFileW") {
+#if defined(_WIN32)
+        const std::filesystem::path hostPath = resolveGuestPath(readUtf16(a0));
+        WIN32_FIND_DATAW data{};
+        HANDLE host = INVALID_HANDLE_VALUE;
+        if (!hostPath.empty()) {
+            host = FindFirstFileW(hostPath.wstring().c_str(), &data);
+        }
+        if (host == INVALID_HANDLE_VALUE) {
+            lastError_ = GetLastError();
+            ret = 0xffffffffu;
+        } else {
+            if (a1) {
+                writeU32(a1, data.dwFileAttributes);
+                uc_mem_write(uc_, a1 + 4, &data.ftCreationTime, sizeof(data.ftCreationTime));
+                uc_mem_write(uc_, a1 + 12, &data.ftLastAccessTime, sizeof(data.ftLastAccessTime));
+                uc_mem_write(uc_, a1 + 20, &data.ftLastWriteTime, sizeof(data.ftLastWriteTime));
+                writeU32(a1 + 28, data.nFileSizeHigh);
+                writeU32(a1 + 32, data.nFileSizeLow);
+                writeU32(a1 + 36, 0);
+                for (uint32_t i = 0; i < 260; ++i) {
+                    const uint16_t ch = uint16_t(data.cFileName[i]);
+                    uc_mem_write(uc_, a1 + 40 + i * 2, &ch, sizeof(ch));
+                    if (!ch) break;
+                }
+            }
+            ret = makeGuestHandle({GuestHandle::Kind::HostFind, reinterpret_cast<uintptr_t>(host), 0});
             lastError_ = 0;
         }
 #else
@@ -791,6 +928,60 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             lastError_ = 6;
 #endif
         }
+    } else if (name == "GetModuleFileNameW") {
+        ret = writeUtf16(a1, mainModulePath_, a2);
+        lastError_ = ret ? 0 : 122;
+    } else if (name == "GetCursorPos") {
+        if (!a0) {
+            lastError_ = 87;
+            ret = 0;
+        } else {
+#if defined(_WIN32)
+            POINT point{};
+            ret = GetCursorPos(&point) ? 1 : 0;
+            writeU32(a0, uint32_t(point.x));
+            writeU32(a0 + 4, uint32_t(point.y));
+            if (!ret) lastError_ = GetLastError();
+#else
+            writeU32(a0, 0);
+            writeU32(a0 + 4, 0);
+            ret = 1;
+#endif
+        }
+    } else if (name == "GetSystemMetrics") {
+#if defined(_WIN32)
+        ret = uint32_t(GetSystemMetrics(int(a0)));
+#else
+        if (a0 == 0) ret = 800;
+        else if (a0 == 1) ret = 480;
+        else ret = 0;
+#endif
+    } else if (name == "GetSysColor") {
+#if defined(_WIN32)
+        ret = uint32_t(GetSysColor(int(a0)));
+#else
+        ret = 0x00ffffffu;
+#endif
+    } else if (name == "RegisterWindowMessageW") {
+#if defined(_WIN32)
+        const std::string value = readUtf16(a0);
+        std::wstring wide(value.begin(), value.end());
+        ret = RegisterWindowMessageW(wide.c_str());
+        if (!ret) lastError_ = GetLastError();
+#else
+        ret = 0xc000u;
+#endif
+    } else if (name == "IsWindowVisible") {
+        lastError_ = 1400;
+        ret = 0;
+    } else if (name == "LoadMenuW" || name == "RemoveMenu" ||
+               name == "CheckMenuItem" || name == "CheckMenuRadioItem" ||
+               name == "GetClassInfoW") {
+        lastError_ = 1401;
+        ret = 0;
+    } else if (name == "FindResourceW" || name == "LoadStringW") {
+        lastError_ = 1813;
+        ret = 0;
     } else {
         return false;
     }
@@ -816,6 +1007,24 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
     }
 
     uint32_t ret = 1;
+    if (mutableEntry.moduleName == "coredll.dll" && name == "CallWindowProcW") {
+        if (!a0) {
+            ret = 0;
+            setReg(UC_MIPS_REG_V0, ret);
+            return;
+        }
+        const uint32_t lParam = stackArg(4);
+        if (mutableEntry.calls <= 128) {
+            spdlog::info("synthetic coredll.dll!CallWindowProcW transfer wndproc=0x{:08x} hwnd=0x{:08x} msg=0x{:08x} wparam=0x{:08x} lparam=0x{:08x}",
+                         a0, a1, a2, a3, lParam);
+        }
+        setReg(UC_MIPS_REG_A0, a1);
+        setReg(UC_MIPS_REG_A1, a2);
+        setReg(UC_MIPS_REG_A2, a3);
+        setReg(UC_MIPS_REG_A3, lParam);
+        setReg(UC_MIPS_REG_PC, a0);
+        return;
+    }
     if (mutableEntry.moduleName == "coredll.dll" &&
         (dispatchHostWin32(name, args, ret) || dispatchGuestMemoryApi(name, args, ret))) {
         if (mutableEntry.calls <= 128) {
@@ -859,6 +1068,10 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         else ret = 0; // S_OK-style default for COM init/uninit helpers.
     } else if (name == "SystemStarted") ret = 1;
     else if (name == "SystemMemoryLow") ret = 0;
+    else if (name == "ExitThread") {
+        ret = 0;
+        uc_emu_stop(uc_);
+    }
     else if (name == "LookupSyntheticHandle") {
         auto it = syntheticHandleValues_.find(a0);
         ret = it == syntheticHandleValues_.end() ? 0 : it->second;
@@ -922,6 +1135,8 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
     else if (name == "TlsSetValue") {
         tlsValues_[a0] = a1;
         ret = 1;
+    } else if (name == "TlsCall") {
+        ret = 0;
     } else if (name == "GetLastError") ret = lastError_;
     else if (name == "SetLastError") {
         lastError_ = a0;
@@ -980,6 +1195,11 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         uc_mem_read(uc_, a0, &old, sizeof(old));
         const uint32_t next = old + a1;
         uc_mem_write(uc_, a0, &next, sizeof(next));
+        ret = old;
+    } else if (name == "InterlockedCompareExchange") {
+        uint32_t old = 0;
+        uc_mem_read(uc_, a0, &old, sizeof(old));
+        if (old == a2) uc_mem_write(uc_, a0, &a1, sizeof(a1));
         ret = old;
     } else if (name == "CloseHandle") ret = closeGuestHandle(a0);
     else if (name == "ReleaseMutex") {
