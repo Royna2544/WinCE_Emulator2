@@ -187,6 +187,9 @@ private:
     std::map<int32_t, uint32_t> stockObjects_;
     std::map<uint32_t, HostWaveBuffer> hostWaveBuffers_;
     std::map<uint32_t, std::string> registryHandles_;
+    std::map<uint32_t, std::string> fileHandleDebugNames_;
+    std::map<uint32_t, uint32_t> fileReadCounts_;
+    std::map<uint32_t, uint32_t> fileSeekCounts_;
     std::deque<GuestMessage> guestMessages_;
     std::vector<uintptr_t> retainedHostWindows_;
     std::vector<ResourceEntry> mainResources_;
@@ -213,6 +216,8 @@ private:
     bool dispatchOle32(const std::string& name, const GuestCallArgs& args, uint32_t& ret);
     bool dispatchOleAut32(const std::string& name, const GuestCallArgs& args, uint32_t& ret);
     uint32_t handleWNetGetUserW(uint32_t providerName, uint32_t userName, uint32_t lengthPtr);
+    uint32_t handleWaveInGetID(uint32_t waveInHandle, uint32_t deviceIdPtr);
+    uint32_t handleWaveInBuffer(const std::string& name, uint32_t waveInHandle, uint32_t headerPtr);
 
     uint32_t makeGuestHandle(GuestHandle handle);
     GuestHandle* lookupGuestHandle(uint32_t guestHandle);
@@ -261,6 +266,7 @@ private:
     uint32_t allocate(uint32_t size, bool zeroFill);
     uint32_t readU32(uint32_t address) const;
     void writeU32(uint32_t address, uint32_t value) const;
+    bool isGuestRangeReadable(uint32_t address, uint32_t size) const;
     bool copyGuest(uint32_t dst, uint32_t src, uint32_t size) const;
     bool fillGuest(uint32_t dst, uint8_t value, uint32_t size) const;
     std::string readAscii(uint32_t address, size_t maxChars = 512) const;
