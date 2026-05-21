@@ -62,6 +62,102 @@ std::string normalizeRegistryValueName(std::string name) {
     return lowerAscii(std::move(name));
 }
 
+std::string normalizeRegistryPath(std::string path) {
+    path = normalizeRegistrySubKey(std::move(path));
+    auto replaceRoot = [&](std::string_view from, std::string_view to) {
+        if (path == from) {
+            path = std::string(to);
+        } else if (path.rfind(std::string(from) + "\\", 0) == 0) {
+            path = std::string(to) + path.substr(from.size());
+        }
+    };
+    replaceRoot("hkey_classes_root", "hkcr");
+    replaceRoot("hkey_current_user", "hkcu");
+    replaceRoot("hkey_local_machine", "hklm");
+    replaceRoot("hkey_users", "hku");
+    return path;
+}
+
+std::u16string utf8ToUtf16(std::string_view text) {
+    std::u16string out;
+    for (size_t i = 0; i < text.size();) {
+        const uint8_t first = static_cast<uint8_t>(text[i++]);
+        uint32_t codePoint = 0xfffdu;
+        size_t extra = 0;
+        if (first < 0x80) {
+            codePoint = first;
+        } else if ((first & 0xe0u) == 0xc0u) {
+            codePoint = first & 0x1fu;
+            extra = 1;
+        } else if ((first & 0xf0u) == 0xe0u) {
+            codePoint = first & 0x0fu;
+            extra = 2;
+        } else if ((first & 0xf8u) == 0xf0u) {
+            codePoint = first & 0x07u;
+            extra = 3;
+        }
+        bool valid = extra == 0 || i + extra <= text.size();
+        for (size_t j = 0; valid && j < extra; ++j) {
+            const uint8_t byte = static_cast<uint8_t>(text[i + j]);
+            if ((byte & 0xc0u) != 0x80u) {
+                valid = false;
+                break;
+            }
+            codePoint = (codePoint << 6) | (byte & 0x3fu);
+        }
+        if (valid) i += extra;
+        if (!valid || codePoint > 0x10ffffu || (codePoint >= 0xd800u && codePoint <= 0xdfffu)) {
+            codePoint = 0xfffdu;
+        }
+        if (codePoint <= 0xffffu) {
+            out.push_back(static_cast<char16_t>(codePoint));
+        } else {
+            codePoint -= 0x10000u;
+            out.push_back(static_cast<char16_t>(0xd800u + (codePoint >> 10)));
+            out.push_back(static_cast<char16_t>(0xdc00u + (codePoint & 0x3ffu)));
+        }
+    }
+    return out;
+}
+
+void appendUtf8(std::string& out, uint32_t codePoint) {
+    if (codePoint <= 0x7fu) {
+        out.push_back(char(codePoint));
+    } else if (codePoint <= 0x7ffu) {
+        out.push_back(char(0xc0u | (codePoint >> 6)));
+        out.push_back(char(0x80u | (codePoint & 0x3fu)));
+    } else if (codePoint <= 0xffffu) {
+        out.push_back(char(0xe0u | (codePoint >> 12)));
+        out.push_back(char(0x80u | ((codePoint >> 6) & 0x3fu)));
+        out.push_back(char(0x80u | (codePoint & 0x3fu)));
+    } else {
+        out.push_back(char(0xf0u | (codePoint >> 18)));
+        out.push_back(char(0x80u | ((codePoint >> 12) & 0x3fu)));
+        out.push_back(char(0x80u | ((codePoint >> 6) & 0x3fu)));
+        out.push_back(char(0x80u | (codePoint & 0x3fu)));
+    }
+}
+
+std::string utf16ToUtf8(const std::vector<uint16_t>& units) {
+    std::string out;
+    for (size_t i = 0; i < units.size(); ++i) {
+        uint32_t codePoint = units[i];
+        if (codePoint >= 0xd800u && codePoint <= 0xdbffu && i + 1 < units.size()) {
+            const uint32_t low = units[i + 1];
+            if (low >= 0xdc00u && low <= 0xdfffu) {
+                codePoint = 0x10000u + ((codePoint - 0xd800u) << 10) + (low - 0xdc00u);
+                ++i;
+            } else {
+                codePoint = 0xfffdu;
+            }
+        } else if (codePoint >= 0xdc00u && codePoint <= 0xdfffu) {
+            codePoint = 0xfffdu;
+        }
+        appendUtf8(out, codePoint);
+    }
+    return out;
+}
+
 std::string registryTypeName(uint32_t type) {
     switch (type) {
     case 0: return "REG_NONE";
@@ -80,6 +176,16 @@ std::string registryValuePreview(const nlohmann::json& value) {
     if (data->is_string()) return data->get<std::string>();
     if (data->is_number_unsigned()) return std::to_string(data->get<uint32_t>());
     if (data->is_number_integer()) return std::to_string(data->get<int32_t>());
+    if (data->is_array() && std::all_of(data->begin(), data->end(), [](const nlohmann::json& item) {
+            return item.is_string();
+        })) {
+        std::string joined;
+        for (const auto& item : *data) {
+            if (!joined.empty()) joined += ";";
+            joined += item.get<std::string>();
+        }
+        return joined;
+    }
     if (data->is_array()) return "<binary " + std::to_string(data->size()) + " bytes>";
     return data->dump();
 }
@@ -104,6 +210,42 @@ uint32_t registryTypeId(const nlohmann::json& value) {
         }
     }
     return 0;
+}
+
+void normalizeRegistryDatabase(nlohmann::json& registry) {
+    if (!registry.is_object()) registry = nlohmann::json::object();
+    nlohmann::json normalizedKeys = nlohmann::json::object();
+    const auto keys = registry.find("keys");
+    if (keys != registry.end() && keys->is_object()) {
+        for (auto it = keys->begin(); it != keys->end(); ++it) {
+            const std::string path = normalizeRegistryPath(it.key());
+            if (path.empty()) continue;
+            nlohmann::json key = it.value().is_object() ? it.value() : nlohmann::json::object();
+            const nlohmann::json* sourceValues = nullptr;
+            const auto values = key.find("values");
+            if (values != key.end() && values->is_object()) {
+                sourceValues = &*values;
+            } else if (key.is_object()) {
+                sourceValues = &key;
+            }
+            nlohmann::json normalizedValues = nlohmann::json::object();
+            if (sourceValues) {
+                for (auto valueIt = sourceValues->begin(); valueIt != sourceValues->end(); ++valueIt) {
+                    normalizedValues[normalizeRegistryValueName(valueIt.key())] = valueIt.value();
+                }
+            }
+            key["values"] = std::move(normalizedValues);
+            if (normalizedKeys.contains(path)) {
+                auto& existingValues = normalizedKeys[path]["values"];
+                for (auto valueIt = key["values"].begin(); valueIt != key["values"].end(); ++valueIt) {
+                    existingValues[valueIt.key()] = valueIt.value();
+                }
+            } else {
+                normalizedKeys[path] = std::move(key);
+            }
+        }
+    }
+    registry["keys"] = std::move(normalizedKeys);
 }
 
 bool sameModule(std::string name, std::string_view wanted) {
@@ -278,7 +420,7 @@ void SyntheticDllRuntime::setRegistryPath(const std::filesystem::path& path) {
     }
     if (!registry_.is_object()) registry_ = nlohmann::json::object();
     if (!registry_.contains("version")) registry_["version"] = 1;
-    if (!registry_.contains("keys") || !registry_["keys"].is_object()) registry_["keys"] = nlohmann::json::object();
+    normalizeRegistryDatabase(registry_);
     registryEnsureKey("hkcr");
     registryEnsureKey("hkcu");
     registryEnsureKey("hklm");
@@ -946,11 +1088,37 @@ std::vector<uint8_t> SyntheticDllRuntime::registryValueBytes(const nlohmann::jso
     const uint32_t type = registryTypeId(value);
     std::vector<uint8_t> bytes;
     const auto data = value.find("data");
-    if (type == 1 || type == 2 || type == 7) {
+    auto appendUtf16Le = [&](const std::string& text) {
+        const std::u16string wide = utf8ToUtf16(text);
+        for (char16_t unit : wide) {
+            bytes.push_back(uint8_t(unit));
+            bytes.push_back(uint8_t(uint16_t(unit) >> 8));
+        }
+    };
+    auto appendWideNul = [&]() {
+        bytes.push_back(0);
+        bytes.push_back(0);
+    };
+    if (type == 1 || type == 2) {
         std::string text;
         if (data != value.end() && data->is_string()) text = data->get<std::string>();
-        bytes.resize((text.size() + 1) * 2);
-        for (size_t i = 0; i < text.size(); ++i) bytes[i * 2] = uint8_t(text[i]);
+        appendUtf16Le(text);
+        appendWideNul();
+    } else if (type == 7) {
+        if (data != value.end() && data->is_array()) {
+            for (const auto& item : *data) {
+                if (!item.is_string()) continue;
+                appendUtf16Le(item.get<std::string>());
+                appendWideNul();
+            }
+            appendWideNul();
+        } else {
+            std::string text;
+            if (data != value.end() && data->is_string()) text = data->get<std::string>();
+            appendUtf16Le(text);
+            appendWideNul();
+            appendWideNul();
+        }
     } else if (type == 4) {
         uint32_t dword = 0;
         if (data != value.end() && data->is_number_unsigned()) dword = data->get<uint32_t>();
@@ -967,15 +1135,32 @@ std::vector<uint8_t> SyntheticDllRuntime::registryValueBytes(const nlohmann::jso
 nlohmann::json SyntheticDllRuntime::registryJsonFromBytes(uint32_t type, uint32_t dataPtr, uint32_t dataSize) const {
     nlohmann::json value = nlohmann::json::object();
     value["type"] = registryTypeName(type);
-    if (type == 1 || type == 2 || type == 7) {
-        std::string text;
+    if (type == 1 || type == 2) {
+        std::vector<uint16_t> units;
         const uint32_t chars = dataSize / 2;
         for (uint32_t i = 0; dataPtr && i < chars; ++i) {
             uint16_t ch = 0;
             if (uc_mem_read(uc_, dataPtr + i * 2, &ch, sizeof(ch)) != UC_ERR_OK || !ch) break;
-            text.push_back(ch < 0x80 ? char(ch) : '?');
+            units.push_back(ch);
         }
-        value["data"] = text;
+        value["data"] = utf16ToUtf8(units);
+    } else if (type == 7) {
+        nlohmann::json strings = nlohmann::json::array();
+        std::vector<uint16_t> current;
+        const uint32_t chars = dataSize / 2;
+        for (uint32_t i = 0; dataPtr && i < chars; ++i) {
+            uint16_t ch = 0;
+            if (uc_mem_read(uc_, dataPtr + i * 2, &ch, sizeof(ch)) != UC_ERR_OK) break;
+            if (!ch) {
+                if (current.empty()) break;
+                strings.push_back(utf16ToUtf8(current));
+                current.clear();
+            } else {
+                current.push_back(ch);
+            }
+        }
+        if (!current.empty()) strings.push_back(utf16ToUtf8(current));
+        value["data"] = std::move(strings);
     } else if (type == 4 && dataPtr && dataSize >= 4) {
         value["data"] = readU32(dataPtr);
     } else {
@@ -1635,6 +1820,41 @@ uint32_t SyntheticDllRuntime::handleWaveInBuffer(const std::string& name, uint32
 #endif
 }
 
+uint32_t SyntheticDllRuntime::handleSystemParametersInfoW(uint32_t action,
+                                                          uint32_t uiParam,
+                                                          uint32_t pvParam,
+                                                          uint32_t flags) {
+    char actionHex[9]{};
+    std::snprintf(actionHex, sizeof(actionHex), "%08x", action);
+    const nlohmann::json* configured =
+        registryValue("hklm\\system\\emulator\\systemparametersinfo", actionHex);
+    if (!configured && action == 0x00000101u) {
+        configured = registryValue("hklm\\system\\emulator\\systemparametersinfo", "platformtype");
+    }
+    if (!configured && action == 0x00000102u) {
+        configured = registryValue("hklm\\system\\emulator\\systemparametersinfo", "oeminfo");
+    }
+
+    std::string text;
+    if (configured) {
+        const auto data = configured->find("data");
+        if (data != configured->end() && data->is_string()) text = data->get<std::string>();
+    }
+
+    uint32_t result = 0;
+    if (!text.empty() && pvParam && uiParam) {
+        writeUtf16(pvParam, text, uiParam);
+        lastError_ = 0;
+        result = 1;
+    } else {
+        lastError_ = configured ? 87 : 120;
+    }
+
+    spdlog::info("SystemParametersInfoW action=0x{:08x} uiParam={} pvParam=0x{:08x} flags=0x{:08x} -> {} lastError={} data=\"{}\"",
+                 action, uiParam, pvParam, flags, result, lastError_, text);
+    return result;
+}
+
 bool SyntheticDllRuntime::writeGuestMessage(uint32_t address, const GuestMessage& message) const {
     if (!address) return false;
     writeU32(address, message.hwnd);
@@ -1734,21 +1954,22 @@ void SyntheticDllRuntime::writeAscii(uint32_t address, const std::string& value)
 }
 
 std::string SyntheticDllRuntime::readUtf16(uint32_t address, size_t maxChars) const {
-    std::string out;
+    std::vector<uint16_t> units;
     for (size_t i = 0; address && i < maxChars; ++i) {
         uint16_t ch = 0;
         if (uc_mem_read(uc_, address + uint32_t(i * 2), &ch, sizeof(ch)) != UC_ERR_OK) break;
         if (!ch) break;
-        out.push_back(ch < 0x80 ? char(ch) : '?');
+        units.push_back(ch);
     }
-    return out;
+    return utf16ToUtf8(units);
 }
 
 uint32_t SyntheticDllRuntime::writeUtf16(uint32_t address, const std::string& value, uint32_t maxChars) const {
     if (!address || !maxChars) return 0;
-    const uint32_t charsToWrite = std::min<uint32_t>(uint32_t(value.size()), maxChars - 1);
+    const std::u16string wide = utf8ToUtf16(value);
+    const uint32_t charsToWrite = std::min<uint32_t>(uint32_t(wide.size()), maxChars - 1);
     for (uint32_t i = 0; i < charsToWrite; ++i) {
-        const uint16_t ch = uint16_t(static_cast<unsigned char>(value[i]));
+        const uint16_t ch = uint16_t(wide[i]);
         uc_mem_write(uc_, address + i * 2, &ch, sizeof(ch));
     }
     const uint16_t nul = 0;
@@ -2325,6 +2546,10 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
     const uint32_t a1 = args.a1;
     const uint32_t a2 = args.a2;
     const uint32_t a3 = args.a3;
+    if (name == "SystemParametersInfoW") {
+        ret = handleSystemParametersInfoW(a0, a1, a2, a3);
+        return true;
+    }
     auto getWindowLongValue = [](const GuestWindow& window, int32_t index) -> uint32_t {
         switch (index) {
         case -4: return window.wndProc;  // GWL_WNDPROC
@@ -2412,33 +2637,6 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
     } else if (name == "KernelLibIoControl") {
         lastError_ = 120;
         ret = 0;
-    } else if (name == "SystemParametersInfoW") {
-        char actionHex[9]{};
-        std::snprintf(actionHex, sizeof(actionHex), "%08x", a0);
-        const nlohmann::json* configured =
-            registryValue("hklm\\system\\emulator\\systemparametersinfo", actionHex);
-        if (!configured && a0 == 0x00000101u) {
-            configured = registryValue("hklm\\system\\emulator\\systemparametersinfo", "platformtype");
-        }
-        if (!configured && a0 == 0x00000102u) {
-            configured = registryValue("hklm\\system\\emulator\\systemparametersinfo", "oeminfo");
-        }
-        std::string text;
-        if (configured) {
-            const auto data = configured->find("data");
-            if (data != configured->end() && data->is_string()) text = data->get<std::string>();
-        }
-
-        if (!text.empty() && a2 && a1) {
-            writeUtf16(a2, text, a1);
-            ret = 1;
-            lastError_ = 0;
-        } else {
-            ret = 0;
-            lastError_ = configured ? 87 : 120;
-        }
-        spdlog::info("SystemParametersInfoW action=0x{:08x} uiParam={} pvParam=0x{:08x} flags=0x{:08x} -> {} lastError={} data=\"{}\"",
-                     a0, a1, a2, a3, ret, lastError_, text);
     } else if (name == "GetTickCount") {
 #if defined(_WIN32)
         ret = GetTickCount();

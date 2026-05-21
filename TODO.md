@@ -5,8 +5,9 @@
 - Continue replacing generic synthetic `coredll.dll` returns with SDK-canonical, host-backed behavior as new callers appear. Trust the Windows CE 4.2 Standard SDK `coredll.lib` COFF import-object headers as the naming source, but record conflicts when real loaded SDK DLL runtime call shapes prove a compatibility ordinal.
 - Keep launch arguments explicit: `iNavi_Unicorn_Emulator.exe <primary.exe> [dll_search_dir ...]`. Do not reintroduce hardcoded local SDK/iNavi paths in the binary.
 - Keep real SDK DLLs preferred over synthetic modules. Synthetic `coredll.dll` exists because the installed SDK supplies `coredll.lib` but no real MIPS `COREDLL.dll` PE image.
-- Continue from smoke52's clean idle-block stop after the app-level Korean-language warning (`GetMessageW` blocking with empty guest queue, `pc=0x70002ae8 ra=0x500245c8`). The previous null-PC teardown was caused by `GetMessageW` reporting WM_QUIT too early and is fixed by the message bridge.
-- Investigate the app-level Korean-language warning through real CE locale/NLS inputs, registry values, resources, and SDK-backed APIs. Do not bypass the warning by hardcoding iNavi state.
+- Continue from smoke71's clean idle-block stop after the app-level `can't read HWInfoDB` message (`GetMessageW` blocking with empty guest queue, `pc=0x70002ae8 ra=0x500245c8`). The app opens and reads `INavi\res\values.dat` before aborting.
+- Integrate the user's forthcoming real registry dump through `--registry regs.json`. Do not hardcode device/OEM/HWInfo identity in `.cpp`; keep `SystemParametersInfoW`, registry, and `KernelIoControl` identity inputs external JSON-backed.
+- Investigate the app-level HWInfoDB rejection by tracing the real `values.dat` parser, registry values, and SDK-backed APIs. Do not bypass the warning by hardcoding iNavi state.
 - Continue the real drawing/paint bridge. A host presenter now displays the framebuffer and survives guest teardown for inspection, but text rendering, richer common controls, and host input-to-guest message translation are still incomplete.
 
 ## Weird Ordinals To Verify Later
@@ -17,9 +18,11 @@
 - `LoadMenuW` has not appeared in smoke31 despite `INavi.exe` having `RT_MENU` id 128. Keep the host-backed implementation, but verify when a caller reaches it.
 - COREDLL `#255=ScreenToClient` is confirmed by SDK COFF import-object headers and implemented. Runtime also shows loaded MFC calling COREDLL `#256` with the same `ScreenToClient(HWND, POINT*)` shape; keep the compatibility mapping documented and do not silently convert that runtime path to `SetWindowTextW` without stronger target evidence.
 - COREDLL `#682=SetCursor`, `#693=GetDlgCtrlID`, `#887=AdjustWindowRectEx`, and `#97=EqualRect` are confirmed by SDK COFF import-object headers and are implemented in the translate layer.
+- COREDLL `#89=SystemParametersInfoW` is confirmed by SDK COFF import-object headers and runtime call shape. The stale `#89=wcslen` label is rejected; `wcslen` remains at SDK-confirmed `#63`.
 
 ## Next
 
+- Add targeted `values.dat`/HWInfoDB parser tracing or reverse the record lookup enough to identify which real registry fields are required. Keep this as diagnostics, not app-specific acceptance logic.
 - Audit remaining called coredll paths that are still minimal guest-side implementations, especially `_setjmp`/`longjmp`, `__ehvec_ctor`, and locale/NLS APIs. Do not invent ABI layouts; preserve SDK names and fail closed or document evidence when exact behavior is not known.
 - Extend COM proxying only from real callers: current bridge supports host COM creation and `IUnknown` proxy stubs, but arbitrary interface methods require per-interface guest vtables and dispatch methods.
 - Extend `commctrl.dll` only from real callers. Command bar/status/toolbar/updown creation and menu attachment are guest-side/host-menu backed; property sheet display currently fails closed, and DSA/DPA/list/tree/header details should be implemented when runtime calls prove the needed ABI.

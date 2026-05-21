@@ -218,6 +218,7 @@ private:
     uint32_t handleWNetGetUserW(uint32_t providerName, uint32_t userName, uint32_t lengthPtr);
     uint32_t handleWaveInGetID(uint32_t waveInHandle, uint32_t deviceIdPtr);
     uint32_t handleWaveInBuffer(const std::string& name, uint32_t waveInHandle, uint32_t headerPtr);
+    uint32_t handleSystemParametersInfoW(uint32_t action, uint32_t uiParam, uint32_t pvParam, uint32_t flags);
 
     uint32_t makeGuestHandle(GuestHandle handle);
     GuestHandle* lookupGuestHandle(uint32_t guestHandle);

@@ -12,9 +12,15 @@
 
 ### App reports unsupported Korean language
 
-- Status: Open.
+- Status: Superseded by the current HWInfoDB failure.
 - Evidence: Smoke48 logs `MessageBoxW caption="INavi" text="This system does not support Korean language.` before the app enters the idle message loop.
 - Interpretation: The app is alive, but some real CE locale/NLS/resource/registry input is still wrong or incomplete. Investigate by tracing the app's language check path and implementing the underlying CE APIs or registry data, not by suppressing the message box.
+
+### App reports `can't read HWInfoDB`
+
+- Status: Open.
+- Evidence: Smoke71 logs successful external-registry reads for diagnostic `ModelID`, `DeviceName`, and `SystemParametersInfoW(0x102)` values, then opens and reads `C:\Users\royna\Downloads\INAVI\INavi\res\values.dat` before `MessageBoxW caption="INavi" text="can't read HWInfoDB"`.
+- Interpretation: The previous stale ordinal bug (`COREDLL #89` mislabeled as `wcslen`) is fixed; `#89` is SDK-confirmed `SystemParametersInfoW`. The remaining abort is likely a real HWInfoDB/registry identity mismatch or a parser-adjacent bridge issue. Do not hardcode accepted model strings in `.cpp`; use the external registry dump and targeted parser diagnostics.
 
 ### Message loop blocks without a host event pump
 
