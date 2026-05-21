@@ -78,6 +78,7 @@ private:
             GuestRegistryKey,
             GuestProcess,
             GuestThread,
+            GuestSerialDevice,
             GuestWindow,
             GuestDc,
             GuestBrush,
@@ -119,6 +120,7 @@ private:
         uint32_t selectedBrush{};
         uint32_t selectedPen{};
         uint32_t selectedFont{};
+        uint32_t selectedBitmap{};
         uint32_t textColor{0x00000000};
         uint32_t bkColor{0x00ffffff};
         uint32_t bkMode{1};
@@ -140,9 +142,22 @@ private:
         std::array<uint8_t, 92> logFont{};
         bool stock{};
     };
+    struct GuestBitmap {
+        int32_t width{};
+        int32_t heightRaw{};
+        uint16_t bpp{};
+        uint32_t stride{};
+        uint32_t bits{};
+        std::vector<uint32_t> palette;
+    };
     struct HostWaveBuffer {
         std::vector<uint8_t> data;
         std::array<uint8_t, 64> header{};
+    };
+    struct GuestWaveOutState {
+        uint32_t callback{};
+        uint32_t instance{};
+        uint32_t flags{};
     };
     struct GuestMessage {
         uint32_t hwnd{};
@@ -194,6 +209,8 @@ private:
     uint64_t tick_ = 0;
     bool quitPosted_ = false;
     uint32_t currentCursor_ = 0;
+    uint32_t focusedWindow_ = 0;
+    uint32_t capturedWindow_ = 0;
     uint32_t strtokNext_ = 0;
     uint32_t comProxyVtable_ = 0;
     uint32_t comQueryInterfaceStub_ = 0;
@@ -219,8 +236,10 @@ private:
     std::map<uint32_t, GuestBrush> brushes_;
     std::map<uint32_t, GuestPen> pens_;
     std::map<uint32_t, GuestFont> fonts_;
+    std::map<uint32_t, GuestBitmap> bitmaps_;
     std::map<int32_t, uint32_t> stockObjects_;
     std::map<uint32_t, HostWaveBuffer> hostWaveBuffers_;
+    std::map<uint32_t, GuestWaveOutState> waveOutStates_;
     std::map<uint32_t, std::string> registryHandles_;
     std::map<uint32_t, std::string> fileHandleDebugNames_;
     std::map<uint32_t, uint32_t> fileReadCounts_;
@@ -262,6 +281,9 @@ private:
     uint32_t handleWaveInBuffer(const std::string& name, uint32_t waveInHandle, uint32_t headerPtr);
     uint32_t handleSystemParametersInfoW(uint32_t action, uint32_t uiParam, uint32_t pvParam, uint32_t flags);
     uint32_t handleLoadCursorW(uint32_t instance, uint32_t cursorName);
+    uint32_t handleLoadImageApi(const std::string& name, uint32_t instance, uint32_t imageName,
+                                uint32_t imageType, uint32_t desiredCx, uint32_t desiredCy,
+                                uint32_t loadFlags);
     uint32_t handleGetSysColorBrush(uint32_t colorIndex);
     uint32_t handleGetDeviceCaps(uint32_t dc, uint32_t index);
     uint32_t handleWideCharToMultiByte(uint32_t codePage, uint32_t flags, uint32_t widePtr, uint32_t wideChars);
@@ -298,6 +320,12 @@ private:
     bool stretchDibToFramebuffer(const GuestDc& dc, int32_t dstX, int32_t dstY, int32_t dstW, int32_t dstH,
                                  int32_t srcX, int32_t srcY, int32_t srcW, int32_t srcH,
                                  uint32_t bitsPtr, uint32_t infoPtr);
+    bool bitBltToFramebuffer(const GuestDc& dstDc, const GuestBitmap& bitmap,
+                             int32_t dstX, int32_t dstY, int32_t dstW, int32_t dstH,
+                             int32_t srcX, int32_t srcY, int32_t srcW, int32_t srcH);
+    bool bitBltToBitmap(const GuestBitmap& dstBitmap, const GuestBitmap& srcBitmap,
+                        int32_t dstX, int32_t dstY, int32_t dstW, int32_t dstH,
+                        int32_t srcX, int32_t srcY, int32_t srcW, int32_t srcH);
     std::optional<std::string> registryPathFromHandle(uint32_t hkey, const std::string& subKey) const;
     bool registryKeyExists(const std::string& path) const;
     void registryEnsureKey(const std::string& path);

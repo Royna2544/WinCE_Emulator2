@@ -106,6 +106,17 @@ bool parentExistsForLookup(const std::filesystem::path& path) {
     return !parent.empty() && std::filesystem::exists(parent, ec);
 }
 
+bool isGuestDevicePath(const std::string& guestPath) {
+    if (guestPath.size() < 4 || guestPath.back() != ':') return false;
+    if (guestPath.find('\\') != std::string::npos || guestPath.find('/') != std::string::npos) return false;
+    bool hasDigit = false;
+    for (char ch : guestPath.substr(0, guestPath.size() - 1)) {
+        if (std::isdigit(static_cast<unsigned char>(ch))) hasDigit = true;
+        if (!std::isalnum(static_cast<unsigned char>(ch))) return false;
+    }
+    return hasDigit;
+}
+
 std::filesystem::path pathFromUtf8(const std::string& text) {
     std::u8string utf8Path;
     utf8Path.resize(text.size());
@@ -433,7 +444,9 @@ struct WinmmBridge {
     decltype(&waveOutOpen) waveOutOpen{};
     decltype(&waveOutClose) waveOutClose{};
     decltype(&waveOutSetVolume) waveOutSetVolume{};
+    decltype(&waveOutReset) waveOutReset{};
     decltype(&waveOutPrepareHeader) waveOutPrepareHeader{};
+    decltype(&waveOutUnprepareHeader) waveOutUnprepareHeader{};
     decltype(&waveOutWrite) waveOutWrite{};
     decltype(&mixerGetControlDetailsW) mixerGetControlDetailsW{};
     bool attempted{};
@@ -467,8 +480,12 @@ WinmmBridge& winmmBridge() {
         GetProcAddress(bridge.module, "waveOutClose"));
     bridge.waveOutSetVolume = reinterpret_cast<decltype(bridge.waveOutSetVolume)>(
         GetProcAddress(bridge.module, "waveOutSetVolume"));
+    bridge.waveOutReset = reinterpret_cast<decltype(bridge.waveOutReset)>(
+        GetProcAddress(bridge.module, "waveOutReset"));
     bridge.waveOutPrepareHeader = reinterpret_cast<decltype(bridge.waveOutPrepareHeader)>(
         GetProcAddress(bridge.module, "waveOutPrepareHeader"));
+    bridge.waveOutUnprepareHeader = reinterpret_cast<decltype(bridge.waveOutUnprepareHeader)>(
+        GetProcAddress(bridge.module, "waveOutUnprepareHeader"));
     bridge.waveOutWrite = reinterpret_cast<decltype(bridge.waveOutWrite)>(
         GetProcAddress(bridge.module, "waveOutWrite"));
     bridge.mixerGetControlDetailsW = reinterpret_cast<decltype(bridge.mixerGetControlDetailsW)>(
@@ -840,6 +857,13 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x0066, "PtInRect");
     registerExport(module, 0x0067, "SetRect");
     registerExport(module, 0x0068, "SetRectEmpty");
+    registerExport(module, 0x006C, "ClearCommError");
+    registerExport(module, 0x0071, "GetCommState");
+    registerExport(module, 0x0073, "PurgeComm");
+    registerExport(module, 0x0075, "SetCommMask");
+    registerExport(module, 0x0076, "SetCommState");
+    registerExport(module, 0x0077, "SetCommTimeouts");
+    registerExport(module, 0x0078, "SetupComm");
     registerExport(module, 0x00A0, "CreateDirectoryW");
     registerExport(module, 0x00A5, "DeleteFileW");
     registerExport(module, 0x00A6, "GetFileAttributesW");
@@ -867,6 +891,7 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x00FA, "InvalidateRect");
     registerExport(module, 0x00FB, "GetWindow");
     registerExport(module, 0x00FF, "ScreenToClient");
+    registerExport(module, 0x0101, "GetWindowTextW");
     registerExport(module, 0x0102, "SetWindowLongW");
     registerExport(module, 0x0103, "GetWindowLongW");
     registerExport(module, 0x0104, "BeginPaint");
@@ -880,15 +905,20 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x010D, "GetParent");
     registerExport(module, 0x0110, "MoveWindow");
     registerExport(module, 0x0100, "ScreenToClient");
+    registerExport(module, 0x0114, "GetWindowTextLengthW");
     registerExport(module, 0x0116, "ValidateRect");
+    registerExport(module, 0x011F, "EnableWindow");
     registerExport(module, 0x0120, "IsWindowEnabled");
     registerExport(module, 0x011D, "CallWindowProcW");
     registerExport(module, 0x011E, "FindWindowW");
     registerExport(module, 0x0143, "GetStoreInformation");
     registerExport(module, 0x017B, "waveOutGetNumDevs");
     registerExport(module, 0x017E, "waveOutSetVolume");
+    registerExport(module, 0x0180, "waveOutClose");
     registerExport(module, 0x0181, "waveOutPrepareHeader");
+    registerExport(module, 0x0182, "waveOutUnprepareHeader");
     registerExport(module, 0x0183, "waveOutWrite");
+    registerExport(module, 0x0186, "waveOutReset");
     registerExport(module, 0x018F, "waveOutOpen");
     registerExport(module, 0x0193, "waveInClose");
     registerExport(module, 0x0195, "waveInUnprepareHeader");
@@ -901,11 +931,15 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x01C2, "WNetGetUniversalNameW");
     registerExport(module, 0x01C3, "WNetGetUserW");
     registerExport(module, 0x01C8, "RegCreateKeyExW");
+    registerExport(module, 0x01EC, "CreateThread");
     registerExport(module, 0x01ED, "CreateProcessW");
     registerExport(module, 0x01EF, "CreateEventW");
     registerExport(module, 0x01EE, "EventModify");
     registerExport(module, 0x01F0, "Sleep");
     registerExport(module, 0x01F1, "WaitForSingleObject");
+    registerExport(module, 0x01F4, "ResumeThread");
+    registerExport(module, 0x0202, "SetThreadPriority");
+    registerExport(module, 0x0203, "GetThreadPriority");
     registerExport(module, 0x0204, "GetLastError");
     registerExport(module, 0x0205, "SetLastError");
     registerExport(module, 0x0208, "TlsCall");
@@ -942,15 +976,19 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x02DD, "LocalAllocTrace");
     registerExport(module, 0x02DE, "GetCursorPos");
     registerExport(module, 0x02D8, "LoadIconW");
+    registerExport(module, 0x02D9, "_snprintf");
     registerExport(module, 0x02DA, "LoadImageW");
     registerExport(module, 0x02BE, "SetForegroundWindow");
+    registerExport(module, 0x02C0, "SetFocus");
     registerExport(module, 0x02C2, "GetActiveWindow");
+    registerExport(module, 0x02C4, "SetCapture");
     registerExport(module, 0x034B, "RemoveMenu");
     registerExport(module, 0x034E, "LoadMenuW");
     registerExport(module, 0x0350, "CheckMenuItem");
     registerExport(module, 0x0351, "CheckMenuRadioItem");
     registerExport(module, 0x035A, "MessageBoxW");
     registerExport(module, 0x036A, "LoadStringW");
+    registerExport(module, 0x036B, "SetTimer");
     registerExport(module, 0x036C, "KillTimer");
     registerExport(module, 0x036E, "GetClassInfoW");
     registerExport(module, 0x035B, "DispatchMessageW");
@@ -973,7 +1011,11 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x0387, "BitBlt");
     registerExport(module, 0x038A, "TransparentImage");
     registerExport(module, 0x038E, "CreateCompatibleDC");
+    registerExport(module, 0x0386, "CreateCompatibleBitmap");
+    registerExport(module, 0x0389, "StretchBlt");
+    registerExport(module, 0x026D, "CeSetThreadPriority");
     registerExport(module, 0x0390, "DeleteObject");
+    registerExport(module, 0x038F, "DeleteDC");
     registerExport(module, 0x0397, "GetStockObject");
     registerExport(module, 0x0399, "SelectObject");
     registerExport(module, 0x039A, "SetBkColor");
@@ -1032,6 +1074,7 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x0417, "memset");
     registerExport(module, 0x041D, "rand");
     registerExport(module, 0x041E, "realloc");
+    registerExport(module, 0x0424, "sqrt");
     registerExport(module, 0x0425, "srand");
     registerExport(module, 0x0427, "strcat");
     registerExport(module, 0x0429, "strcmp");
@@ -1053,6 +1096,7 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x0582, "_stricmp");
     registerExport(module, 0x0583, "_strnicmp");
     registerExport(module, 0x0438, "_ultow");
+    registerExport(module, 0x0443, "toupper");
     registerExport(module, 0x05B0, "operator_vector_new");
     registerExport(module, 0x05B1, "operator_vector_delete");
     registerExport(module, 0x05D1, "KernelLibIoControl");
@@ -1073,6 +1117,7 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x0683, "StretchDIBits");
     registerExport(module, 0x07D0, "_setjmp");
     registerExport(module, 0x07D5, "__ll_div");
+    registerExport(module, 0x07E6, "__fpadd");
     registerExport(module, 0x0628, "__ehvec_ctor");
     registerExport(module, 0x07E7, "__dpadd");
     registerExport(module, 0x07E9, "__dpsub");
@@ -1089,6 +1134,7 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x07F7, "__dptofp");
     registerExport(module, 0x07F0, "__litofp");
     registerExport(module, 0x07FA, "__lts");
+    registerExport(module, 0x07FB, "__les");
     registerExport(module, 0x07FC, "__eqs");
     registerExport(module, 0x07FD, "__ges");
     registerExport(module, 0x07FF, "__nes");
@@ -1258,8 +1304,14 @@ uint32_t SyntheticDllRuntime::closeGuestHandle(uint32_t guestHandle) {
         fileReadCounts_.erase(guestHandle);
     } else if (it->second.kind == GuestHandle::Kind::HostFind) {
         fileHandleDebugNames_.erase(guestHandle);
+    } else if (it->second.kind == GuestHandle::Kind::HostWaveOut) {
+        waveOutStates_.erase(guestHandle);
+        hostWaveBuffers_.clear();
     } else if (it->second.kind == GuestHandle::Kind::GuestFileMapping) {
         fileMappings_.erase(guestHandle);
+    } else if (it->second.kind == GuestHandle::Kind::HostBitmap) {
+        bitmaps_.erase(guestHandle);
+        if (it->second.filePointer) releaseAllocation(it->second.filePointer);
     }
     if (it->second.kind == GuestHandle::Kind::GuestHeap) {
         lastError_ = 6; // ERROR_INVALID_HANDLE; heaps are destroyed via HeapDestroy.
@@ -1900,6 +1952,199 @@ bool SyntheticDllRuntime::stretchDibToFramebuffer(const GuestDc& dc,
     return true;
 }
 
+bool SyntheticDllRuntime::bitBltToFramebuffer(const GuestDc& dstDc,
+                                              const GuestBitmap& bitmap,
+                                              int32_t dstX,
+                                              int32_t dstY,
+                                              int32_t dstW,
+                                              int32_t dstH,
+                                              int32_t srcX,
+                                              int32_t srcY,
+                                              int32_t srcW,
+                                              int32_t srcH) {
+    if (!framebuffer_ || !bitmap.bits || bitmap.width <= 0 || bitmap.heightRaw == 0 ||
+        bitmap.stride == 0 || dstW == 0 || dstH == 0 || srcW == 0 || srcH == 0) {
+        return false;
+    }
+    const int32_t bitmapHeight = std::abs(bitmap.heightRaw);
+    const bool topDown = bitmap.heightRaw < 0;
+    const int32_t outW = std::abs(dstW);
+    const int32_t outH = std::abs(dstH);
+    if (outW <= 0 || outH <= 0) return false;
+
+    const uint64_t byteCount = uint64_t(bitmap.stride) * uint64_t(bitmapHeight);
+    if (byteCount == 0 || byteCount > 0x2000000ull) return false;
+    std::vector<uint8_t> bits(static_cast<size_t>(byteCount));
+    if (uc_mem_read(uc_, bitmap.bits, bits.data(), bits.size()) != UC_ERR_OK) return false;
+
+    int32_t originX = 0;
+    int32_t originY = 0;
+    auto window = windows_.find(dstDc.hwnd);
+    if (window != windows_.end()) {
+        originX = window->second.x;
+        originY = window->second.y;
+    }
+    int32_t outLeft = dstW < 0 ? dstX + dstW : dstX;
+    int32_t outTop = dstH < 0 ? dstY + dstH : dstY;
+    outLeft += originX;
+    outTop += originY;
+
+    for (int32_t y = 0; y < outH; ++y) {
+        const int32_t dstPy = outTop + y;
+        if (dstPy < 0 || dstPy >= framebufferHeight_) continue;
+        const int32_t sy = srcY + (int64_t(y) * srcH) / outH;
+        if (sy < 0 || sy >= bitmapHeight) continue;
+        const int32_t rowIndex = topDown ? sy : (bitmapHeight - 1 - sy);
+        const uint8_t* row = bits.data() + size_t(rowIndex) * size_t(bitmap.stride);
+        for (int32_t x = 0; x < outW; ++x) {
+            const int32_t dstPx = outLeft + x;
+            if (dstPx < 0 || dstPx >= framebufferWidth_) continue;
+            const int32_t sx = srcX + (int64_t(x) * srcW) / outW;
+            if (sx < 0 || sx >= bitmap.width) continue;
+
+            uint32_t pixel = 0;
+            if (bitmap.bpp == 32) {
+                const size_t o = size_t(sx) * 4;
+                pixel = 0xff000000u | (uint32_t(row[o + 2]) << 16) |
+                        (uint32_t(row[o + 1]) << 8) | row[o];
+            } else if (bitmap.bpp == 24) {
+                const size_t o = size_t(sx) * 3;
+                pixel = 0xff000000u | (uint32_t(row[o + 2]) << 16) |
+                        (uint32_t(row[o + 1]) << 8) | row[o];
+            } else if (bitmap.bpp == 16) {
+                const size_t o = size_t(sx) * 2;
+                const uint16_t v = uint16_t(row[o] | (row[o + 1] << 8));
+                const uint8_t r = uint8_t(((v >> 11) & 0x1f) * 255 / 31);
+                const uint8_t g = uint8_t(((v >> 5) & 0x3f) * 255 / 63);
+                const uint8_t b = uint8_t((v & 0x1f) * 255 / 31);
+                pixel = 0xff000000u | (uint32_t(r) << 16) | (uint32_t(g) << 8) | b;
+            } else if (bitmap.bpp == 8 && !bitmap.palette.empty()) {
+                pixel = bitmap.palette[row[sx]];
+            } else {
+                return false;
+            }
+            framebuffer_[size_t(dstPy) * size_t(framebufferWidth_) + size_t(dstPx)] = pixel;
+        }
+    }
+    invalidateHostWindows();
+    return true;
+}
+
+bool SyntheticDllRuntime::bitBltToBitmap(const GuestBitmap& dstBitmap,
+                                         const GuestBitmap& srcBitmap,
+                                         int32_t dstX,
+                                         int32_t dstY,
+                                         int32_t dstW,
+                                         int32_t dstH,
+                                         int32_t srcX,
+                                         int32_t srcY,
+                                         int32_t srcW,
+                                         int32_t srcH) {
+    if (!dstBitmap.bits || !srcBitmap.bits || dstBitmap.width <= 0 || srcBitmap.width <= 0 ||
+        dstBitmap.heightRaw == 0 || srcBitmap.heightRaw == 0 || dstBitmap.stride == 0 ||
+        srcBitmap.stride == 0 || dstW == 0 || dstH == 0 || srcW == 0 || srcH == 0) {
+        return false;
+    }
+    const int32_t dstHeight = std::abs(dstBitmap.heightRaw);
+    const int32_t srcHeight = std::abs(srcBitmap.heightRaw);
+    const uint64_t dstBytes = uint64_t(dstBitmap.stride) * uint64_t(dstHeight);
+    const uint64_t srcBytes = uint64_t(srcBitmap.stride) * uint64_t(srcHeight);
+    if (!dstBytes || !srcBytes || dstBytes > 0x2000000ull || srcBytes > 0x2000000ull) return false;
+
+    std::vector<uint8_t> dstBits(static_cast<size_t>(dstBytes));
+    std::vector<uint8_t> srcBits(static_cast<size_t>(srcBytes));
+    if (uc_mem_read(uc_, dstBitmap.bits, dstBits.data(), dstBits.size()) != UC_ERR_OK ||
+        uc_mem_read(uc_, srcBitmap.bits, srcBits.data(), srcBits.size()) != UC_ERR_OK) {
+        return false;
+    }
+
+    auto readSourcePixel = [&](int32_t x, int32_t y, uint32_t& pixel) -> bool {
+        if (x < 0 || x >= srcBitmap.width || y < 0 || y >= srcHeight) return false;
+        const int32_t rowIndex = srcBitmap.heightRaw < 0 ? y : (srcHeight - 1 - y);
+        const uint8_t* row = srcBits.data() + size_t(rowIndex) * size_t(srcBitmap.stride);
+        if (srcBitmap.bpp == 32) {
+            const size_t o = size_t(x) * 4;
+            pixel = 0xff000000u | (uint32_t(row[o + 2]) << 16) | (uint32_t(row[o + 1]) << 8) | row[o];
+        } else if (srcBitmap.bpp == 24) {
+            const size_t o = size_t(x) * 3;
+            pixel = 0xff000000u | (uint32_t(row[o + 2]) << 16) | (uint32_t(row[o + 1]) << 8) | row[o];
+        } else if (srcBitmap.bpp == 16) {
+            const size_t o = size_t(x) * 2;
+            const uint16_t v = uint16_t(row[o] | (row[o + 1] << 8));
+            const uint8_t r = uint8_t(((v >> 11) & 0x1f) * 255 / 31);
+            const uint8_t g = uint8_t(((v >> 5) & 0x3f) * 255 / 63);
+            const uint8_t b = uint8_t((v & 0x1f) * 255 / 31);
+            pixel = 0xff000000u | (uint32_t(r) << 16) | (uint32_t(g) << 8) | b;
+        } else if (srcBitmap.bpp == 8 && !srcBitmap.palette.empty()) {
+            pixel = srcBitmap.palette[row[x]];
+        } else {
+            return false;
+        }
+        return true;
+    };
+
+    auto writeDestPixel = [&](int32_t x, int32_t y, uint32_t pixel) -> bool {
+        if (x < 0 || x >= dstBitmap.width || y < 0 || y >= dstHeight) return false;
+        const int32_t rowIndex = dstBitmap.heightRaw < 0 ? y : (dstHeight - 1 - y);
+        uint8_t* row = dstBits.data() + size_t(rowIndex) * size_t(dstBitmap.stride);
+        const uint8_t r = uint8_t((pixel >> 16) & 0xff);
+        const uint8_t g = uint8_t((pixel >> 8) & 0xff);
+        const uint8_t b = uint8_t(pixel & 0xff);
+        if (dstBitmap.bpp == 32) {
+            const size_t o = size_t(x) * 4;
+            row[o + 0] = b;
+            row[o + 1] = g;
+            row[o + 2] = r;
+            row[o + 3] = 0xff;
+        } else if (dstBitmap.bpp == 24) {
+            const size_t o = size_t(x) * 3;
+            row[o + 0] = b;
+            row[o + 1] = g;
+            row[o + 2] = r;
+        } else if (dstBitmap.bpp == 16) {
+            const uint16_t v = uint16_t(((uint16_t(r) * 31 / 255) << 11) |
+                                        ((uint16_t(g) * 63 / 255) << 5) |
+                                        (uint16_t(b) * 31 / 255));
+            const size_t o = size_t(x) * 2;
+            row[o + 0] = uint8_t(v & 0xff);
+            row[o + 1] = uint8_t(v >> 8);
+        } else if (dstBitmap.bpp == 8 && !dstBitmap.palette.empty()) {
+            uint32_t bestIndex = 0;
+            uint32_t bestDistance = UINT32_MAX;
+            for (uint32_t i = 0; i < dstBitmap.palette.size(); ++i) {
+                const uint32_t p = dstBitmap.palette[i];
+                const int32_t dr = int32_t((p >> 16) & 0xff) - int32_t(r);
+                const int32_t dg = int32_t((p >> 8) & 0xff) - int32_t(g);
+                const int32_t db = int32_t(p & 0xff) - int32_t(b);
+                const uint32_t distance = uint32_t(dr * dr + dg * dg + db * db);
+                if (distance < bestDistance) {
+                    bestDistance = distance;
+                    bestIndex = i;
+                    if (!distance) break;
+                }
+            }
+            row[x] = uint8_t(bestIndex);
+        } else {
+            return false;
+        }
+        return true;
+    };
+
+    const int32_t outW = std::abs(dstW);
+    const int32_t outH = std::abs(dstH);
+    const int32_t outLeft = dstW < 0 ? dstX + dstW : dstX;
+    const int32_t outTop = dstH < 0 ? dstY + dstH : dstY;
+    for (int32_t y = 0; y < outH; ++y) {
+        const int32_t sy = srcY + (int64_t(y) * srcH) / outH;
+        for (int32_t x = 0; x < outW; ++x) {
+            const int32_t sx = srcX + (int64_t(x) * srcW) / outW;
+            uint32_t pixel = 0;
+            if (readSourcePixel(sx, sy, pixel)) writeDestPixel(outLeft + x, outTop + y, pixel);
+        }
+    }
+    return uc_mem_write(uc_, dstBitmap.bits, dstBits.data(), dstBits.size()) == UC_ERR_OK;
+}
+
 void SyntheticDllRuntime::loadMainResources(const std::filesystem::path& path) {
     mainResources_.clear();
     std::ifstream file(path, std::ios::binary);
@@ -2192,6 +2437,94 @@ uint32_t SyntheticDllRuntime::handleLoadCursorW(uint32_t, uint32_t cursorName) {
 #else
     lastError_ = 0;
     return makeGuestHandle({GuestHandle::Kind::HostCursor, 0, 0});
+#endif
+}
+
+uint32_t SyntheticDllRuntime::handleLoadImageApi(const std::string& name, uint32_t, uint32_t imageName,
+                                                 uint32_t imageType, uint32_t desiredCx, uint32_t desiredCy,
+                                                 uint32_t loadFlags) {
+#if defined(_WIN32)
+    if (name != "LoadImageW") {
+        imageType = IMAGE_ICON;
+        desiredCx = 0;
+        desiredCy = 0;
+        loadFlags = LR_DEFAULTCOLOR;
+    }
+
+    auto createIconFromMainResource = [&](uint32_t nameArg) -> HICON {
+        const ResourceEntry* group = findResource(14, nameArg);
+        if (!group || group->data.size() < 6) return nullptr;
+        const uint16_t count = readLe16(group->data, 4);
+        const uint32_t targetCx = desiredCx ? desiredCx : uint32_t(GetSystemMetrics(SM_CXICON));
+        const uint32_t targetCy = desiredCy ? desiredCy : uint32_t(GetSystemMetrics(SM_CYICON));
+        const ResourceEntry* iconResource = nullptr;
+        int bestScore = 0x7fffffff;
+        for (uint16_t i = 0; i < count; ++i) {
+            const size_t offset = 6 + size_t(i) * 14;
+            if (offset + 14 > group->data.size()) break;
+            const uint32_t width = group->data[offset] ? group->data[offset] : 256;
+            const uint32_t height = group->data[offset + 1] ? group->data[offset + 1] : 256;
+            const uint32_t bytesInResource = readLe32(group->data, offset + 8);
+            const uint32_t iconId = readLe16(group->data, offset + 12);
+            const ResourceEntry* candidate = findResource(3, iconId);
+            if (!candidate || candidate->data.empty()) continue;
+            const int score = std::abs(int(width) - int(targetCx)) + std::abs(int(height) - int(targetCy));
+            if (!iconResource || score < bestScore ||
+                (score == bestScore && bytesInResource > iconResource->data.size())) {
+                iconResource = candidate;
+                bestScore = score;
+            }
+        }
+        if (!iconResource) return nullptr;
+        return CreateIconFromResourceEx(const_cast<BYTE*>(iconResource->data.data()),
+                                        DWORD(iconResource->data.size()), TRUE, 0x00030000,
+                                        int(desiredCx), int(desiredCy),
+                                        loadFlags & (LR_DEFAULTCOLOR | LR_MONOCHROME));
+    };
+
+    auto createBitmapFromMainResource = [&](uint32_t nameArg) -> HBITMAP {
+        const ResourceEntry* bitmap = findResource(2, nameArg);
+        if (!bitmap || bitmap->data.size() < 40) return nullptr;
+        const uint32_t headerSize = readLe32(bitmap->data, 0);
+        if (headerSize < 40 || headerSize > bitmap->data.size()) return nullptr;
+        const uint16_t bitCount = readLe16(bitmap->data, 14);
+        const uint32_t compression = readLe32(bitmap->data, 16);
+        const uint32_t clrUsed = readLe32(bitmap->data, 32);
+        uint32_t colorCount = clrUsed;
+        if (!colorCount && bitCount <= 8) colorCount = 1u << bitCount;
+        size_t bitsOffset = size_t(headerSize) + size_t(colorCount) * 4;
+        if (compression == BI_BITFIELDS && !colorCount && (bitCount == 16 || bitCount == 32)) bitsOffset += 12;
+        if (bitsOffset > bitmap->data.size()) return nullptr;
+        HDC dc = GetDC(nullptr);
+        if (!dc) return nullptr;
+        HBITMAP result = CreateDIBitmap(dc,
+                                        reinterpret_cast<const BITMAPINFOHEADER*>(bitmap->data.data()),
+                                        CBM_INIT, bitmap->data.data() + bitsOffset,
+                                        reinterpret_cast<const BITMAPINFO*>(bitmap->data.data()),
+                                        DIB_RGB_COLORS);
+        ReleaseDC(nullptr, dc);
+        if (result && (desiredCx || desiredCy)) {
+            HANDLE scaled = CopyImage(result, IMAGE_BITMAP, int(desiredCx), int(desiredCy),
+                                      loadFlags & (LR_COPYDELETEORG | LR_COPYRETURNORG | LR_MONOCHROME));
+            if (scaled && scaled != result) result = reinterpret_cast<HBITMAP>(scaled);
+        }
+        return result;
+    };
+
+    uint32_t result = 0;
+    if (imageType == IMAGE_ICON) {
+        HICON icon = createIconFromMainResource(imageName);
+        if (icon) result = makeGuestHandle({GuestHandle::Kind::HostIcon, reinterpret_cast<uintptr_t>(icon), 0});
+    } else if (imageType == IMAGE_BITMAP) {
+        HBITMAP bitmap = createBitmapFromMainResource(imageName);
+        if (bitmap) result = makeGuestHandle({GuestHandle::Kind::HostBitmap, reinterpret_cast<uintptr_t>(bitmap), 0});
+    }
+    lastError_ = result ? 0 : 1814;
+    return result;
+#else
+    const uint32_t type = name == "LoadImageW" ? imageType : IMAGE_ICON;
+    lastError_ = findResource(type == IMAGE_BITMAP ? 2 : 14, imageName) ? 120 : 1814;
+    return 0;
 #endif
 }
 
@@ -2671,10 +3004,12 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(const std::string& name,
             lastError_ = 87;
             ret = 0;
         } else {
+            const uint32_t headerSize = readU32(a1);
             const int32_t width = int32_t(readU32(a1 + 4));
             const int32_t heightRaw = int32_t(readU32(a1 + 8));
             uint16_t bpp = 0;
             uc_mem_read(uc_, a1 + 14, &bpp, sizeof(bpp));
+            const uint32_t clrUsed = headerSize >= 40 ? readU32(a1 + 32) : 0;
             const uint32_t absHeight = uint32_t(heightRaw < 0 ? -heightRaw : heightRaw);
             const uint32_t bitsPerPixel = bpp ? bpp : 32;
             const uint32_t stride = ((uint32_t(std::max<int32_t>(width, 0)) * bitsPerPixel + 31) / 32) * 4;
@@ -2682,9 +3017,45 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(const std::string& name,
             writeU32(a3, bits);
             ret = makeGuestHandle({GuestHandle::Kind::HostBitmap, 0, bits});
             lastError_ = ret ? 0 : 8;
-            spdlog::info("CreateDIBSection {}x{} bpp={} bits=0x{:08x} bitmap=0x{:08x}",
-                         width, heightRaw, bitsPerPixel, bits, ret);
+            if (ret) {
+                GuestBitmap bitmap{};
+                bitmap.width = width;
+                bitmap.heightRaw = heightRaw;
+                bitmap.bpp = uint16_t(bitsPerPixel);
+                bitmap.stride = stride;
+                bitmap.bits = bits;
+                const uint32_t paletteEntries = bitsPerPixel <= 8 ? (clrUsed ? clrUsed : (1u << bitsPerPixel)) : 0;
+                if (headerSize >= 40 && headerSize < 0x1000 && paletteEntries && paletteEntries <= 256) {
+                    std::vector<uint8_t> rawPalette(size_t(paletteEntries) * 4);
+                    if (uc_mem_read(uc_, a1 + headerSize, rawPalette.data(), rawPalette.size()) == UC_ERR_OK) {
+                        bitmap.palette.resize(paletteEntries);
+                        for (uint32_t i = 0; i < paletteEntries; ++i) {
+                            const uint8_t b = rawPalette[size_t(i) * 4 + 0];
+                            const uint8_t g = rawPalette[size_t(i) * 4 + 1];
+                            const uint8_t r = rawPalette[size_t(i) * 4 + 2];
+                            bitmap.palette[i] = 0xff000000u | (uint32_t(r) << 16) |
+                                                (uint32_t(g) << 8) | uint32_t(b);
+                        }
+                    }
+                }
+                bitmaps_[ret] = std::move(bitmap);
+            }
+            spdlog::info("CreateDIBSection {}x{} bpp={} stride={} bits=0x{:08x} bitmap=0x{:08x}",
+                         width, heightRaw, bitsPerPixel, stride, bits, ret);
         }
+    } else if (name == "CreateCompatibleBitmap") {
+        const uint32_t width = std::max<uint32_t>(a1, 1);
+        const uint32_t height = std::max<uint32_t>(a2, 1);
+        const uint32_t bpp = 32;
+        const uint32_t stride = ((width * bpp + 31) / 32) * 4;
+        const uint32_t bits = allocate(std::max<uint32_t>(stride * height, 4), true);
+        ret = makeGuestHandle({GuestHandle::Kind::HostBitmap, 0, bits});
+        if (ret) {
+            bitmaps_[ret] = GuestBitmap{int32_t(width), -int32_t(height), uint16_t(bpp), stride, bits, {}};
+        }
+        lastError_ = ret ? 0 : 8;
+        spdlog::info("CreateCompatibleBitmap {}x{} bits=0x{:08x} bitmap=0x{:08x}",
+                     width, height, bits, ret);
     } else if (name == "Polyline") {
         GuestDc* dc = lookupGuestDc(a0);
         auto pen = dc ? pens_.find(dc->selectedPen) : pens_.end();
@@ -2949,16 +3320,16 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(const std::string& name,
             spdlog::info("synthetic coredll.dll!{} formatted empty format=\"{}\" a2w=\"{}\" a2a=\"{}\" a3=0x{:08x}",
                          name, format, readUtf16(a2, 128), readAscii(a2, 128), a3);
         }
-    } else if (name == "printf" || name == "sprintf") {
+    } else if (name == "printf" || name == "sprintf" || name == "_snprintf") {
         std::vector<uint32_t> values = name == "sprintf"
             ? std::vector<uint32_t>{a2, a3}
-            : std::vector<uint32_t>{a1, a2, a3};
+            : (name == "_snprintf" ? std::vector<uint32_t>{a3} : std::vector<uint32_t>{a1, a2, a3});
         for (uint32_t i = 4; i < 16; ++i) values.push_back(stackArg(i));
         size_t argIndex = 0;
         auto nextArg = [&]() -> uint32_t {
             return argIndex < values.size() ? values[argIndex++] : 0;
         };
-        const std::string format = readAscii(name == "sprintf" ? a1 : a0, 2048);
+        const std::string format = readAscii(name == "sprintf" ? a1 : (name == "_snprintf" ? a2 : a0), 2048);
         std::string out;
         for (size_t i = 0; i < format.size(); ++i) {
             if (format[i] != '%' || i + 1 >= format.size()) {
@@ -3028,12 +3399,22 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(const std::string& name,
                 break;
             }
         }
-        if (name == "sprintf") {
-            writeAscii(a0, out);
+        if (name == "sprintf" || name == "_snprintf") {
+            if (name == "_snprintf") {
+                const uint32_t capacity = a1;
+                if (a0 && capacity) {
+                    const uint32_t copy = std::min<uint32_t>(capacity - 1, uint32_t(out.size()));
+                    if (copy) uc_mem_write(uc_, a0, out.data(), copy);
+                    const char nul = 0;
+                    uc_mem_write(uc_, a0 + copy, &nul, sizeof(nul));
+                }
+            } else {
+                writeAscii(a0, out);
+            }
             if (out.find(".db") != std::string::npos || out.find(".bin") != std::string::npos ||
                 out.find("\\") != std::string::npos || out.find("/") != std::string::npos) {
-                spdlog::info("synthetic coredll.dll!sprintf formatted \"{}\" -> 0x{:08x}",
-                             out, a0);
+                spdlog::info("synthetic coredll.dll!{} formatted \"{}\" -> 0x{:08x}",
+                             name, out, a0);
             }
         } else if (!out.empty()) {
             spdlog::info("printf: {}", out);
@@ -3586,6 +3967,13 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(const std::string& name,
         setGuestDoubleReturn(uc_, static_cast<double>(int32_t(a0)), ret);
     } else if (name == "__ultodp") {
         setGuestDoubleReturn(uc_, static_cast<double>(a0), ret);
+    } else if (name == "__fpadd") {
+        float left = 0.0f;
+        float right = 0.0f;
+        std::memcpy(&left, &a0, sizeof(left));
+        std::memcpy(&right, &a1, sizeof(right));
+        const float value = left + right;
+        std::memcpy(&ret, &value, sizeof(ret));
     } else if (name == "__dpadd" || name == "__dpsub" || name == "__dpmul" || name == "__dpdiv") {
         const double left = doubleFromGuestPair(a0, a1);
         const double right = doubleFromGuestPair(a2, a3);
@@ -3629,15 +4017,20 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(const std::string& name,
     } else if (name == "__litofp") {
         const float value = static_cast<float>(int32_t(a0));
         std::memcpy(&ret, &value, sizeof(ret));
-    } else if (name == "__eqs" || name == "__nes" || name == "__lts" || name == "__ges") {
+    } else if (name == "__eqs" || name == "__nes" || name == "__lts" || name == "__les" || name == "__ges") {
         float left = 0.0f;
         float right = 0.0f;
         std::memcpy(&left, &a0, sizeof(left));
         std::memcpy(&right, &a1, sizeof(right));
         const bool equal = left == right;
         if (name == "__lts") ret = left < right ? 1 : 0;
+        else if (name == "__les") ret = left <= right ? 1 : 0;
         else if (name == "__ges") ret = left >= right ? 1 : 0;
         else ret = (name == "__eqs" ? equal : !equal) ? 1 : 0;
+    } else if (name == "sqrt") {
+        setGuestDoubleReturn(uc_, std::sqrt(doubleFromGuestPair(a0, a1)), ret);
+    } else if (name == "toupper") {
+        ret = uint32_t(std::toupper(int(a0)));
     } else if (name == "__ltd" || name == "__led" || name == "__eqd" || name == "__ged") {
         const double left = doubleFromGuestPair(a0, a1);
         const double right = doubleFromGuestPair(a2, a3);
@@ -4275,30 +4668,80 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             ret = 1;
 #endif
         }
+    } else if (name == "CreateThread") {
+        const uint32_t startAddress = a2;
+        const uint32_t parameter = a3;
+        const uint32_t flags = stackArg(4);
+        const uint32_t threadIdPtr = stackArg(5);
+        ret = makeGuestHandle({GuestHandle::Kind::GuestThread, 0, 0});
+        if (threadIdPtr) writeU32(threadIdPtr, ret);
+        lastError_ = 0;
+        spdlog::info("CreateThread guestHandle=0x{:08x} start=0x{:08x} param=0x{:08x} flags=0x{:08x} idPtr=0x{:08x}",
+                     ret, startAddress, parameter, flags, threadIdPtr);
+    } else if (name == "SetThreadPriority" || name == "CeSetThreadPriority") {
+        auto* handle = lookupGuestHandle(a0);
+        ret = handle && handle->kind == GuestHandle::Kind::GuestThread ? 1 : 0;
+        lastError_ = ret ? 0 : 6;
+    } else if (name == "GetThreadPriority") {
+        auto* handle = lookupGuestHandle(a0);
+        ret = handle && handle->kind == GuestHandle::Kind::GuestThread ? 251 : 0xffffffffu;
+        lastError_ = ret == 0xffffffffu ? 6 : 0;
+    } else if (name == "ResumeThread") {
+        auto* handle = lookupGuestHandle(a0);
+        ret = handle && handle->kind == GuestHandle::Kind::GuestThread ? 1 : 0xffffffffu;
+        lastError_ = ret == 0xffffffffu ? 6 : 0;
     } else if (name == "CreateFileW") {
 #if defined(_WIN32)
         const std::string guestPath = readUtf16(a0);
-        const std::filesystem::path hostPath = resolveGuestPath(guestPath);
-        HANDLE host = INVALID_HANDLE_VALUE;
-        if (!hostPath.empty()) {
-            host = CreateFileW(hostPath.wstring().c_str(), a1, a2, nullptr, stackArg(4), stackArg(5), nullptr);
-        }
-        if (host == INVALID_HANDLE_VALUE) {
-            lastError_ = normalizeVirtualFileMiss(hostPath, GetLastError());
-            ret = 0xffffffffu;
-            spdlog::warn("CreateFileW miss guest=\"{}\" host=\"{}\" access=0x{:08x} share=0x{:08x} creation=0x{:08x} flags=0x{:08x} lastError={}",
-                         guestPath, pathToUtf8(hostPath), a1, a2, stackArg(4), stackArg(5), lastError_);
-        } else {
-            ret = makeGuestHandle({GuestHandle::Kind::HostFile, reinterpret_cast<uintptr_t>(host), 0});
-            fileHandleDebugNames_[ret] = pathToUtf8(hostPath);
+        if (isGuestDevicePath(guestPath)) {
+            ret = makeGuestHandle({GuestHandle::Kind::GuestSerialDevice, 0, 0});
+            fileHandleDebugNames_[ret] = guestPath;
             lastError_ = 0;
-            spdlog::info("CreateFileW hit guest=\"{}\" host=\"{}\" guestHandle=0x{:08x} access=0x{:08x} share=0x{:08x} creation=0x{:08x} flags=0x{:08x}",
-                         guestPath, pathToUtf8(hostPath), ret, a1, a2, stackArg(4), stackArg(5));
+            spdlog::info("CreateFileW guest device=\"{}\" guestHandle=0x{:08x} access=0x{:08x} share=0x{:08x}",
+                         guestPath, ret, a1, a2);
+        } else {
+            const std::filesystem::path hostPath = resolveGuestPath(guestPath);
+            HANDLE host = INVALID_HANDLE_VALUE;
+            if (!hostPath.empty()) {
+                host = CreateFileW(hostPath.wstring().c_str(), a1, a2, nullptr, stackArg(4), stackArg(5), nullptr);
+            }
+            if (host == INVALID_HANDLE_VALUE) {
+                lastError_ = normalizeVirtualFileMiss(hostPath, GetLastError());
+                ret = 0xffffffffu;
+                spdlog::warn("CreateFileW miss guest=\"{}\" host=\"{}\" access=0x{:08x} share=0x{:08x} creation=0x{:08x} flags=0x{:08x} lastError={}",
+                             guestPath, pathToUtf8(hostPath), a1, a2, stackArg(4), stackArg(5), lastError_);
+            } else {
+                ret = makeGuestHandle({GuestHandle::Kind::HostFile, reinterpret_cast<uintptr_t>(host), 0});
+                fileHandleDebugNames_[ret] = pathToUtf8(hostPath);
+                lastError_ = 0;
+                spdlog::info("CreateFileW hit guest=\"{}\" host=\"{}\" guestHandle=0x{:08x} access=0x{:08x} share=0x{:08x} creation=0x{:08x} flags=0x{:08x}",
+                             guestPath, pathToUtf8(hostPath), ret, a1, a2, stackArg(4), stackArg(5));
+            }
         }
 #else
         lastError_ = 2;
         ret = 0xffffffffu;
 #endif
+    } else if (name == "GetCommState" || name == "SetCommState" || name == "SetCommTimeouts" ||
+               name == "SetCommMask" || name == "SetupComm" || name == "PurgeComm" ||
+               name == "ClearCommError") {
+        auto* handle = lookupGuestHandle(a0);
+        if (!handle || handle->kind != GuestHandle::Kind::GuestSerialDevice) {
+            lastError_ = 6;
+            ret = 0;
+        } else {
+            if (name == "GetCommState" && a1) {
+                uint32_t length = readU32(a1);
+                if (!length || length > 256) length = 64;
+                fillGuest(a1, 0, length);
+                writeU32(a1, length);
+            } else if (name == "ClearCommError") {
+                if (a1) writeU32(a1, 0);
+                if (a2) fillGuest(a2, 0, 12);
+            }
+            lastError_ = 0;
+            ret = 1;
+        }
     } else if (name == "CreateDirectoryW") {
 #if defined(_WIN32)
         const std::string guestPath = readUtf16(a0);
@@ -4425,7 +4868,14 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
     } else if (name == "ReadFile" || name == "WriteFile") {
         auto* handle = lookupGuestHandle(a0);
         writeU32(a3, 0);
-        if (!handle || handle->kind != GuestHandle::Kind::HostFile || !handle->hostValue) {
+        if (handle && handle->kind == GuestHandle::Kind::GuestSerialDevice) {
+            ret = 1;
+            lastError_ = 0;
+            auto debugName = fileHandleDebugNames_.find(a0);
+            const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+            spdlog::info("{} guest device handle=0x{:08x} name=\"{}\" requested={} transferred=0",
+                         name, a0, debugPath, a2);
+        } else if (!handle || handle->kind != GuestHandle::Kind::HostFile || !handle->hostValue) {
             lastError_ = 6;
             ret = 0;
         } else if (!a1 && a2) {
@@ -4894,6 +5344,14 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             lastError_ = 0;
             ret = 1;
         }
+    } else if (name == "SetTimer") {
+        if (a0 && !windows_.count(a0)) {
+            lastError_ = 1400;
+            ret = 0;
+        } else {
+            lastError_ = 0;
+            ret = a1 ? a1 : uint32_t(++tick_);
+        }
     } else if (name == "BeginPaint") {
         auto it = windows_.find(a0);
         if (it == windows_.end()) {
@@ -5010,6 +5468,10 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             ret = dc->selectedFont;
             dc->selectedFont = a1;
             lastError_ = 0;
+        } else if (object->second.kind == GuestHandle::Kind::HostBitmap && bitmaps_.count(a1)) {
+            ret = dc->selectedBitmap;
+            dc->selectedBitmap = a1;
+            lastError_ = 0;
         } else {
             lastError_ = 6;
             ret = 0;
@@ -5041,6 +5503,8 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
 #if defined(_WIN32)
             if (object->second.hostValue) DeleteObject(reinterpret_cast<HGDIOBJ>(object->second.hostValue));
 #endif
+            bitmaps_.erase(a0);
+            if (object->second.filePointer) releaseAllocation(object->second.filePointer);
             guestHandles_.erase(object);
             ret = 1;
             lastError_ = 0;
@@ -5191,9 +5655,54 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             lastError_ = 0;
             ret = 1;
         }
-    } else if (name == "CreateCompatibleDC" || name == "BitBlt") {
-        lastError_ = 120;
-        ret = 0;
+    } else if (name == "CreateCompatibleDC") {
+        ret = makeGuestDc(0);
+        if (GuestDc* dc = lookupGuestDc(ret)) {
+            dc->selectedBitmap = 0;
+        }
+        lastError_ = ret ? 0 : 8;
+    } else if (name == "DeleteDC") {
+        auto handle = guestHandles_.find(a0);
+        if (handle == guestHandles_.end() || handle->second.kind != GuestHandle::Kind::GuestDc) {
+            lastError_ = 6;
+            ret = 0;
+        } else {
+            dcs_.erase(a0);
+            guestHandles_.erase(handle);
+            lastError_ = 0;
+            ret = 1;
+        }
+    } else if (name == "BitBlt" || name == "StretchBlt") {
+        GuestDc* dstDc = lookupGuestDc(a0);
+        GuestDc* srcDc = lookupGuestDc(stackArg(5));
+        const bool stretch = name == "StretchBlt";
+        const uint32_t rop = stretch ? stackArg(10) : stackArg(8);
+        const int32_t dstW = int32_t(a3);
+        const int32_t dstH = int32_t(stackArg(4));
+        const int32_t srcX = int32_t(stackArg(6));
+        const int32_t srcY = int32_t(stackArg(7));
+        const int32_t srcW = stretch ? int32_t(stackArg(8)) : dstW;
+        const int32_t srcH = stretch ? int32_t(stackArg(9)) : dstH;
+        auto srcBitmap = srcDc ? bitmaps_.find(srcDc->selectedBitmap) : bitmaps_.end();
+        auto dstBitmap = dstDc ? bitmaps_.find(dstDc->selectedBitmap) : bitmaps_.end();
+        if (!dstDc || !srcDc || srcBitmap == bitmaps_.end() || rop != 0x00cc0020u) {
+            spdlog::info("{} unsupported dst=0x{:08x} src=0x{:08x} srcBitmap=0x{:08x} rop=0x{:08x}",
+                         name, a0, stackArg(5), srcDc ? srcDc->selectedBitmap : 0, rop);
+            lastError_ = dstDc && srcDc ? 120 : 6;
+            ret = 0;
+        } else if (dstBitmap != bitmaps_.end()) {
+            const bool ok = bitBltToBitmap(dstBitmap->second, srcBitmap->second,
+                                           int32_t(a1), int32_t(a2), dstW, dstH,
+                                           srcX, srcY, srcW, srcH);
+            lastError_ = ok ? 0 : 120;
+            ret = ok ? 1 : 0;
+        } else {
+            const bool ok = bitBltToFramebuffer(*dstDc, srcBitmap->second,
+                                                int32_t(a1), int32_t(a2), dstW, dstH,
+                                                srcX, srcY, srcW, srcH);
+            lastError_ = ok ? 0 : 120;
+            ret = ok ? 1 : 0;
+        }
     } else if (name == "GetWindowLongW") {
         auto it = windows_.find(a0);
         if (it == windows_.end()) {
@@ -5211,6 +5720,22 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
         } else {
             lastError_ = 0;
             ret = setWindowLongValue(it->second, int32_t(a1), a2);
+        }
+    } else if (name == "GetWindowTextLengthW") {
+        auto it = windows_.find(a0);
+        ret = it == windows_.end() ? 0 : uint32_t(it->second.title.size());
+        lastError_ = it == windows_.end() ? 1400 : 0;
+    } else if (name == "GetWindowTextW") {
+        auto it = windows_.find(a0);
+        if (it == windows_.end()) {
+            lastError_ = 1400;
+            ret = 0;
+        } else if (!a1 || !a2) {
+            lastError_ = 0;
+            ret = 0;
+        } else {
+            ret = writeUtf16(a1, it->second.title, a2);
+            lastError_ = 0;
         }
     } else if (name == "GetParent") {
         auto it = windows_.find(a0);
@@ -5536,8 +6061,28 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
         if (windows_.count(a0)) {
             guestMessages_.push_back({a0, 0x0006, 1, 0, uint32_t(++tick_ * 16), 0, 0});
             guestMessages_.push_back({a0, 0x0007, 0, 0, uint32_t(++tick_ * 16), 0, 0});
+            focusedWindow_ = a0;
             lastError_ = 0;
             ret = 1;
+        } else {
+            lastError_ = 1400;
+            ret = 0;
+        }
+    } else if (name == "SetFocus") {
+        if (!a0 || windows_.count(a0)) {
+            ret = focusedWindow_;
+            focusedWindow_ = a0;
+            if (a0) guestMessages_.push_back({a0, 0x0007, 0, 0, uint32_t(++tick_ * 16), 0, 0});
+            lastError_ = 0;
+        } else {
+            lastError_ = 1400;
+            ret = 0;
+        }
+    } else if (name == "SetCapture") {
+        if (!a0 || windows_.count(a0)) {
+            ret = capturedWindow_;
+            capturedWindow_ = a0;
+            lastError_ = 0;
         } else {
             lastError_ = 1400;
             ret = 0;
@@ -5545,6 +6090,14 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
     } else if (name == "GetActiveWindow") {
         ret = firstWindow();
         lastError_ = ret ? 0 : 1400;
+    } else if (name == "EnableWindow") {
+        if (windows_.count(a0)) {
+            lastError_ = 0;
+            ret = 1;
+        } else {
+            lastError_ = 1400;
+            ret = 0;
+        }
     } else if (name == "IsWindowEnabled") {
         ret = windows_.count(a0) ? 1 : 0;
         lastError_ = ret ? 0 : 1400;
@@ -5833,7 +6386,9 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
                name == "waveInAddBuffer" || name == "waveInUnprepareHeader" ||
                name == "waveInMessage" || name == "waveOutGetNumDevs" ||
                name == "waveOutOpen" || name == "waveOutSetVolume" ||
-               name == "waveOutPrepareHeader" || name == "waveOutWrite" ||
+               name == "waveOutClose" || name == "waveOutPrepareHeader" ||
+               name == "waveOutUnprepareHeader" || name == "waveOutWrite" ||
+               name == "waveOutReset" ||
                name == "mixerGetControlDetails") {
         return dispatchWinmm(name, args, ret);
     } else {
@@ -5904,9 +6459,26 @@ bool SyntheticDllRuntime::dispatchWinmm(const std::string& name,
                         reinterpret_cast<uintptr_t>(host),
                         0,
                     });
+                    waveOutStates_[guest] = {a3, uint32_t(instance), flags};
                     writeU32(a0, guest);
                 }
             }
+        }
+#else
+        ret = 2;
+#endif
+    } else if (name == "waveOutClose") {
+#if defined(_WIN32)
+        auto* handle = lookupGuestHandle(a0);
+        auto& winmm = winmmBridge();
+        if (handle && handle->kind == GuestHandle::Kind::HostWaveOut && handle->hostValue && winmm.waveOutClose) {
+            ret = winmm.waveOutClose(reinterpret_cast<HWAVEOUT>(handle->hostValue));
+            if (ret == MMSYSERR_NOERROR) {
+                handle->hostValue = 0;
+                waveOutStates_.erase(a0);
+            }
+        } else {
+            ret = MMSYSERR_INVALHANDLE;
         }
 #else
         ret = 2;
@@ -5921,7 +6493,17 @@ bool SyntheticDllRuntime::dispatchWinmm(const std::string& name,
 #else
         ret = 2;
 #endif
-    } else if (name == "waveOutPrepareHeader" || name == "waveOutWrite") {
+    } else if (name == "waveOutReset") {
+#if defined(_WIN32)
+        auto* handle = lookupGuestHandle(a0);
+        auto& winmm = winmmBridge();
+        ret = handle && handle->kind == GuestHandle::Kind::HostWaveOut && handle->hostValue && winmm.waveOutReset
+            ? winmm.waveOutReset(reinterpret_cast<HWAVEOUT>(handle->hostValue))
+            : MMSYSERR_INVALHANDLE;
+#else
+        ret = 2;
+#endif
+    } else if (name == "waveOutPrepareHeader" || name == "waveOutUnprepareHeader" || name == "waveOutWrite") {
 #if defined(_WIN32)
         auto* handle = lookupGuestHandle(a0);
         auto& winmm = winmmBridge();
@@ -5960,6 +6542,10 @@ bool SyntheticDllRuntime::dispatchWinmm(const std::string& name,
                     ret = winmm.waveOutPrepareHeader
                         ? winmm.waveOutPrepareHeader(reinterpret_cast<HWAVEOUT>(handle->hostValue), header, sizeof(*header))
                         : MMSYSERR_ERROR;
+                } else if (name == "waveOutUnprepareHeader") {
+                    ret = winmm.waveOutUnprepareHeader
+                        ? winmm.waveOutUnprepareHeader(reinterpret_cast<HWAVEOUT>(handle->hostValue), header, sizeof(*header))
+                        : MMSYSERR_ERROR;
                 } else {
                     if (winmm.waveOutPrepareHeader && !(header->dwFlags & WHDR_PREPARED)) {
                         winmm.waveOutPrepareHeader(reinterpret_cast<HWAVEOUT>(handle->hostValue), header, sizeof(*header));
@@ -5967,6 +6553,22 @@ bool SyntheticDllRuntime::dispatchWinmm(const std::string& name,
                     ret = winmm.waveOutWrite
                         ? winmm.waveOutWrite(reinterpret_cast<HWAVEOUT>(handle->hostValue), header, sizeof(*header))
                         : MMSYSERR_ERROR;
+                    if (ret == MMSYSERR_NOERROR) {
+                        header->dwFlags |= WHDR_DONE;
+                        auto state = waveOutStates_.find(a0);
+                        if (state != waveOutStates_.end()) {
+                            const uint32_t callbackType = state->second.flags & CALLBACK_TYPEMASK;
+                            const uint32_t eventHandle = callbackType == CALLBACK_EVENT
+                                ? state->second.callback
+                                : guestUser;
+                            auto* event = lookupGuestHandle(eventHandle);
+                            if (event && event->kind == GuestHandle::Kind::HostEvent && event->hostValue) {
+                                SetEvent(reinterpret_cast<HANDLE>(event->hostValue));
+                                spdlog::info("waveOutWrite completed guest event=0x{:08x} callback=0x{:08x} flags=0x{:08x}",
+                                             eventHandle, state->second.callback, state->second.flags);
+                            }
+                        }
+                    }
                 }
                 writeU32(a1 + 16, uint32_t(header->dwFlags));
             }
