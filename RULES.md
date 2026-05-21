@@ -34,6 +34,8 @@ For this target, use `Mipsii` as the primary SDK directory. Use `Mipsii_fp` only
 as an A/B comparison if floating-point behavior diverges; checked COREDLL and
 MFC ordinals matched for the inspected target surfaces.
 
+The Visual Studio installation is at: `C:\Program Files\Microsoft Visual Studio\18\Community`
+
 ---
 
 ## Hard User Rule
@@ -44,7 +46,7 @@ Do not fake custom iNavi app behavior just to make a screenshot look correct.
 
 Prefer real-ish emulation:
 
-Guest app behavior → MIPS CPU execution → PE imports / MFC / COREDLL / CRT shims → host-backed file, drawing, audio, registry, timer, and device behavior.
+Guest app behavior → MIPS CPU execution → PE imports / COREDLL shims → host-backed file, drawing, audio, registry, timer, and device behavior.
 
 Allowed:
 
@@ -142,38 +144,6 @@ Use runtime evidence to:
 Do not mass-replace behavior from names alone when the app has already shown a
 different call shape. Record the conflict in `PROGRESS.md` or `KNOWN_BUGS.md`.
 
-Confirmed SDK anchors:
-
-- COREDLL `#460 = RegEnumKeyExW`
-- COREDLL `#553 = CloseHandle`
-- COREDLL `#556 = ReleaseMutex`
-- COREDLL `#1231 = GetCommandLineW`
-- COREDLL `#1398 = SetWindowRgn`, `#1399 = GetWindowRgn`
-- MFC `#97 = CFile::CFile()`
-- MFC `#858 = CFile::Close`
-- MFC `#1346 = CFile::GetLength`
-- MFC `#2066 = CWnd::OnWndMsg`
-- MFC `#2069 = CFile::Open`
-- MFC `#2144 = CFile::Read`
-- MFC `#2258 = CFile::Seek`
-- MFC `#2587 = CWnd::WindowProc`
-
----
-
-## MFC Context
-
-Do not assume desktop MFC layout.
-
-Infer from:
-
-- mfcce400 ordinal calls
-- this pointers
-- message maps
-- CStringData access
-- CWnd/HWND mapping
-- CDC/HDC wrapping
-- handler dispatch
-
 ---
 
 ## MIPS / CPU Context
@@ -198,32 +168,6 @@ Important MIPS rules:
 - Branch-likely not taken: delay slot is annulled and must not execute.
 
 If PC becomes `0x0`, treat it as a control-flow/resume/return-address bug unless proven otherwise.
-
----
-
-## File I/O Context
-
-Real host-backed file behavior is preferred.
-
-Do not return dummy success with fake length.
-
-For MFC CFile-like calls, implement real-ish behavior:
-
-- open
-- get length
-- read
-- seek
-- close
-- status/error
-
-Important files observed:
-
-- `mapinfo.bin`
-- `GpsPosition.bin`
-- `values.dat`
-- iNavi resources under `INAVI / INavi / res / mapdata`
-
-If a file open/read path succeeds but returns length `1` or dummy data, the app may silently stay in startup/splash state.
 
 ---
 
@@ -266,18 +210,6 @@ Build:
 
 ```bash
 powershell.exe -NoProfile -Command "& 'C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe' WinCE_Emulator.vcxproj /p:Configuration=Debug /p:Platform=x64 /m"
-```
-
-Quiet bounded run:
-
-```bash
-powershell.exe -NoProfile -Command '$env:WINCE_EMULATOR_QUIET="1"; $env:WINCE_EMULATOR_AUTO_EXIT_MS="210000"; $env:WINCE_EMULATOR_MAX_INSTRUCTIONS="120000000"; & ".\x64\Debug\WinCE_Emulator.exe" "C:\Users\royna\Downloads\INAVI\INavi\INavi.exe" *> "codex_run.log"'
-```
-
-Kill stuck runs:
-
-```bash
-powershell.exe -NoProfile -Command "Get-Process WinCE_Emulator -ErrorAction SilentlyContinue | Stop-Process -Force"
 ```
 
 Convert framebuffer for inspection:
@@ -324,28 +256,6 @@ Possible path forms:
 - WSL: `/mnt/c/Users/royna/Downloads/INAVI/INavi/INavi.exe`
 
 Do not assume path spelling until verified in logs.
-
----
-
-## Source Map
-
-- `main.cpp` - process entry and top-level launch flow.
-- `emulator.cpp`, `emulator.h` - Unicorn setup, MIPS control-flow hooks, import stub dispatch, diagnostics.
-- `runtime.cpp`, `runtime.h` - shared runtime state, handles, GUI/audio/file state.
-- `pe.cpp`, `pe.h` - PE loading and import patching.
-- `CoreDLL.cpp`, `CoreDLL.h` - COREDLL ordinal table and import dispatch.
-- `crt.cpp`, `crt.h` - CRT-like ordinal handlers.
-- `gui.cpp`, `gui.h` - GDI/window/message emulation and framebuffer output.
-- `mfc.cpp`, `mfc.h` - inferred MFC ordinal behavior and CDC/window object bridging.
-- `file.cpp`, `file.h` - CE file/path/stdio emulation and host path resolution.
-- `audio.cpp`, `audio.h` - CE `sndPlaySoundW` and `waveOut*` handlers.
-- `host_audio.cpp`, `host_audio.h` - Windows host audio routing through `winmm`.
-- `host_window.cpp`, `host_window.h` - host window/framebuffer presentation.
-- `memory.cpp`, `memory.h` - memory helpers.
-- `module.cpp`, `module.h` - module/library/resource helpers.
-- `sync.cpp`, `sync.h` - synchronization/timing/event handlers.
-- `resource.cpp`, `resource.h` - resource helpers.
-- `WinCE_Emulator.vcxproj` - Visual Studio/MSBuild project.
 
 ---
 

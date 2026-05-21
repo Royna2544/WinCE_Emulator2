@@ -35,6 +35,7 @@
 #include <stdexcept>
 #include <string_view>
 #include <system_error>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -692,6 +693,36 @@ int hostPresenterDisplayHeight(const HostPresenterWindow& presenter) {
     return std::max(1, presenter.height);
 }
 
+DWORD hostPresenterWindowStyle() {
+    return WS_OVERLAPPEDWINDOW;
+}
+
+DWORD hostPresenterWindowExStyle() {
+    return 0;
+}
+
+RECT hostPresenterOuterRectForClient(const HostPresenterWindow& presenter) {
+    RECT rect{0, 0, hostPresenterDisplayWidth(presenter), hostPresenterDisplayHeight(presenter)};
+    AdjustWindowRectEx(&rect, hostPresenterWindowStyle(), FALSE, hostPresenterWindowExStyle());
+    return rect;
+}
+
+int hostPresenterOuterWidth(const HostPresenterWindow& presenter) {
+    const RECT rect = hostPresenterOuterRectForClient(presenter);
+    return std::max(1L, rect.right - rect.left);
+}
+
+int hostPresenterOuterHeight(const HostPresenterWindow& presenter) {
+    const RECT rect = hostPresenterOuterRectForClient(presenter);
+    return std::max(1L, rect.bottom - rect.top);
+}
+
+void presentHostWindowNow(HWND hwnd) {
+    if (!hwnd || !IsWindow(hwnd)) return;
+    RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOERASE);
+    GdiFlush();
+}
+
 std::wstring widenLossy(const std::string& value) {
     std::wstring wide;
     wide.reserve(value.size());
@@ -726,6 +757,7 @@ LRESULT CALLBACK hostPresenterWndProc(HWND hwnd, UINT message, WPARAM wParam, LP
             StretchDIBits(dc, 0, 0, client.right - client.left, client.bottom - client.top,
                           0, 0, presenter->width, presenter->height,
                           presenter->framebuffer, &info, DIB_RGB_COLORS, SRCCOPY);
+            GdiFlush();
         }
         EndPaint(hwnd, &paint);
         return 0;
@@ -890,15 +922,13 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed() {
         HWND hwnd = reinterpret_cast<HWND>(window.hostHwnd);
         if (!hwnd || !IsWindow(hwnd)) continue;
         ShowWindow(hwnd, SW_SHOWNORMAL);
-        InvalidateRect(hwnd, nullptr, FALSE);
-        UpdateWindow(hwnd);
+        presentHostWindowNow(hwnd);
     }
     for (uintptr_t hostHwnd : retainedHostWindows_) {
         HWND hwnd = reinterpret_cast<HWND>(hostHwnd);
         if (!hwnd || !IsWindow(hwnd)) continue;
         ShowWindow(hwnd, SW_SHOWNORMAL);
-        InvalidateRect(hwnd, nullptr, FALSE);
-        UpdateWindow(hwnd);
+        presentHostWindowNow(hwnd);
     }
     spdlog::info("entering host GUI message loop; close the presenter window to exit");
     MSG message{};
@@ -1422,6 +1452,16 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     blockingContinuation.moduleName = module.moduleName;
     blockingContinuation.name = "__BlockingApiContinue";
     writeStub(blockingApiContinuationStub_);
+    updateWindowContinuationStub_ = module.imageBase + 0x0001f018;
+    auto& updateWindowContinuation = exportsByAddress_[updateWindowContinuationStub_];
+    updateWindowContinuation.moduleName = module.moduleName;
+    updateWindowContinuation.name = "__UpdateWindowContinue";
+    writeStub(updateWindowContinuationStub_);
+    threadExitStub_ = module.imageBase + 0x0001f020;
+    auto& threadExit = exportsByAddress_[threadExitStub_];
+    threadExit.moduleName = module.moduleName;
+    threadExit.name = "__ThreadExit";
+    writeStub(threadExitStub_);
     spdlog::info("mapped synthetic COREDLL.dll base=0x{:08x} ordinals={}",
                  module.imageBase, module.exportsByOrdinal.size());
     return module;
@@ -1548,6 +1588,181 @@ SyntheticDllRuntime::GuestHandle* SyntheticDllRuntime::lookupGuestHandle(uint32_
     return it == guestHandles_.end() ? nullptr : &it->second;
 }
 
+SyntheticDllRuntime::GuestCpuContext SyntheticDllRuntime::captureGuestCpuContext() const {
+    static constexpr int kRegisters[] = {
+        UC_MIPS_REG_PC, UC_MIPS_REG_RA, UC_MIPS_REG_SP, UC_MIPS_REG_GP, UC_MIPS_REG_FP,
+        UC_MIPS_REG_A0, UC_MIPS_REG_A1, UC_MIPS_REG_A2, UC_MIPS_REG_A3,
+        UC_MIPS_REG_V0, UC_MIPS_REG_V1, UC_MIPS_REG_AT,
+        UC_MIPS_REG_T0, UC_MIPS_REG_T1, UC_MIPS_REG_T2, UC_MIPS_REG_T3, UC_MIPS_REG_T4,
+        UC_MIPS_REG_T5, UC_MIPS_REG_T6, UC_MIPS_REG_T7, UC_MIPS_REG_T8, UC_MIPS_REG_T9,
+        UC_MIPS_REG_S0, UC_MIPS_REG_S1, UC_MIPS_REG_S2, UC_MIPS_REG_S3, UC_MIPS_REG_S4,
+        UC_MIPS_REG_S5, UC_MIPS_REG_S6, UC_MIPS_REG_S7,
+        UC_MIPS_REG_K0, UC_MIPS_REG_K1, UC_MIPS_REG_HI, UC_MIPS_REG_LO,
+    };
+    GuestCpuContext context;
+    context.valid = true;
+    for (int regId : kRegisters) {
+        uint32_t value = 0;
+        uc_reg_read(uc_, regId, &value);
+        context.registers[regId] = value;
+    }
+    return context;
+}
+
+SyntheticDllRuntime::GuestCpuContext SyntheticDllRuntime::initialGuestThreadContext(
+    uint32_t startAddress,
+    uint32_t parameter,
+    uint32_t stackTop) const {
+    GuestCpuContext context = captureGuestCpuContext();
+    for (auto& [regId, value] : context.registers) {
+        if (regId != UC_MIPS_REG_GP) value = 0;
+    }
+    context.registers[UC_MIPS_REG_PC] = startAddress;
+    context.registers[UC_MIPS_REG_RA] = threadExitStub_;
+    context.registers[UC_MIPS_REG_SP] = stackTop;
+    context.registers[UC_MIPS_REG_FP] = 0;
+    context.registers[UC_MIPS_REG_A0] = parameter;
+    return context;
+}
+
+void SyntheticDllRuntime::restoreGuestCpuContext(const GuestCpuContext& context) const {
+    if (!context.valid) return;
+    for (const auto& [regId, value] : context.registers) {
+        uc_reg_write(uc_, regId, &value);
+    }
+}
+
+uint32_t SyntheticDllRuntime::createGuestThread(uint32_t startAddress, uint32_t parameter, uint32_t flags) {
+    if (!startAddress || !threadExitStub_) {
+        lastError_ = 87;
+        return 0;
+    }
+    constexpr uint32_t kGuestThreadStackSize = 0x10000;
+    const uint32_t stackBase = allocate(kGuestThreadStackSize, true);
+    if (!stackBase) {
+        lastError_ = 8;
+        return 0;
+    }
+    const uint32_t guestHandle = makeGuestHandle({GuestHandle::Kind::GuestThread, 0, 0});
+    const uint32_t stackTop = (stackBase + kGuestThreadStackSize - 0x100u) & ~0x0fu;
+    GuestThreadState thread;
+    thread.handle = guestHandle;
+    thread.threadId = nextGuestThreadId_++;
+    thread.startAddress = startAddress;
+    thread.parameter = parameter;
+    thread.stackBase = stackBase;
+    thread.stackSize = kGuestThreadStackSize;
+    thread.suspendCount = (flags & 0x00000004u) ? 1 : 0;
+    thread.state = thread.suspendCount ? GuestThreadRunState::Suspended : GuestThreadRunState::Runnable;
+    thread.context = initialGuestThreadContext(startAddress, parameter, stackTop);
+    guestThreads_[guestHandle] = std::move(thread);
+    lastError_ = 0;
+    return guestHandle;
+}
+
+uint32_t SyntheticDllRuntime::resumeGuestThread(uint32_t guestHandle) {
+    auto* handle = lookupGuestHandle(guestHandle);
+    if (!handle || handle->kind != GuestHandle::Kind::GuestThread) {
+        lastError_ = 6;
+        return 0xffffffffu;
+    }
+    auto thread = guestThreads_.find(guestHandle);
+    if (thread == guestThreads_.end()) {
+        lastError_ = 0;
+        return 1;
+    }
+    if (thread->second.state == GuestThreadRunState::Terminated) {
+        lastError_ = 0;
+        return 0;
+    }
+    const uint32_t previousSuspendCount = thread->second.suspendCount;
+    if (thread->second.suspendCount) --thread->second.suspendCount;
+    if (!thread->second.suspendCount && thread->second.state == GuestThreadRunState::Suspended) {
+        thread->second.state = GuestThreadRunState::Runnable;
+    }
+    lastError_ = 0;
+    return previousSuspendCount;
+}
+
+bool SyntheticDllRuntime::hasRunnableGuestThread() const {
+    for (const auto& [handle, thread] : guestThreads_) {
+        (void)handle;
+        if (thread.state == GuestThreadRunState::Runnable) return true;
+    }
+    return false;
+}
+
+bool SyntheticDllRuntime::switchToRunnableGuestThread(const char* reason) {
+    for (auto& [handle, thread] : guestThreads_) {
+        if (thread.state != GuestThreadRunState::Runnable || !thread.context.valid) continue;
+        if (activeGuestThread_) {
+            auto active = guestThreads_.find(activeGuestThread_);
+            if (active != guestThreads_.end()) {
+                active->second.context = captureGuestCpuContext();
+                if (active->second.state == GuestThreadRunState::Running) {
+                    active->second.state = GuestThreadRunState::Runnable;
+                }
+            }
+        } else {
+            mainThreadContext_ = captureGuestCpuContext();
+        }
+        thread.state = GuestThreadRunState::Running;
+        activeGuestThread_ = handle;
+        restoreGuestCpuContext(thread.context);
+        spdlog::info("guest thread switch reason={} handle=0x{:08x} start=0x{:08x} pc=0x{:08x}",
+                     reason ? reason : "cooperate", handle, thread.startAddress,
+                     thread.context.registers.count(UC_MIPS_REG_PC) ? thread.context.registers.at(UC_MIPS_REG_PC) : 0);
+        return true;
+    }
+    return false;
+}
+
+bool SyntheticDllRuntime::yieldActiveGuestThread(const char* reason) {
+    if (!activeGuestThread_) return switchToRunnableGuestThread(reason);
+    auto active = guestThreads_.find(activeGuestThread_);
+    if (active != guestThreads_.end() && active->second.state == GuestThreadRunState::Running) {
+        active->second.context = captureGuestCpuContext();
+        active->second.state = GuestThreadRunState::Runnable;
+        spdlog::info("guest thread yield reason={} handle=0x{:08x} pc=0x{:08x}",
+                     reason ? reason : "cooperate", activeGuestThread_,
+                     active->second.context.registers.count(UC_MIPS_REG_PC)
+                         ? active->second.context.registers.at(UC_MIPS_REG_PC)
+                         : 0);
+    }
+    activeGuestThread_ = 0;
+    if (mainThreadContext_.valid) {
+        restoreGuestCpuContext(mainThreadContext_);
+        return true;
+    }
+    return switchToRunnableGuestThread(reason);
+}
+
+bool SyntheticDllRuntime::finishActiveGuestThread(uint32_t exitCode) {
+    if (!activeGuestThread_) return false;
+    auto active = guestThreads_.find(activeGuestThread_);
+    if (active != guestThreads_.end()) {
+        active->second.exitCode = exitCode;
+        active->second.state = GuestThreadRunState::Terminated;
+        active->second.context = captureGuestCpuContext();
+        spdlog::info("guest thread exit handle=0x{:08x} exitCode=0x{:08x}", activeGuestThread_, exitCode);
+    }
+    activeGuestThread_ = 0;
+    if (mainThreadContext_.valid) {
+        restoreGuestCpuContext(mainThreadContext_);
+        return true;
+    }
+    return switchToRunnableGuestThread("thread exit");
+}
+
+bool SyntheticDllRuntime::cooperateGuestThreadsAfterCall(const std::string& name) {
+    const bool yieldingCall = name == "Sleep" || name == "WaitForSingleObject";
+    if (activeGuestThread_ && yieldingCall) return yieldActiveGuestThread(name.c_str());
+    if (!activeGuestThread_ && name == "ResumeThread" && hasRunnableGuestThread()) {
+        return switchToRunnableGuestThread(name.c_str());
+    }
+    return false;
+}
+
 uint32_t SyntheticDllRuntime::closeGuestHandle(uint32_t guestHandle) {
     auto it = guestHandles_.find(guestHandle);
     if (it == guestHandles_.end()) {
@@ -1585,6 +1800,12 @@ uint32_t SyntheticDllRuntime::closeGuestHandle(uint32_t guestHandle) {
     } else if (it->second.kind == GuestHandle::Kind::HostBitmap) {
         bitmaps_.erase(guestHandle);
         if (it->second.filePointer) releaseAllocation(it->second.filePointer);
+    } else if (it->second.kind == GuestHandle::Kind::GuestThread) {
+        auto thread = guestThreads_.find(guestHandle);
+        if (thread != guestThreads_.end() && thread->second.state != GuestThreadRunState::Running) {
+            releaseAllocation(thread->second.stackBase);
+            guestThreads_.erase(thread);
+        }
     }
     if (it->second.kind == GuestHandle::Kind::GuestHeap) {
         lastError_ = 6; // ERROR_INVALID_HANDLE; heaps are destroyed via HeapDestroy.
@@ -2046,6 +2267,7 @@ uint32_t SyntheticDllRuntime::loadMenuResourceHandle(uint32_t nameArg) {
 
 void SyntheticDllRuntime::ensureHostWindow(uint32_t guestHwnd, GuestWindow& window) {
 #if defined(_WIN32)
+    if (window.destroyed) return;
     if (window.parent || !framebuffer_ || framebufferWidth_ <= 0 || framebufferHeight_ <= 0) return;
     if (hostPresenterGuestHwnd_ && hostPresenterGuestHwnd_ != guestHwnd) return;
     if (!window.hostHwnd) {
@@ -2055,12 +2277,10 @@ void SyntheticDllRuntime::ensureHostWindow(uint32_t guestHwnd, GuestWindow& wind
         }
         auto* presenter = new HostPresenterWindow{this, guestHwnd, framebuffer_, framebufferWidth_, framebufferHeight_};
         const std::wstring title = widenLossy(window.title.empty() ? "FakeCE" : window.title);
-        RECT rect{0, 0, hostPresenterDisplayWidth(*presenter), hostPresenterDisplayHeight(*presenter)};
-        AdjustWindowRectEx(&rect, WS_OVERLAPPEDWINDOW, FALSE, 0);
-        HWND hwnd = CreateWindowExW(0, hostPresenterClassName(), title.c_str(),
-                                    WS_OVERLAPPEDWINDOW,
+        HWND hwnd = CreateWindowExW(hostPresenterWindowExStyle(), hostPresenterClassName(), title.c_str(),
+                                    hostPresenterWindowStyle(),
                                     CW_USEDEFAULT, CW_USEDEFAULT,
-                                    rect.right - rect.left, rect.bottom - rect.top,
+                                    hostPresenterOuterWidth(*presenter), hostPresenterOuterHeight(*presenter),
                                     nullptr, nullptr, GetModuleHandleW(nullptr), presenter);
         if (!hwnd) {
             spdlog::warn("host presenter CreateWindowExW failed guest=0x{:08x} error={}", guestHwnd, GetLastError());
@@ -2075,8 +2295,7 @@ void SyntheticDllRuntime::ensureHostWindow(uint32_t guestHwnd, GuestWindow& wind
     }
     HWND hwnd = reinterpret_cast<HWND>(window.hostHwnd);
     if (window.visible) ShowWindow(hwnd, SW_SHOWNORMAL);
-    InvalidateRect(hwnd, nullptr, FALSE);
-    UpdateWindow(hwnd);
+    presentHostWindows(true);
 #else
     (void)guestHwnd;
     (void)window;
@@ -2090,7 +2309,7 @@ void SyntheticDllRuntime::destroyHostWindow(GuestWindow& window) {
         if (IsWindow(hwnd)) {
             SetWindowTextW(hwnd, L"FakeCE presenter (guest HWND destroyed)");
             ShowWindow(hwnd, SW_SHOWNORMAL);
-            InvalidateRect(hwnd, nullptr, FALSE);
+            presentHostWindows(true);
             retainedHostWindows_.push_back(window.hostHwnd);
         }
         window.hostHwnd = 0;
@@ -2100,23 +2319,167 @@ void SyntheticDllRuntime::destroyHostWindow(GuestWindow& window) {
 #endif
 }
 
-void SyntheticDllRuntime::invalidateHostWindows() {
+void SyntheticDllRuntime::presentHostWindows(bool force) {
 #if defined(_WIN32)
+    hostPresentDirty_ = true;
+    const uint64_t now = hostTickMilliseconds();
+    constexpr uint64_t kMinPresentIntervalMs = 16;
+    if (!force && lastHostPresentMs_ && now - lastHostPresentMs_ < kMinPresentIntervalMs) return;
+    hostPresentDirty_ = false;
+    lastHostPresentMs_ = now;
     for (auto& [guestHwnd, window] : windows_) {
         (void)guestHwnd;
         if (!window.hostHwnd) continue;
         HWND hwnd = reinterpret_cast<HWND>(window.hostHwnd);
         if (!IsWindow(hwnd)) continue;
-        InvalidateRect(hwnd, nullptr, FALSE);
-        UpdateWindow(hwnd);
+        presentHostWindowNow(hwnd);
     }
     for (uintptr_t hostHwnd : retainedHostWindows_) {
         HWND hwnd = reinterpret_cast<HWND>(hostHwnd);
         if (!hwnd || !IsWindow(hwnd)) continue;
-        InvalidateRect(hwnd, nullptr, FALSE);
-        UpdateWindow(hwnd);
+        presentHostWindowNow(hwnd);
     }
+#else
+    (void)force;
 #endif
+}
+
+void SyntheticDllRuntime::invalidateHostWindows() {
+    presentHostWindows(false);
+}
+
+void SyntheticDllRuntime::queueGuestPaint(uint32_t hwnd, bool erase) {
+    auto it = windows_.find(hwnd);
+    if (!hwnd || it == windows_.end() || it->second.destroyed || !it->second.visible) return;
+    if (erase) {
+        GuestMessage eraseMessage{};
+        eraseMessage.hwnd = hwnd;
+        eraseMessage.message = 0x0014; // WM_ERASEBKGND
+        eraseMessage.wParam = makeGuestDc(hwnd);
+        eraseMessage.time = uint32_t(++tick_ * 16);
+        guestMessages_.push_back(eraseMessage);
+    }
+    GuestMessage paint{};
+    paint.hwnd = hwnd;
+    paint.message = 0x000f; // WM_PAINT
+    paint.time = uint32_t(++tick_ * 16);
+    guestMessages_.push_back(paint);
+    invalidateHostWindows();
+}
+
+std::pair<int32_t, int32_t> SyntheticDllRuntime::guestWindowOrigin(uint32_t hwnd) const {
+    int32_t x = 0;
+    int32_t y = 0;
+    for (uint32_t current = hwnd; current;) {
+        auto it = windows_.find(current);
+        if (it == windows_.end()) break;
+        x += it->second.x;
+        y += it->second.y;
+        current = it->second.parent;
+    }
+    return {x, y};
+}
+
+void SyntheticDllRuntime::captureGuestWindowBacking(uint32_t hwnd) {
+    auto it = windows_.find(hwnd);
+    if (it == windows_.end() || !it->second.parent || it->second.backingValid ||
+        !framebuffer_ || framebufferWidth_ <= 0 || framebufferHeight_ <= 0 ||
+        it->second.width <= 0 || it->second.height <= 0) {
+        return;
+    }
+    auto parent = windows_.find(it->second.parent);
+    if (parent == windows_.end() || !parent->second.parent) return;
+
+    const auto [originX, originY] = guestWindowOrigin(hwnd);
+    const int32_t left = std::clamp<int32_t>(originX, 0, framebufferWidth_);
+    const int32_t top = std::clamp<int32_t>(originY, 0, framebufferHeight_);
+    const int32_t right = std::clamp<int32_t>(originX + it->second.width, 0, framebufferWidth_);
+    const int32_t bottom = std::clamp<int32_t>(originY + it->second.height, 0, framebufferHeight_);
+    if (left >= right || top >= bottom) return;
+
+    const int32_t width = right - left;
+    const int32_t height = bottom - top;
+    std::vector<uint32_t> pixels(size_t(width) * size_t(height));
+    for (int32_t y = 0; y < height; ++y) {
+        const uint32_t* src = framebuffer_ + size_t(top + y) * size_t(framebufferWidth_) + size_t(left);
+        std::copy(src, src + width, pixels.begin() + size_t(y) * size_t(width));
+    }
+    it->second.backingX = left;
+    it->second.backingY = top;
+    it->second.backingWidth = width;
+    it->second.backingHeight = height;
+    it->second.backingPixels = std::move(pixels);
+    it->second.backingValid = true;
+}
+
+bool SyntheticDllRuntime::restoreGuestWindowBacking(uint32_t hwnd, GuestWindow& window) {
+    (void)hwnd;
+    if (!window.backingValid || window.backingPixels.empty() ||
+        !framebuffer_ || framebufferWidth_ <= 0 || framebufferHeight_ <= 0 ||
+        window.backingWidth <= 0 || window.backingHeight <= 0) {
+        return false;
+    }
+    const int32_t left = std::clamp<int32_t>(window.backingX, 0, framebufferWidth_);
+    const int32_t top = std::clamp<int32_t>(window.backingY, 0, framebufferHeight_);
+    const int32_t right = std::clamp<int32_t>(window.backingX + window.backingWidth, 0, framebufferWidth_);
+    const int32_t bottom = std::clamp<int32_t>(window.backingY + window.backingHeight, 0, framebufferHeight_);
+    if (left >= right || top >= bottom) {
+        window.backingValid = false;
+        window.backingPixels.clear();
+        return false;
+    }
+    const int32_t copyWidth = right - left;
+    const int32_t copyHeight = bottom - top;
+    if (size_t(window.backingWidth) * size_t(window.backingHeight) > window.backingPixels.size()) {
+        window.backingValid = false;
+        window.backingPixels.clear();
+        return false;
+    }
+    for (int32_t y = 0; y < copyHeight; ++y) {
+        const uint32_t* src = window.backingPixels.data() + size_t(y) * size_t(window.backingWidth);
+        uint32_t* dst = framebuffer_ + size_t(top + y) * size_t(framebufferWidth_) + size_t(left);
+        std::copy(src, src + copyWidth, dst);
+    }
+    spdlog::info("restored guest window backing hwnd=0x{:08x} rect={},{} {}x{}",
+                 hwnd, left, top, copyWidth, copyHeight);
+    window.backingValid = false;
+    window.backingPixels.clear();
+    presentHostWindows(true);
+    return true;
+}
+
+void SyntheticDllRuntime::eraseGuestWindowArea(uint32_t hwnd, const GuestWindow& window) {
+    if (!framebuffer_ || framebufferWidth_ <= 0 || framebufferHeight_ <= 0 ||
+        window.width <= 0 || window.height <= 0) {
+        return;
+    }
+    auto mutableWindow = windows_.find(hwnd);
+    if (mutableWindow != windows_.end() && restoreGuestWindowBacking(hwnd, mutableWindow->second)) {
+        return;
+    }
+    if (window.parent) {
+        auto parent = windows_.find(window.parent);
+        if (parent != windows_.end() && !parent->second.parent) return;
+    }
+    uint32_t pixel = 0xff000000u;
+    if (window.parent) {
+        auto parent = windows_.find(window.parent);
+        if (parent != windows_.end()) {
+            auto cls = windowClassesByName_.find(parent->second.className);
+            uint32_t brushHandle = 0;
+            if (cls != windowClassesByName_.end()) {
+                std::memcpy(&brushHandle, cls->second.bytes.data() + 28, sizeof(brushHandle));
+            }
+            auto brush = brushes_.find(brushHandle);
+            if (brush != brushes_.end()) pixel = colorRefToPixel(brush->second.colorRef);
+        }
+    }
+    if (pixel == 0) pixel = 0xff000000u;
+    const auto [x, y] = guestWindowOrigin(hwnd);
+    GuestDc screenDc{};
+    screenDc.hwnd = 0;
+    fillFramebufferRect(screenDc, x, y, x + window.width, y + window.height, pixel);
+    presentHostWindows(true);
 }
 
 void SyntheticDllRuntime::pumpHostMessages() {
@@ -2300,13 +2663,10 @@ void SyntheticDllRuntime::fillFramebufferRect(const GuestDc& dc,
                                               int32_t bottom,
                                               uint32_t pixel) {
     if (!framebuffer_ || pixel == 0 || framebufferWidth_ <= 0 || framebufferHeight_ <= 0) return;
+    captureGuestWindowBacking(dc.hwnd);
     int32_t originX = 0;
     int32_t originY = 0;
-    auto window = windows_.find(dc.hwnd);
-    if (window != windows_.end()) {
-        originX = window->second.x;
-        originY = window->second.y;
-    }
+    if (dc.hwnd) std::tie(originX, originY) = guestWindowOrigin(dc.hwnd);
     left += originX;
     right += originX;
     top += originY;
@@ -2331,13 +2691,10 @@ void SyntheticDllRuntime::drawFramebufferLine(const GuestDc& dc,
                                               int32_t y1,
                                               uint32_t pixel) {
     if (!framebuffer_ || pixel == 0 || framebufferWidth_ <= 0 || framebufferHeight_ <= 0) return;
+    captureGuestWindowBacking(dc.hwnd);
     int32_t originX = 0;
     int32_t originY = 0;
-    auto window = windows_.find(dc.hwnd);
-    if (window != windows_.end()) {
-        originX = window->second.x;
-        originY = window->second.y;
-    }
+    if (dc.hwnd) std::tie(originX, originY) = guestWindowOrigin(dc.hwnd);
     x0 += originX;
     x1 += originX;
     y0 += originY;
@@ -2398,11 +2755,7 @@ bool SyntheticDllRuntime::drawHostTextToDc(const GuestDc& dc,
     int32_t originX = 0;
     int32_t originY = 0;
     if (!dc.selectedBitmap) {
-        auto window = windows_.find(dc.hwnd);
-        if (window != windows_.end()) {
-            originX = window->second.x;
-            originY = window->second.y;
-        }
+        if (dc.hwnd) std::tie(originX, originY) = guestWindowOrigin(dc.hwnd);
     }
 
     RECT textRect{};
@@ -2513,6 +2866,7 @@ bool SyntheticDllRuntime::drawHostTextToDc(const GuestDc& dc,
     }
 
     if (!framebuffer_ || framebufferWidth_ <= 0 || framebufferHeight_ <= 0) return false;
+    captureGuestWindowBacking(dc.hwnd);
     const bool ok = drawIntoDib(framebufferWidth_, framebufferHeight_, framebuffer_);
     if (ok) invalidateHostWindows();
     return ok;
@@ -2928,6 +3282,7 @@ bool SyntheticDllRuntime::stretchDibToFramebuffer(const GuestDc& dc,
     if (!rowStride || rowStride > 0x100000u || uint64_t(rowStride) * uint64_t(dibHeight) > 0x2000000ull) return false;
     std::vector<uint8_t> bits(size_t(rowStride) * size_t(dibHeight));
     if (uc_mem_read(uc_, bitsPtr, bits.data(), bits.size()) != UC_ERR_OK) return false;
+    captureGuestWindowBacking(dc.hwnd);
 
     int32_t outLeft = dstW < 0 ? dstX + dstW : dstX;
     int32_t outTop = dstH < 0 ? dstY + dstH : dstY;
@@ -2935,11 +3290,7 @@ bool SyntheticDllRuntime::stretchDibToFramebuffer(const GuestDc& dc,
     const int32_t outH = std::abs(dstH);
     int32_t originX = 0;
     int32_t originY = 0;
-    auto window = windows_.find(dc.hwnd);
-    if (window != windows_.end()) {
-        originX = window->second.x;
-        originY = window->second.y;
-    }
+    if (dc.hwnd) std::tie(originX, originY) = guestWindowOrigin(dc.hwnd);
     outLeft += originX;
     outTop += originY;
     for (int32_t y = 0; y < outH; ++y) {
@@ -3206,14 +3557,11 @@ bool SyntheticDllRuntime::bitBltToFramebuffer(const GuestDc& dstDc,
     if (byteCount == 0 || byteCount > 0x2000000ull) return false;
     std::vector<uint8_t> bits(static_cast<size_t>(byteCount));
     if (uc_mem_read(uc_, bitmap.bits, bits.data(), bits.size()) != UC_ERR_OK) return false;
+    captureGuestWindowBacking(dstDc.hwnd);
 
     int32_t originX = 0;
     int32_t originY = 0;
-    auto window = windows_.find(dstDc.hwnd);
-    if (window != windows_.end()) {
-        originX = window->second.x;
-        originY = window->second.y;
-    }
+    if (dstDc.hwnd) std::tie(originX, originY) = guestWindowOrigin(dstDc.hwnd);
     int32_t outLeft = dstW < 0 ? dstX + dstW : dstX;
     int32_t outTop = dstH < 0 ? dstY + dstH : dstY;
     outLeft += originX;
@@ -3443,14 +3791,11 @@ bool SyntheticDllRuntime::transparentImageToFramebuffer(const GuestDc& dstDc,
 
     std::vector<uint8_t> srcBits(static_cast<size_t>(srcBytes));
     if (uc_mem_read(uc_, srcBitmap.bits, srcBits.data(), srcBits.size()) != UC_ERR_OK) return false;
+    captureGuestWindowBacking(dstDc.hwnd);
 
     int32_t originX = 0;
     int32_t originY = 0;
-    auto window = windows_.find(dstDc.hwnd);
-    if (window != windows_.end()) {
-        originX = window->second.x;
-        originY = window->second.y;
-    }
+    if (dstDc.hwnd) std::tie(originX, originY) = guestWindowOrigin(dstDc.hwnd);
 
     const uint32_t transparentPixel = colorRefToPixel(transparentColor) & 0x00ffffffu;
     const int32_t outW = std::abs(dstW);
@@ -5688,9 +6033,7 @@ bool SyntheticDllRuntime::dispatchSimpleHostWin32(const std::string& name,
     const uint32_t a2 = args.a2;
 
     if (name == "ResumeThread") {
-        auto* handle = lookupGuestHandle(a0);
-        ret = handle && handle->kind == GuestHandle::Kind::GuestThread ? 1 : 0xffffffffu;
-        lastError_ = ret == 0xffffffffu ? 6 : 0;
+        ret = resumeGuestThread(a0);
     } else if (name == "GetCommState" || name == "SetCommState" || name == "SetCommTimeouts" ||
                name == "SetCommMask" || name == "SetupComm" || name == "PurgeComm" ||
                name == "ClearCommError") {
@@ -6274,6 +6617,15 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
 #endif
     } else if (name == "WaitForSingleObject") {
         auto* handle = lookupGuestHandle(a0);
+        if (handle && handle->kind == GuestHandle::Kind::GuestThread) {
+            auto thread = guestThreads_.find(a0);
+            if (thread == guestThreads_.end() || thread->second.state == GuestThreadRunState::Terminated) {
+                ret = 0;
+            } else {
+                ret = a1 == 0 ? 0x00000102u : 0x00000102u; // WAIT_TIMEOUT until cooperative scheduling runs it.
+            }
+            lastError_ = 0;
+        } else
 #if defined(_WIN32)
         if (handle && handle->hostValue) {
             ret = WaitForSingleObject(reinterpret_cast<HANDLE>(handle->hostValue), a1);
@@ -6309,9 +6661,11 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
         const uint32_t parameter = a3;
         const uint32_t flags = stackArg(4);
         const uint32_t threadIdPtr = stackArg(5);
-        ret = makeGuestHandle({GuestHandle::Kind::GuestThread, 0, 0});
-        if (threadIdPtr) writeU32(threadIdPtr, ret);
-        lastError_ = 0;
+        ret = createGuestThread(startAddress, parameter, flags);
+        if (threadIdPtr) {
+            auto thread = guestThreads_.find(ret);
+            writeU32(threadIdPtr, thread == guestThreads_.end() ? ret : thread->second.threadId);
+        }
         spdlog::info("CreateThread guestHandle=0x{:08x} start=0x{:08x} param=0x{:08x} flags=0x{:08x} idPtr=0x{:08x}",
                      ret, startAddress, parameter, flags, threadIdPtr);
     } else if (name == "SetThreadPriority" || name == "CeSetThreadPriority") {
@@ -6764,7 +7118,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             : lowerAscii(readUtf16(a0));
         const std::string title = readUtf16(a1);
         for (const auto& [hwnd, window] : windows_) {
-            if ((!a0 || window.className == className) && (!a1 || window.title == title)) {
+            if (!window.destroyed && (!a0 || window.className == className) && (!a1 || window.title == title)) {
                 ret = hwnd;
                 break;
             }
@@ -6914,21 +7268,12 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             ret = it->second.menu;
         }
     } else if (name == "InvalidateRect") {
-        if (!windows_.count(a0)) {
+        const uint32_t target = a0 ? a0 : firstWindow();
+        if (!target || !windows_.count(target)) {
             lastError_ = 1400;
             ret = 0;
         } else {
-            GuestMessage erase{};
-            erase.hwnd = a0;
-            erase.message = 0x0014; // WM_ERASEBKGND
-            erase.wParam = makeGuestDc(a0);
-            erase.time = uint32_t(++tick_ * 16);
-            guestMessages_.push_back(erase);
-            GuestMessage message{};
-            message.hwnd = a0;
-            message.message = 0x000f; // WM_PAINT
-            message.time = uint32_t(++tick_ * 16);
-            guestMessages_.push_back(message);
+            queueGuestPaint(target, a2 != 0);
             lastError_ = 0;
             ret = 1;
         }
@@ -7517,7 +7862,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
         }
     } else if (name == "MoveWindow") {
         auto it = windows_.find(a0);
-        if (it == windows_.end()) {
+        if (it == windows_.end() || it->second.destroyed) {
             lastError_ = 1400;
             ret = 0;
         } else {
@@ -7531,11 +7876,11 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             if (it->second.hostHwnd) {
                 HWND hwnd = reinterpret_cast<HWND>(it->second.hostHwnd);
                 auto* presenter = reinterpret_cast<HostPresenterWindow*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
-                const int hostWidth = presenter ? hostPresenterDisplayWidth(*presenter) : std::max(1, it->second.width);
-                const int hostHeight = presenter ? hostPresenterDisplayHeight(*presenter) : std::max(1, it->second.height);
+                const int hostWidth = presenter ? hostPresenterOuterWidth(*presenter) : std::max(1, it->second.width);
+                const int hostHeight = presenter ? hostPresenterOuterHeight(*presenter) : std::max(1, it->second.height);
                 SetWindowPos(hwnd, nullptr, it->second.x, it->second.y, hostWidth, hostHeight,
                              SWP_NOZORDER | SWP_NOACTIVATE);
-                if (stackArg(5)) InvalidateRect(hwnd, nullptr, FALSE);
+                if (stackArg(5)) presentHostWindows(true);
             } else {
                 ensureHostWindow(a0, it->second);
             }
@@ -7553,7 +7898,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
         }
     } else if (name == "SetWindowPos") {
         auto it = windows_.find(a0);
-        if (it == windows_.end()) {
+        if (it == windows_.end() || it->second.destroyed) {
             lastError_ = 1400;
             ret = 0;
         } else {
@@ -7582,16 +7927,16 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
                 HWND hwnd = reinterpret_cast<HWND>(it->second.hostHwnd);
                 if (!(flags & 0x0001u) || !(flags & 0x0002u)) {
                     auto* presenter = reinterpret_cast<HostPresenterWindow*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
-                    const int hostWidth = presenter ? hostPresenterDisplayWidth(*presenter)
+                    const int hostWidth = presenter ? hostPresenterOuterWidth(*presenter)
                                                     : std::max(1, it->second.width);
-                    const int hostHeight = presenter ? hostPresenterDisplayHeight(*presenter)
+                    const int hostHeight = presenter ? hostPresenterOuterHeight(*presenter)
                                                      : std::max(1, it->second.height);
                     SetWindowPos(hwnd, nullptr, it->second.x, it->second.y,
                                  hostWidth, hostHeight,
                                  SWP_NOZORDER | SWP_NOACTIVATE);
                 }
                 ShowWindow(hwnd, it->second.visible ? SW_SHOWNORMAL : SW_HIDE);
-                InvalidateRect(hwnd, nullptr, FALSE);
+                presentHostWindows(true);
             } else {
                 ensureHostWindow(a0, it->second);
             }
@@ -7611,6 +7956,12 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
                 message.wParam = it->second.visible ? 1 : 0;
                 message.time = uint32_t(++tick_ * 16);
                 guestMessages_.push_back(message);
+                if (!it->second.visible && it->second.parent) {
+                    eraseGuestWindowArea(a0, it->second);
+                    spdlog::info("SetWindowPos invalidating parent=0x{:08x} after hiding child=0x{:08x}",
+                                 it->second.parent, a0);
+                    queueGuestPaint(it->second.parent, true);
+                }
             }
             lastError_ = 0;
             ret = 1;
@@ -7676,6 +8027,8 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             lastError_ = 1400;
             ret = 0;
         } else {
+            const bool wasVisible = it->second.visible;
+            const uint32_t parent = it->second.parent;
             for (auto timer = timers_.begin(); timer != timers_.end();) {
                 if (timer->second.hwnd == a0) timer = timers_.erase(timer);
                 else ++timer;
@@ -7683,6 +8036,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             if (focusedWindow_ == a0) focusedWindow_ = 0;
             if (capturedWindow_ == a0) capturedWindow_ = 0;
             if (hostPointerCaptureWindow_ == a0) hostPointerCaptureWindow_ = 0;
+            if (wasVisible) eraseGuestWindowArea(a0, it->second);
             it->second.visible = false;
             it->second.destroyed = true;
             GuestMessage destroy{};
@@ -7696,12 +8050,16 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             ncDestroy.time = uint32_t(++tick_ * 16);
             guestMessages_.push_back(ncDestroy);
             destroyHostWindow(it->second);
+            if (wasVisible && parent) {
+                spdlog::info("DestroyWindow invalidating parent=0x{:08x} after child=0x{:08x}", parent, a0);
+                queueGuestPaint(parent, true);
+            }
             lastError_ = 0;
             ret = 1;
         }
     } else if (name == "ShowWindow") {
         auto it = windows_.find(a0);
-        if (it == windows_.end()) {
+        if (it == windows_.end() || it->second.destroyed) {
             lastError_ = 1400;
             ret = 0;
         } else {
@@ -7712,8 +8070,9 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             ensureHostWindow(a0, it->second);
 #if defined(_WIN32)
             if (it->second.hostHwnd) {
-                ShowWindow(reinterpret_cast<HWND>(it->second.hostHwnd), it->second.visible ? SW_SHOWNORMAL : SW_HIDE);
-                InvalidateRect(reinterpret_cast<HWND>(it->second.hostHwnd), nullptr, FALSE);
+                HWND hwnd = reinterpret_cast<HWND>(it->second.hostHwnd);
+                ShowWindow(hwnd, it->second.visible ? SW_SHOWNORMAL : SW_HIDE);
+                presentHostWindows(true);
             }
 #endif
             if (it->second.visible != wasVisible) {
@@ -7723,29 +8082,24 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
                 message.wParam = it->second.visible ? 1 : 0;
                 message.time = uint32_t(++tick_ * 16);
                 guestMessages_.push_back(message);
+                if (!it->second.visible && it->second.parent) {
+                    eraseGuestWindowArea(a0, it->second);
+                    spdlog::info("ShowWindow invalidating parent=0x{:08x} after hiding child=0x{:08x}",
+                                 it->second.parent, a0);
+                    queueGuestPaint(it->second.parent, true);
+                }
             }
             lastError_ = 0;
             ret = wasVisible ? 1 : 0;
         }
     } else if (name == "UpdateWindow") {
         auto it = windows_.find(a0);
-        if (it == windows_.end()) {
+        if (it == windows_.end() || it->second.destroyed) {
             lastError_ = 1400;
             ret = 0;
         } else {
-            GuestMessage erase{};
-            erase.hwnd = a0;
-            erase.message = 0x0014; // WM_ERASEBKGND
-            erase.wParam = makeGuestDc(a0);
-            erase.time = uint32_t(++tick_ * 16);
-            guestMessages_.push_back(erase);
-            GuestMessage message{};
-            message.hwnd = a0;
-            message.message = 0x000f; // WM_PAINT
-            message.time = uint32_t(++tick_ * 16);
-            guestMessages_.push_back(message);
+            queueGuestPaint(a0, true);
             ensureHostWindow(a0, it->second);
-            invalidateHostWindows();
             lastError_ = 0;
             ret = 1;
         }
@@ -8945,9 +9299,13 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         }
         return wndProc;
     };
-    auto finalizeDestroyedWindow = [&](uint32_t hwnd) {
+    auto finalizeDestroyedWindow = [&](uint32_t hwnd,
+                                       std::optional<bool> visibleOverride = std::nullopt,
+                                       std::optional<uint32_t> parentOverride = std::nullopt) {
         auto it = windows_.find(hwnd);
         if (it == windows_.end()) return;
+        const bool wasVisible = visibleOverride.value_or(it->second.visible);
+        const uint32_t parent = parentOverride.value_or(it->second.parent);
         for (auto timer = timers_.begin(); timer != timers_.end();) {
             if (timer->second.hwnd == hwnd) timer = timers_.erase(timer);
             else ++timer;
@@ -8955,9 +9313,14 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         if (focusedWindow_ == hwnd) focusedWindow_ = 0;
         if (capturedWindow_ == hwnd) capturedWindow_ = 0;
         if (hostPointerCaptureWindow_ == hwnd) hostPointerCaptureWindow_ = 0;
+        if (wasVisible) eraseGuestWindowArea(hwnd, it->second);
         it->second.visible = false;
         it->second.destroyed = true;
         destroyHostWindow(it->second);
+        if (wasVisible && parent) {
+            spdlog::info("DestroyWindow invalidating parent=0x{:08x} after child=0x{:08x}", parent, hwnd);
+            queueGuestPaint(parent, true);
+        }
     };
     auto dispatchQueuedPaintForBlockingApi = [&](PendingBlockingApi& pending, const char* reason) {
         if (pending.paintDispatches >= 16) return false;
@@ -9010,8 +9373,10 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         }
         const uint32_t hwnd = pending.hwnd;
         const uint32_t originalRa = pending.originalRa;
+        const uint32_t parent = pending.parent;
+        const bool wasVisible = pending.wasVisible;
         pendingDestroyWindows_.pop_back();
-        finalizeDestroyedWindow(hwnd);
+        finalizeDestroyedWindow(hwnd, wasVisible, parent);
         lastError_ = 0;
         setReg(UC_MIPS_REG_V0, 1);
         setReg(UC_MIPS_REG_RA, originalRa);
@@ -9101,6 +9466,54 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         setReg(UC_MIPS_REG_PC, pending.args.ra);
         spdlog::info("{} resumed after cooperative paint -> 0x{:08x}", pending.name, ret);
         pumpHostMessages();
+        cooperateGuestThreadsAfterCall(pending.name);
+        return;
+    }
+
+    if (mutableEntry.moduleName == "coredll.dll" && name == "__UpdateWindowContinue") {
+        if (pendingUpdateWindows_.empty()) {
+            spdlog::warn("UpdateWindow continuation reached with no pending window");
+            setReg(UC_MIPS_REG_V0, 1);
+            setReg(UC_MIPS_REG_PC, ra);
+            return;
+        }
+        auto& pending = pendingUpdateWindows_.back();
+        auto window = windows_.find(pending.hwnd);
+        uint32_t wndProc = pending.wndProc;
+        if (window != windows_.end() && window->second.wndProc) wndProc = window->second.wndProc;
+        wndProc = translatedWndProc(wndProc, "UpdateWindow");
+        if (pending.stage == 0) {
+            pending.stage = 1;
+            spdlog::info("UpdateWindow synchronous WM_PAINT hwnd=0x{:08x} wndproc=0x{:08x}",
+                         pending.hwnd, wndProc);
+            setReg(UC_MIPS_REG_A0, pending.hwnd);
+            setReg(UC_MIPS_REG_A1, 0x000f); // WM_PAINT
+            setReg(UC_MIPS_REG_A2, 0);
+            setReg(UC_MIPS_REG_A3, 0);
+            setReg(UC_MIPS_REG_RA, updateWindowContinuationStub_);
+            setReg(UC_MIPS_REG_PC, wndProc);
+            return;
+        }
+        const uint32_t originalRa = pending.originalRa;
+        const uint32_t hwnd = pending.hwnd;
+        pendingUpdateWindows_.pop_back();
+        lastError_ = 0;
+        setReg(UC_MIPS_REG_V0, 1);
+        setReg(UC_MIPS_REG_RA, originalRa);
+        setReg(UC_MIPS_REG_PC, originalRa);
+        spdlog::info("UpdateWindow synchronous paint complete hwnd=0x{:08x} return=0x{:08x}",
+                     hwnd, originalRa);
+        presentHostWindows(true);
+        pumpHostMessages();
+        return;
+    }
+
+    if (mutableEntry.moduleName == "coredll.dll" && name == "__ThreadExit") {
+        if (!finishActiveGuestThread(reg(UC_MIPS_REG_V0))) {
+            spdlog::warn("guest thread exit reached without active guest thread");
+            setReg(UC_MIPS_REG_PC, ra);
+        }
+        pumpHostMessages();
         return;
     }
 
@@ -9137,6 +9550,35 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         return;
     }
 
+    if (mutableEntry.moduleName == "coredll.dll" && name == "UpdateWindow") {
+        auto it = windows_.find(a0);
+        if (it == windows_.end() || it->second.destroyed) {
+            lastError_ = 1400;
+            setReg(UC_MIPS_REG_V0, 0);
+            pumpHostMessages();
+            return;
+        }
+        uint32_t wndProc = translatedWndProc(it->second.wndProc, "UpdateWindow");
+        if (!wndProc || !updateWindowContinuationStub_) {
+            lastError_ = 0;
+            setReg(UC_MIPS_REG_V0, 1);
+            pumpHostMessages();
+            return;
+        }
+        ensureHostWindow(a0, it->second);
+        const uint32_t eraseDc = makeGuestDc(a0);
+        pendingUpdateWindows_.push_back(PendingUpdateWindow{a0, wndProc, ra, eraseDc, 0});
+        spdlog::info("UpdateWindow synchronous WM_ERASEBKGND hwnd=0x{:08x} wndproc=0x{:08x}",
+                     a0, wndProc);
+        setReg(UC_MIPS_REG_A0, a0);
+        setReg(UC_MIPS_REG_A1, 0x0014); // WM_ERASEBKGND
+        setReg(UC_MIPS_REG_A2, eraseDc);
+        setReg(UC_MIPS_REG_A3, 0);
+        setReg(UC_MIPS_REG_RA, updateWindowContinuationStub_);
+        setReg(UC_MIPS_REG_PC, wndProc);
+        return;
+    }
+
     if (mutableEntry.moduleName == "coredll.dll" && name == "DestroyWindow") {
         auto it = windows_.find(a0);
         if (it == windows_.end() || it->second.destroyed) {
@@ -9151,16 +9593,18 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
             spdlog::info("DestroyWindow discarded {} pending posted messages for hwnd=0x{:08x}",
                          oldSize - guestMessages_.size(), a0);
         }
+        const bool wasVisible = it->second.visible;
+        const uint32_t parent = it->second.parent;
         it->second.visible = false;
         const uint32_t wndProc = translatedWndProc(it->second.wndProc, "DestroyWindow");
         if (!wndProc || !destroyWindowContinuationStub_) {
-            finalizeDestroyedWindow(a0);
+            finalizeDestroyedWindow(a0, wasVisible, parent);
             lastError_ = 0;
             setReg(UC_MIPS_REG_V0, 1);
             pumpHostMessages();
             return;
         }
-        pendingDestroyWindows_.push_back(PendingDestroyWindow{a0, wndProc, ra, 0});
+        pendingDestroyWindows_.push_back(PendingDestroyWindow{a0, wndProc, ra, 0, parent, wasVisible});
         spdlog::info("DestroyWindow synchronous WM_DESTROY hwnd=0x{:08x} wndproc=0x{:08x} return=0x{:08x}",
                      a0, wndProc, ra);
         setReg(UC_MIPS_REG_A0, a0);
@@ -9236,6 +9680,7 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         }
         setReg(UC_MIPS_REG_V0, ret);
         pumpHostMessages();
+        cooperateGuestThreadsAfterCall(name);
         return;
     }
     if (mutableEntry.moduleName == "coredll.dll") {

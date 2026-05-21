@@ -1,0 +1,430 @@
+{
+  "keys": {
+    "hkcr": {
+      "values": {}
+    },
+    "hkcu": {
+      "values": {}
+    },
+    "hkcu\\software\\mbcauth": {
+      "values": {
+        "path info": {
+          "data": "剜獥摩湥䙴慬桳\\",
+          "type": "REG_SZ"
+        }
+      }
+    },
+    "hkcu\\software\\thinkware\\sensor": {
+      "values": {
+        "gsensorfault": {
+          "data": 0,
+          "type": "REG_DWORD"
+        },
+        "sensitivity": {
+          "data": 1,
+          "type": "REG_DWORD"
+        },
+        "use": {
+          "data": 1,
+          "type": "REG_DWORD"
+        }
+      }
+    },
+    "hkcu\\software\\tripviewcontrol": {
+      "values": {
+        "view_state": {
+          "data": 1,
+          "type": "REG_DWORD"
+        },
+        "view_type": {
+          "data": 0,
+          "type": "REG_DWORD"
+        }
+      }
+    },
+    "hklm": {
+      "values": {
+        "regpersisted": {
+          "data": 1,
+          "type": "REG_DWORD"
+        }
+      }
+    },
+    "hklm\\controlpanel": {
+      "values": {
+        "inputconfig": {
+          "data": 3,
+          "type": "REG_DWORD"
+        }
+      }
+    },
+    "hklm\\controlpanel\\backlight": {
+      "values": {
+        "acbacklightlevel": {
+          "data": 511,
+          "type": "REG_DWORD"
+        },
+        "actimeout": {
+          "data": 60,
+          "type": "REG_DWORD"
+        },
+        "battbacklightlevel": {
+          "data": 126,
+          "type": "REG_DWORD"
+        },
+        "batterytimeout": {
+          "data": 30,
+          "type": "REG_DWORD"
+        },
+        "usebattery": {
+          "data": 1,
+          "type": "REG_DWORD"
+        },
+        "useext": {
+          "data": 0,
+          "type": "REG_DWORD"
+        }
+      }
+    },
+    "hklm\\controlpanel\\volume": {
+      "values": {
+        "headsetlevel": {
+          "data": 14,
+          "type": "REG_DWORD"
+        },
+        "headsetvolume": {
+          "data": 45,
+          "type": "REG_DWORD"
+        },
+        "level": {
+          "data": 20,
+          "type": "REG_DWORD"
+        },
+        "volume": {
+          "data": 59,
+          "type": "REG_DWORD"
+        }
+      }
+    },
+    "hklm\\ident": {
+      "values": {
+        "desc": {
+          "data": "Navigation",
+          "type": "REG_SZ"
+        },
+        "name": {
+          "data": "iNavi GN 2010",
+          "type": "REG_SZ"
+        },
+        "origname": {
+          "data": "iNavi GN 2010",
+          "type": "REG_SZ"
+        },
+        "username": {
+          "data": "guest",
+          "type": "REG_SZ"
+        }
+      }
+    },
+    "hklm\\security": {
+      "values": {}
+    },
+    "hklm\\security\\policies": {
+      "values": {}
+    },
+    "hklm\\security\\policies\\policies": {
+      "values": {
+        "0000101a": {
+          "data": 1,
+          "type": "REG_DWORD"
+        }
+      }
+    },
+    "hklm\\services": {
+      "values": {
+        "busioctl": {
+          "data": 2752584,
+          "type": "REG_DWORD"
+        },
+        "busname": {
+          "data": "services",
+          "type": "REG_SZ"
+        },
+        "dll": {
+          "data": "ServicesEnum.dll",
+          "type": "REG_SZ"
+        },
+        "flags": {
+          "data": 8,
+          "type": "REG_DWORD"
+        },
+        "iclass": {
+          "data": [
+            "{B3CC6EBA-5507-4196-8E41-2BF42E4A47C9}=%b",
+            "{6F40791D-300E-44E4-BC38-E0E63CA8375C}=%b"
+          ],
+          "type": "REG_MULTI_SZ"
+        },
+        "interfacetype": {
+          "data": 0,
+          "type": "REG_DWORD"
+        }
+      }
+    },
+    "hklm\\services\\btmodem": {
+      "values": {
+        "dll": {
+          "data": "BTMODEM.Dll",
+          "type": "REG_SZ"
+        },
+        "flags": {
+          "data": 16,
+          "type": "REG_DWORD"
+        },
+        "index": {
+          "data": 1,
+          "type": "REG_DWORD"
+        },
+        "keep": {
+          "data": 1,
+          "type": "REG_DWORD"
+        },
+        "order": {
+          "data": 9,
+          "type": "REG_DWORD"
+        },
+        "prefix": {
+          "data": "BTM",
+          "type": "REG_SZ"
+        },
+        "userprocgroup": {
+          "data": 2,
+          "type": "REG_DWORD"
+        }
+      }
+    },
+    "hklm\\services\\btsvc": {
+      "values": {
+        "dll": {
+          "data": "BTSVCX.Dll",
+          "type": "REG_SZ"
+        },
+        "flags": {
+          "data": 16,
+          "type": "REG_DWORD"
+        },
+        "index": {
+          "data": 1,
+          "type": "REG_DWORD"
+        },
+        "keep": {
+          "data": 1,
+          "type": "REG_DWORD"
+        },
+        "order": {
+          "data": 9,
+          "type": "REG_DWORD"
+        },
+        "prefix": {
+          "data": "BTS",
+          "type": "REG_SZ"
+        },
+        "userprocgroup": {
+          "data": 2,
+          "type": "REG_DWORD"
+        }
+      }
+    },
+    "hklm\\services\\dcomssd": {
+      "values": {
+        "dll": {
+          "data": "dcomssd.dll",
+          "type": "REG_SZ"
+        },
+        "flags": {
+          "data": 16,
+          "type": "REG_DWORD"
+        },
+        "index": {
+          "data": 1,
+          "type": "REG_DWORD"
+        },
+        "keep": {
+          "data": 1,
+          "type": "REG_DWORD"
+        },
+        "order": {
+          "data": 2,
+          "type": "REG_DWORD"
+        },
+        "prefix": {
+          "data": "DCM",
+          "type": "REG_SZ"
+        },
+        "userprocgroup": {
+          "data": 2,
+          "type": "REG_DWORD"
+        }
+      }
+    },
+    "hklm\\services\\lpcd": {
+      "values": {
+        "dll": {
+          "data": "lpcd.dll",
+          "type": "REG_SZ"
+        },
+        "flags": {
+          "data": 16,
+          "type": "REG_DWORD"
+        },
+        "index": {
+          "data": 1,
+          "type": "REG_DWORD"
+        },
+        "keep": {
+          "data": 1,
+          "type": "REG_DWORD"
+        },
+        "order": {
+          "data": 1,
+          "type": "REG_DWORD"
+        },
+        "prefix": {
+          "data": "LPC",
+          "type": "REG_SZ"
+        },
+        "userprocgroup": {
+          "data": 2,
+          "type": "REG_DWORD"
+        }
+      }
+    },
+    "hklm\\services\\timesvc": {
+      "values": {
+        "dll": {
+          "data": "timesvc.dll",
+          "type": "REG_SZ"
+        },
+        "flags": {
+          "data": 16,
+          "type": "REG_DWORD"
+        },
+        "index": {
+          "data": 0,
+          "type": "REG_DWORD"
+        },
+        "keep": {
+          "data": 1,
+          "type": "REG_DWORD"
+        },
+        "order": {
+          "data": 153,
+          "type": "REG_DWORD"
+        },
+        "prefix": {
+          "data": "NTP",
+          "type": "REG_SZ"
+        },
+        "userprocgroup": {
+          "data": 2,
+          "type": "REG_DWORD"
+        }
+      }
+    },
+    "hklm\\software": {
+      "values": {}
+    },
+    "hklm\\software\\cyberbank\\mobilephone\\cbstatus": {
+      "values": {}
+    },
+    "hklm\\software\\thinkware": {
+      "values": {
+        "mute": {
+          "data": 0,
+          "type": "REG_DWORD"
+        },
+        "sounddiversification": {
+          "data": 0,
+          "type": "REG_DWORD"
+        }
+      }
+    },
+    "hklm\\software\\thinkware\\launcher": {
+      "values": {
+        "utisuse": {
+          "data": 0,
+          "type": "REG_DWORD"
+        }
+      }
+    },
+    "hklm\\software\\widcomm": {
+      "values": {}
+    },
+    "hklm\\software\\widcomm\\btconfig": {
+      "values": {}
+    },
+    "hklm\\software\\widcomm\\btconfig\\autoconnect\\0000": {
+      "values": {
+        "btbrowserenabled": {
+          "data": 0,
+          "type": "REG_DWORD"
+        }
+      }
+    },
+    "hklm\\system\\emulator\\kernelioctl": {
+      "values": {}
+    },
+    "hklm\\system\\emulator\\kernelioctl\\device_name": {
+      "values": {
+        "ioctlcmd": {
+          "data": 16854772,
+          "type": "REG_DWORD"
+        },
+        "return": {
+          "data": "iNavi GN 2010",
+          "type": "REG_SZ"
+        }
+      }
+    },
+    "hklm\\system\\emulator\\kernelioctl\\hwinfo_status": {
+      "values": {
+        "ioctlcmd": {
+          "data": 16851068,
+          "type": "REG_DWORD"
+        },
+        "return": {
+          "data": 0,
+          "type": "REG_DWORD"
+        }
+      }
+    },
+    "hklm\\system\\emulator\\systemparametersinfo": {
+      "values": {
+        "00000102": {
+          "data": "iNavi GN 2010",
+          "type": "REG_SZ"
+        },
+        "oeminfo": {
+          "data": "iNavi GN 2010",
+          "type": "REG_SZ"
+        }
+      }
+    },
+    "hklm\\system\\thinkware": {
+      "values": {
+        "dmbnip": {
+          "data": 1,
+          "type": "REG_DWORD"
+        }
+      }
+    },
+    "hklm\\윤고딕 550": {
+      "values": {}
+    },
+    "hku": {
+      "values": {}
+    }
+  },
+  "source": "/mnt/c/Users/royna/Downloads/DUMPPLZ/REGISTRY.TXT",
+  "version": 1
+}

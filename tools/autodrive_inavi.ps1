@@ -115,7 +115,9 @@ function Get-VisibleWindowForProcess([Diagnostics.Process]$Process, [int]$Timeou
             return [IntPtr]::Zero
         }
         $Process.Refresh()
-        if (Test-PresenterWindow $Process.MainWindowHandle) {
+        if ($Process.MainWindowHandle -ne [IntPtr]::Zero -and
+            [AutodriveNative]::IsWindowVisible($Process.MainWindowHandle) -and
+            (Get-WindowClass $Process.MainWindowHandle) -eq "FakeCEHostPresenterWindow") {
             return $Process.MainWindowHandle
         }
 
@@ -151,6 +153,9 @@ function Get-VisibleWindowForProcess([Diagnostics.Process]$Process, [int]$Timeou
         }
         if ($script:autodriveBestHwnd -ne [IntPtr]::Zero -and (Test-PresenterWindow $script:autodriveBestHwnd)) {
             return $script:autodriveBestHwnd
+        }
+        if (Test-PresenterWindow $Process.MainWindowHandle) {
+            return $Process.MainWindowHandle
         }
         Start-Sleep -Milliseconds 250
     }

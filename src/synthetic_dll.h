@@ -118,6 +118,12 @@ private:
         uintptr_t hostHwnd{};
         bool visible{};
         bool destroyed{};
+        bool backingValid{};
+        int32_t backingX{};
+        int32_t backingY{};
+        int32_t backingWidth{};
+        int32_t backingHeight{};
+        std::vector<uint32_t> backingPixels;
         std::map<int32_t, uint32_t> extraLongs;
     };
     struct GuestDc {
@@ -217,6 +223,8 @@ private:
         uint32_t wndProc{};
         uint32_t originalRa{};
         uint32_t stage{};
+        uint32_t parent{};
+        bool wasVisible{};
     };
     struct PendingCreateWindow {
         uint32_t hwnd{};
@@ -229,6 +237,35 @@ private:
         std::string name;
         GuestCallArgs args;
         uint32_t paintDispatches{};
+    };
+    struct PendingUpdateWindow {
+        uint32_t hwnd{};
+        uint32_t wndProc{};
+        uint32_t originalRa{};
+        uint32_t eraseDc{};
+        uint32_t stage{};
+    };
+    struct GuestCpuContext {
+        std::map<int, uint32_t> registers;
+        bool valid{};
+    };
+    enum class GuestThreadRunState {
+        Suspended,
+        Runnable,
+        Running,
+        Terminated,
+    };
+    struct GuestThreadState {
+        uint32_t handle{};
+        uint32_t threadId{};
+        uint32_t startAddress{};
+        uint32_t parameter{};
+        uint32_t stackBase{};
+        uint32_t stackSize{};
+        uint32_t suspendCount{};
+        uint32_t exitCode{};
+        GuestThreadRunState state{GuestThreadRunState::Suspended};
+        GuestCpuContext context;
     };
 
     uc_engine* uc_{};
@@ -253,6 +290,8 @@ private:
     uint32_t destroyWindowContinuationStub_ = 0;
     uint32_t createWindowContinuationStub_ = 0;
     uint32_t blockingApiContinuationStub_ = 0;
+    uint32_t updateWindowContinuationStub_ = 0;
+    uint32_t threadExitStub_ = 0;
     std::string mainModulePath_ = "\\INavi\\INavi.exe";
     uint32_t mainModuleBase_ = 0;
     std::filesystem::path hostBaseDir_;
@@ -266,6 +305,10 @@ private:
     std::map<uint32_t, uint32_t> criticalSectionDepth_;
     std::map<uint32_t, uint32_t> syntheticHandleValues_;
     std::map<uint32_t, GuestHandle> guestHandles_;
+    std::map<uint32_t, GuestThreadState> guestThreads_;
+    GuestCpuContext mainThreadContext_;
+    uint32_t activeGuestThread_{};
+    uint32_t nextGuestThreadId_{1};
     std::map<std::string, GuestWindowClass> windowClassesByName_;
     std::map<uint16_t, std::string> windowClassNamesByAtom_;
     std::map<uint32_t, GuestWindow> windows_;
@@ -287,9 +330,12 @@ private:
     std::vector<PendingDestroyWindow> pendingDestroyWindows_;
     std::vector<PendingCreateWindow> pendingCreateWindows_;
     std::vector<PendingBlockingApi> pendingBlockingApis_;
+    std::vector<PendingUpdateWindow> pendingUpdateWindows_;
     std::deque<GuestMessage> guestMessages_;
     std::vector<uintptr_t> retainedHostWindows_;
     uint32_t hostPresenterGuestHwnd_{};
+    uint64_t lastHostPresentMs_{};
+    bool hostPresentDirty_{};
     std::vector<ResourceEntry> mainResources_;
     std::map<std::string, LoadedModuleInfo> loadedModulesByName_;
     std::map<std::string, LoadedModuleInfo> loadedModulesByPath_;
@@ -347,6 +393,16 @@ private:
     uint32_t makeGuestHandle(GuestHandle handle);
     GuestHandle* lookupGuestHandle(uint32_t guestHandle);
     uint32_t closeGuestHandle(uint32_t guestHandle);
+    GuestCpuContext captureGuestCpuContext() const;
+    GuestCpuContext initialGuestThreadContext(uint32_t startAddress, uint32_t parameter, uint32_t stackTop) const;
+    void restoreGuestCpuContext(const GuestCpuContext& context) const;
+    uint32_t createGuestThread(uint32_t startAddress, uint32_t parameter, uint32_t flags);
+    uint32_t resumeGuestThread(uint32_t guestHandle);
+    bool hasRunnableGuestThread() const;
+    bool switchToRunnableGuestThread(const char* reason);
+    bool yieldActiveGuestThread(const char* reason);
+    bool finishActiveGuestThread(uint32_t exitCode);
+    bool cooperateGuestThreadsAfterCall(const std::string& name);
     uint32_t makeGuestDc(uint32_t hwnd);
     GuestDc* lookupGuestDc(uint32_t hdc);
     uint32_t makeGuestBrush(uint32_t colorRef, bool stock = false);
@@ -361,7 +417,13 @@ private:
     uint32_t loadMenuResourceHandle(uint32_t nameArg);
     void ensureHostWindow(uint32_t guestHwnd, GuestWindow& window);
     void destroyHostWindow(GuestWindow& window);
+    void presentHostWindows(bool force);
     void invalidateHostWindows();
+    void queueGuestPaint(uint32_t hwnd, bool erase);
+    std::pair<int32_t, int32_t> guestWindowOrigin(uint32_t hwnd) const;
+    void captureGuestWindowBacking(uint32_t hwnd);
+    bool restoreGuestWindowBacking(uint32_t hwnd, GuestWindow& window);
+    void eraseGuestWindowArea(uint32_t hwnd, const GuestWindow& window);
     void pumpHostMessages();
     void enqueueDueTimers();
     uint32_t timerWaitMilliseconds() const;
