@@ -289,6 +289,7 @@ private:
     std::vector<PendingBlockingApi> pendingBlockingApis_;
     std::deque<GuestMessage> guestMessages_;
     std::vector<uintptr_t> retainedHostWindows_;
+    uint32_t hostPresenterGuestHwnd_{};
     std::vector<ResourceEntry> mainResources_;
     std::map<std::string, LoadedModuleInfo> loadedModulesByName_;
     std::map<std::string, LoadedModuleInfo> loadedModulesByPath_;

@@ -1300,6 +1300,7 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x046B, "ftell");
     registerExport(module, 0x046C, "_vsnwprintf");
     registerExport(module, 0x0479, "_wfopen");
+    registerExport(module, 0x03FF, "_hypot");
     registerExport(module, 0x01C7, "RegCloseKey");
     registerExport(module, 0x01CD, "RegOpenKeyExW");
     registerExport(module, 0x01CF, "RegQueryValueExW");
@@ -1388,11 +1389,13 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x07FB, "__les");
     registerExport(module, 0x07FC, "__eqs");
     registerExport(module, 0x07FD, "__ges");
+    registerExport(module, 0x07FE, "__gts");
     registerExport(module, 0x07FF, "__nes");
     registerExport(module, 0x0800, "__ltd");
     registerExport(module, 0x0801, "__led");
     registerExport(module, 0x0802, "__eqd");
     registerExport(module, 0x0803, "__ged");
+    registerExport(module, 0x0804, "__gtd");
     registerExport(module, 0x0532, "operator_new");
     registerExport(module, 0x0533, "operator_vector_new");
     registerExport(module, 0x0535, "operator_new_nothrow");
@@ -2042,6 +2045,7 @@ uint32_t SyntheticDllRuntime::loadMenuResourceHandle(uint32_t nameArg) {
 void SyntheticDllRuntime::ensureHostWindow(uint32_t guestHwnd, GuestWindow& window) {
 #if defined(_WIN32)
     if (window.parent || !framebuffer_ || framebufferWidth_ <= 0 || framebufferHeight_ <= 0) return;
+    if (hostPresenterGuestHwnd_ && hostPresenterGuestHwnd_ != guestHwnd) return;
     if (!window.hostHwnd) {
         if (!registerHostPresenterClass()) {
             spdlog::warn("host presenter RegisterClassW failed error={}", GetLastError());
@@ -2061,6 +2065,7 @@ void SyntheticDllRuntime::ensureHostWindow(uint32_t guestHwnd, GuestWindow& wind
             delete presenter;
             return;
         }
+        hostPresenterGuestHwnd_ = guestHwnd;
         window.hostHwnd = reinterpret_cast<uintptr_t>(hwnd);
         spdlog::info("created host presenter HWND={} for guest HWND=0x{:08x} guest={}x{} framebuffer={}x{}",
                      static_cast<void*>(hwnd), guestHwnd, window.width, window.height,
@@ -5419,7 +5424,8 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(const std::string& name,
     } else if (name == "__litofp") {
         const float value = static_cast<float>(int32_t(a0));
         std::memcpy(&ret, &value, sizeof(ret));
-    } else if (name == "__eqs" || name == "__nes" || name == "__lts" || name == "__les" || name == "__ges") {
+    } else if (name == "__eqs" || name == "__nes" || name == "__lts" || name == "__les" ||
+               name == "__ges" || name == "__gts") {
         float left = 0.0f;
         float right = 0.0f;
         std::memcpy(&left, &a0, sizeof(left));
@@ -5428,17 +5434,21 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(const std::string& name,
         if (name == "__lts") ret = left < right ? 1 : 0;
         else if (name == "__les") ret = left <= right ? 1 : 0;
         else if (name == "__ges") ret = left >= right ? 1 : 0;
+        else if (name == "__gts") ret = left > right ? 1 : 0;
         else ret = (name == "__eqs" ? equal : !equal) ? 1 : 0;
+    } else if (name == "_hypot") {
+        setGuestDoubleReturn(uc_, std::hypot(doubleFromGuestPair(a0, a1), doubleFromGuestPair(a2, a3)), ret);
     } else if (name == "sqrt") {
         setGuestDoubleReturn(uc_, std::sqrt(doubleFromGuestPair(a0, a1)), ret);
     } else if (name == "toupper") {
         ret = uint32_t(std::toupper(int(a0)));
-    } else if (name == "__ltd" || name == "__led" || name == "__eqd" || name == "__ged") {
+    } else if (name == "__ltd" || name == "__led" || name == "__eqd" || name == "__ged" || name == "__gtd") {
         const double left = doubleFromGuestPair(a0, a1);
         const double right = doubleFromGuestPair(a2, a3);
         if (name == "__ltd") ret = left < right ? 1 : 0;
         else if (name == "__led") ret = left <= right ? 1 : 0;
         else if (name == "__eqd") ret = left == right ? 1 : 0;
+        else if (name == "__gtd") ret = left > right ? 1 : 0;
         else ret = left >= right ? 1 : 0;
     } else if (name == "__ehvec_ctor") {
         // Full vector construction needs repeated guest callback transfers. The
