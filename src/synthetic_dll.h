@@ -208,6 +208,12 @@ private:
         uint32_t callback{};
         uint64_t nextDueMs{};
     };
+    struct PendingDestroyWindow {
+        uint32_t hwnd{};
+        uint32_t wndProc{};
+        uint32_t originalRa{};
+        uint32_t stage{};
+    };
 
     uc_engine* uc_{};
     uint32_t nextModuleBase_ = 0x70000000;
@@ -228,6 +234,7 @@ private:
     uint32_t comQueryInterfaceStub_ = 0;
     uint32_t comAddRefStub_ = 0;
     uint32_t comReleaseStub_ = 0;
+    uint32_t destroyWindowContinuationStub_ = 0;
     std::string mainModulePath_ = "\\INavi\\INavi.exe";
     uint32_t mainModuleBase_ = 0;
     std::filesystem::path hostBaseDir_;
@@ -259,6 +266,7 @@ private:
     std::map<uint32_t, GuestFileMapping> fileMappings_;
     std::map<uint32_t, GuestMappedView> mappedViews_;
     std::map<uint64_t, GuestTimer> timers_;
+    std::vector<PendingDestroyWindow> pendingDestroyWindows_;
     std::deque<GuestMessage> guestMessages_;
     std::vector<uintptr_t> retainedHostWindows_;
     std::vector<ResourceEntry> mainResources_;

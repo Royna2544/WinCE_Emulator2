@@ -1282,6 +1282,12 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x0537, "operator_delete_nothrow");
     registerExport(module, 0x0538, "operator_vector_delete_nothrow");
 
+    destroyWindowContinuationStub_ = module.imageBase + 0x0001f000;
+    auto& destroyContinuation = exportsByAddress_[destroyWindowContinuationStub_];
+    destroyContinuation.moduleName = module.moduleName;
+    destroyContinuation.name = "__DestroyWindowContinue";
+    writeStub(destroyWindowContinuationStub_);
+
     spdlog::info("mapped synthetic COREDLL.dll base=0x{:08x} ordinals={}",
                  module.imageBase, module.exportsByOrdinal.size());
     return module;
@@ -6717,6 +6723,9 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
                          srcX, srcY, rop);
             lastError_ = dstDc && srcDc ? 120 : 6;
             ret = 0;
+        } else if (dstW == 0 || dstH == 0 || srcW == 0 || srcH == 0) {
+            lastError_ = 0;
+            ret = 1;
         } else if (dstBitmap != bitmaps_.end()) {
             const bool ok = bitBltToBitmap(dstBitmap->second, srcBitmap->second,
                                            int32_t(a1), int32_t(a2), dstW, dstH,
@@ -6751,7 +6760,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
         }
     } else if (name == "GetWindowLongW") {
         auto it = windows_.find(a0);
-        if (it == windows_.end()) {
+        if (it == windows_.end() || it->second.destroyed) {
             lastError_ = 1400;
             ret = 0;
         } else {
@@ -6760,7 +6769,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
         }
     } else if (name == "SetWindowLongW") {
         auto it = windows_.find(a0);
-        if (it == windows_.end()) {
+        if (it == windows_.end() || it->second.destroyed) {
             lastError_ = 1400;
             ret = 0;
         } else {
@@ -6769,7 +6778,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
         }
     } else if (name == "GetParent") {
         auto it = windows_.find(a0);
-        if (it == windows_.end()) {
+        if (it == windows_.end() || it->second.destroyed) {
             lastError_ = 1400;
             ret = 0;
         } else {
@@ -6778,7 +6787,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
         }
     } else if (name == "GetWindow") {
         auto it = windows_.find(a0);
-        if (it == windows_.end()) {
+        if (it == windows_.end() || it->second.destroyed) {
             lastError_ = 1400;
             ret = 0;
         } else if (a1 == 5) {
@@ -8235,6 +8244,105 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
                      mutableEntry.moduleName, name, mutableEntry.calls, a0, a1, a2, a3, ra);
     }
 
+    auto translatedWndProc = [&](uint32_t wndProc, const char* why) {
+        constexpr uint32_t kCeProcessSlotSize = 0x02000000u;
+        if (!isGuestRangeReadable(wndProc, 4)) {
+            const uint32_t activeSlotProc = wndProc & (kCeProcessSlotSize - 1);
+            if (activeSlotProc != wndProc && isGuestRangeReadable(activeSlotProc, 4)) {
+                spdlog::info("synthetic coredll.dll!{} translated slot WNDPROC 0x{:08x} -> 0x{:08x}",
+                             why, wndProc, activeSlotProc);
+                wndProc = activeSlotProc;
+            }
+        }
+        return wndProc;
+    };
+    auto finalizeDestroyedWindow = [&](uint32_t hwnd) {
+        auto it = windows_.find(hwnd);
+        if (it == windows_.end()) return;
+        for (auto timer = timers_.begin(); timer != timers_.end();) {
+            if (timer->second.hwnd == hwnd) timer = timers_.erase(timer);
+            else ++timer;
+        }
+        if (focusedWindow_ == hwnd) focusedWindow_ = 0;
+        if (capturedWindow_ == hwnd) capturedWindow_ = 0;
+        if (hostPointerCaptureWindow_ == hwnd) hostPointerCaptureWindow_ = 0;
+        it->second.visible = false;
+        it->second.destroyed = true;
+        destroyHostWindow(it->second);
+    };
+
+    if (mutableEntry.moduleName == "coredll.dll" && name == "__DestroyWindowContinue") {
+        if (pendingDestroyWindows_.empty()) {
+            spdlog::warn("DestroyWindow continuation reached with no pending window");
+            setReg(UC_MIPS_REG_V0, 1);
+            setReg(UC_MIPS_REG_PC, ra);
+            return;
+        }
+        auto& pending = pendingDestroyWindows_.back();
+        if (pending.stage == 0) {
+            pending.stage = 1;
+            uint32_t wndProc = pending.wndProc;
+            auto window = windows_.find(pending.hwnd);
+            if (window != windows_.end() && window->second.wndProc) wndProc = window->second.wndProc;
+            wndProc = translatedWndProc(wndProc, "DestroyWindow");
+            spdlog::info("DestroyWindow synchronous WM_NCDESTROY hwnd=0x{:08x} wndproc=0x{:08x}",
+                         pending.hwnd, wndProc);
+            setReg(UC_MIPS_REG_A0, pending.hwnd);
+            setReg(UC_MIPS_REG_A1, 0x0082); // WM_NCDESTROY
+            setReg(UC_MIPS_REG_A2, 0);
+            setReg(UC_MIPS_REG_A3, 0);
+            setReg(UC_MIPS_REG_RA, destroyWindowContinuationStub_);
+            setReg(UC_MIPS_REG_PC, wndProc);
+            return;
+        }
+        const uint32_t hwnd = pending.hwnd;
+        const uint32_t originalRa = pending.originalRa;
+        pendingDestroyWindows_.pop_back();
+        finalizeDestroyedWindow(hwnd);
+        lastError_ = 0;
+        setReg(UC_MIPS_REG_V0, 1);
+        setReg(UC_MIPS_REG_RA, originalRa);
+        setReg(UC_MIPS_REG_PC, originalRa);
+        spdlog::info("DestroyWindow synchronous destroy complete hwnd=0x{:08x} return=0x{:08x}", hwnd, originalRa);
+        pumpHostMessages();
+        return;
+    }
+
+    if (mutableEntry.moduleName == "coredll.dll" && name == "DestroyWindow") {
+        auto it = windows_.find(a0);
+        if (it == windows_.end() || it->second.destroyed) {
+            lastError_ = 1400;
+            setReg(UC_MIPS_REG_V0, 0);
+            pumpHostMessages();
+            return;
+        }
+        const auto oldSize = guestMessages_.size();
+        std::erase_if(guestMessages_, [&](const GuestMessage& message) { return message.hwnd == a0; });
+        if (oldSize != guestMessages_.size()) {
+            spdlog::info("DestroyWindow discarded {} pending posted messages for hwnd=0x{:08x}",
+                         oldSize - guestMessages_.size(), a0);
+        }
+        it->second.visible = false;
+        const uint32_t wndProc = translatedWndProc(it->second.wndProc, "DestroyWindow");
+        if (!wndProc || !destroyWindowContinuationStub_) {
+            finalizeDestroyedWindow(a0);
+            lastError_ = 0;
+            setReg(UC_MIPS_REG_V0, 1);
+            pumpHostMessages();
+            return;
+        }
+        pendingDestroyWindows_.push_back(PendingDestroyWindow{a0, wndProc, ra, 0});
+        spdlog::info("DestroyWindow synchronous WM_DESTROY hwnd=0x{:08x} wndproc=0x{:08x} return=0x{:08x}",
+                     a0, wndProc, ra);
+        setReg(UC_MIPS_REG_A0, a0);
+        setReg(UC_MIPS_REG_A1, 0x0002); // WM_DESTROY
+        setReg(UC_MIPS_REG_A2, 0);
+        setReg(UC_MIPS_REG_A3, 0);
+        setReg(UC_MIPS_REG_RA, destroyWindowContinuationStub_);
+        setReg(UC_MIPS_REG_PC, wndProc);
+        return;
+    }
+
     uint32_t ret = 1;
     if (mutableEntry.moduleName == "coredll.dll" &&
         (name == "CallWindowProcW" || name == "DispatchMessageW" || name == "SendMessageW")) {
@@ -8271,15 +8379,7 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
             pumpHostMessages();
             return;
         }
-        constexpr uint32_t kCeProcessSlotSize = 0x02000000u;
-        if (!isGuestRangeReadable(wndProc, 4)) {
-            const uint32_t activeSlotProc = wndProc & (kCeProcessSlotSize - 1);
-            if (activeSlotProc != wndProc && isGuestRangeReadable(activeSlotProc, 4)) {
-                spdlog::info("synthetic coredll.dll!{} translated slot WNDPROC 0x{:08x} -> 0x{:08x}",
-                             name, wndProc, activeSlotProc);
-                wndProc = activeSlotProc;
-            }
-        }
+        wndProc = translatedWndProc(wndProc, name.c_str());
         if (mutableEntry.calls <= 128) {
             spdlog::info("synthetic coredll.dll!{} transfer wndproc=0x{:08x} hwnd=0x{:08x} msg=0x{:08x} wparam=0x{:08x} lparam=0x{:08x}",
                          name, wndProc, hwnd, msg, wParam, lParam);
