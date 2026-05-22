@@ -1,7 +1,7 @@
 param(
     [string]$Emulator = ".\x64\Debug\iNavi_Unicorn_Emulator.exe",
     [string]$Target = "C:\Users\royna\Downloads\INAVI\INavi\INavi.exe",
-    [string]$Registry = ".\dumpplz_regs.json",
+    [string]$Registry = ".\regs.json",
     [string[]]$FsRoot = @(
         "C:\Users\royna\Downloads\INAVI",
         "C:\Users\royna\Downloads\DUMPPLZ\FILES",

@@ -164,6 +164,13 @@ private:
         uint32_t blueMask{};
         std::vector<uint32_t> palette;
     };
+    struct BitmapProbeStats {
+        uint32_t sampled{};
+        uint32_t nonBlack{};
+        uint32_t uniqueApprox{};
+        uint32_t firstPixel{};
+        uint32_t lastPixel{};
+    };
     struct HostWaveBuffer {
         std::vector<uint8_t> data;
         std::array<uint8_t, 64> header{};
@@ -253,6 +260,7 @@ private:
         Suspended,
         Runnable,
         Running,
+        Waiting,
         Terminated,
     };
     struct GuestThreadState {
@@ -262,8 +270,10 @@ private:
         uint32_t parameter{};
         uint32_t stackBase{};
         uint32_t stackSize{};
+        uint32_t tlsBase{};
         uint32_t suspendCount{};
         uint32_t exitCode{};
+        uint32_t waitHandle{};
         GuestThreadRunState state{GuestThreadRunState::Suspended};
         GuestCpuContext context;
     };
@@ -309,6 +319,9 @@ private:
     GuestCpuContext mainThreadContext_;
     uint32_t activeGuestThread_{};
     uint32_t nextGuestThreadId_{1};
+    uint32_t mainThreadPseudoHandle_{0xfffffffeu};
+    uint32_t mainProcessPseudoHandle_{0xffffffffu};
+    uint32_t mainThreadTls_{};
     std::map<std::string, GuestWindowClass> windowClassesByName_;
     std::map<uint16_t, std::string> windowClassNamesByAtom_;
     std::map<uint32_t, GuestWindow> windows_;
@@ -348,6 +361,8 @@ private:
     int32_t framebufferHeight_{};
     uint32_t splashBlitDumpCounter_{};
     uint32_t splashCompositeBitmap_{};
+    uint32_t blitProbeLogCounter_{};
+    uint32_t blitProbeDumpCounter_{};
     bool splashTopBlitDumped_{};
     bool splashBottomBlitDumped_{};
     bool splashFramebufferDumped_{};
@@ -393,6 +408,8 @@ private:
     uint32_t makeGuestHandle(GuestHandle handle);
     GuestHandle* lookupGuestHandle(uint32_t guestHandle);
     uint32_t closeGuestHandle(uint32_t guestHandle);
+    void initializeUserKData();
+    void updateCurrentThreadKData(uint32_t currentThreadValue, uint32_t tlsBase);
     GuestCpuContext captureGuestCpuContext() const;
     GuestCpuContext initialGuestThreadContext(uint32_t startAddress, uint32_t parameter, uint32_t stackTop) const;
     void restoreGuestCpuContext(const GuestCpuContext& context) const;
@@ -424,6 +441,9 @@ private:
     void captureGuestWindowBacking(uint32_t hwnd);
     bool restoreGuestWindowBacking(uint32_t hwnd, GuestWindow& window);
     void eraseGuestWindowArea(uint32_t hwnd, const GuestWindow& window);
+    bool isWindowOrDescendant(uint32_t hwnd, uint32_t ancestor) const;
+    uint32_t readFramebufferTargetPixel(uint32_t targetHwnd, int32_t x, int32_t y) const;
+    void writeFramebufferTargetPixel(uint32_t targetHwnd, int32_t x, int32_t y, uint32_t pixel);
     void pumpHostMessages();
     void enqueueDueTimers();
     uint32_t timerWaitMilliseconds() const;
@@ -433,6 +453,10 @@ private:
     void writeGuestRect(uint32_t address, int32_t left, int32_t top, int32_t right, int32_t bottom) const;
     void fillFramebufferRect(const GuestDc& dc, int32_t left, int32_t top, int32_t right, int32_t bottom, uint32_t pixel);
     void drawFramebufferLine(const GuestDc& dc, int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint32_t pixel);
+    bool fillBitmapRect(const GuestBitmap& bitmap, int32_t left, int32_t top, int32_t right, int32_t bottom, uint32_t pixel);
+    bool drawBitmapLine(const GuestBitmap& bitmap, int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint32_t pixel);
+    bool fillDcRect(const GuestDc& dc, int32_t left, int32_t top, int32_t right, int32_t bottom, uint32_t pixel);
+    bool drawDcLine(const GuestDc& dc, int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint32_t pixel);
     bool handleCreateBitmap(const GuestCallArgs& args, uint32_t& ret);
     bool handleGetObjectW(const GuestCallArgs& args, uint32_t& ret);
     bool handleSetDIBColorTable(const GuestCallArgs& args, uint32_t& ret);
@@ -445,6 +469,8 @@ private:
                          int32_t height, int32_t x, int32_t y, uint32_t& pixel) const;
     bool writeBitmapPixel(const GuestBitmap& bitmap, std::vector<uint8_t>& bits,
                           int32_t height, int32_t x, int32_t y, uint32_t pixel) const;
+    BitmapProbeStats bitmapProbeStats(const GuestBitmap& bitmap, int32_t x, int32_t y,
+                                      int32_t width, int32_t height) const;
     void dumpGuestBitmapPpm(uint32_t bitmapHandle, const GuestBitmap& bitmap, const std::string& tag);
     void dumpFramebufferPpm(const std::string& tag);
     bool stretchDibToFramebuffer(const GuestDc& dc, int32_t dstX, int32_t dstY, int32_t dstW, int32_t dstH,
