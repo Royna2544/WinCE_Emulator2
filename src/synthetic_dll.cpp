@@ -2476,19 +2476,29 @@ void SyntheticDllRuntime::invalidateHostWindows() {
 void SyntheticDllRuntime::queueGuestPaint(uint32_t hwnd, bool erase) {
     auto it = windows_.find(hwnd);
     if (!hwnd || it == windows_.end() || it->second.destroyed || !it->second.visible) return;
+    const auto hasQueued = [&](uint32_t message) {
+        return std::any_of(guestMessages_.begin(), guestMessages_.end(),
+                           [&](const GuestMessage& queued) {
+                               return queued.hwnd == hwnd && queued.message == message;
+                           });
+    };
     if (erase) {
-        GuestMessage eraseMessage{};
-        eraseMessage.hwnd = hwnd;
-        eraseMessage.message = 0x0014; // WM_ERASEBKGND
-        eraseMessage.wParam = makeGuestDc(hwnd);
-        eraseMessage.time = uint32_t(++tick_ * 16);
-        guestMessages_.push_back(eraseMessage);
+        if (!hasQueued(0x0014)) {
+            GuestMessage eraseMessage{};
+            eraseMessage.hwnd = hwnd;
+            eraseMessage.message = 0x0014; // WM_ERASEBKGND
+            eraseMessage.wParam = makeGuestDc(hwnd);
+            eraseMessage.time = uint32_t(++tick_ * 16);
+            guestMessages_.push_back(eraseMessage);
+        }
     }
-    GuestMessage paint{};
-    paint.hwnd = hwnd;
-    paint.message = 0x000f; // WM_PAINT
-    paint.time = uint32_t(++tick_ * 16);
-    guestMessages_.push_back(paint);
+    if (!hasQueued(0x000f)) {
+        GuestMessage paint{};
+        paint.hwnd = hwnd;
+        paint.message = 0x000f; // WM_PAINT
+        paint.time = uint32_t(++tick_ * 16);
+        guestMessages_.push_back(paint);
+    }
     invalidateHostWindows();
 }
 
@@ -2522,6 +2532,33 @@ void SyntheticDllRuntime::retireOwnedPopupsCoveredByChild(uint32_t childHwnd) {
         childY + child->second.height < parentY + parent->second.height) {
         return;
     }
+    retireOwnedPopupsCoveredByChildArea(childHwnd, childX, childY,
+                                        childX + child->second.width,
+                                        childY + child->second.height);
+}
+
+void SyntheticDllRuntime::retireOwnedPopupsCoveredByChildArea(uint32_t childHwnd,
+                                                              int32_t left,
+                                                              int32_t top,
+                                                              int32_t right,
+                                                              int32_t bottom) {
+    auto child = windows_.find(childHwnd);
+    if (child == windows_.end() || child->second.destroyed || !child->second.visible ||
+        !(child->second.style & kWindowStyleChild) || !child->second.parent) {
+        return;
+    }
+    auto parent = windows_.find(child->second.parent);
+    if (parent == windows_.end() || parent->second.destroyed || parent->second.parent) {
+        return;
+    }
+    const auto [parentX, parentY] = guestWindowOrigin(child->second.parent);
+    if (left > right) std::swap(left, right);
+    if (top > bottom) std::swap(top, bottom);
+    if (left > parentX || top > parentY ||
+        right < parentX + parent->second.width ||
+        bottom < parentY + parent->second.height) {
+        return;
+    }
 
     std::vector<uint32_t> retired;
     for (auto& [hwnd, window] : windows_) {
@@ -2535,7 +2572,6 @@ void SyntheticDllRuntime::retireOwnedPopupsCoveredByChild(uint32_t childHwnd) {
             popupY + window.height < parentY + parent->second.height) {
             continue;
         }
-        restoreGuestWindowBacking(hwnd, window);
         window.visible = false;
         window.backingValid = false;
         window.backingPixels.clear();
@@ -2548,10 +2584,48 @@ void SyntheticDllRuntime::retireOwnedPopupsCoveredByChild(uint32_t childHwnd) {
                                             return std::find(retired.begin(), retired.end(), message.hwnd) != retired.end();
                                         }),
                          guestMessages_.end());
+    std::deque<GuestMessage> prioritized;
+    std::deque<GuestMessage> remaining;
+    for (const GuestMessage& message : guestMessages_) {
+        const bool paintMessage = message.message == 0x0014 || message.message == 0x000f;
+        if (paintMessage && message.hwnd != childHwnd && isWindowOrDescendant(message.hwnd, childHwnd)) {
+            prioritized.push_back(message);
+        } else {
+            remaining.push_back(message);
+        }
+    }
+    if (!prioritized.empty()) {
+        spdlog::info("promoted {} child paint messages after retiring popup over child=0x{:08x}",
+                     prioritized.size(), childHwnd);
+        prioritized.insert(prioritized.end(), remaining.begin(), remaining.end());
+        guestMessages_.swap(prioritized);
+    }
     for (uint32_t hwnd : retired) {
         spdlog::info("retired covered owned popup hwnd=0x{:08x} after child=0x{:08x} covered parent=0x{:08x}",
                      hwnd, childHwnd, child->second.parent);
     }
+}
+
+void SyntheticDllRuntime::noteGuestWindowPaint(uint32_t hwnd,
+                                               int32_t left,
+                                               int32_t top,
+                                               int32_t right,
+                                               int32_t bottom) {
+    auto it = windows_.find(hwnd);
+    if (it == windows_.end() || it->second.destroyed || left >= right || top >= bottom) return;
+    GuestWindow& window = it->second;
+    if (!window.paintBoundsValid) {
+        window.paintLeft = left;
+        window.paintTop = top;
+        window.paintRight = right;
+        window.paintBottom = bottom;
+        window.paintBoundsValid = true;
+        return;
+    }
+    window.paintLeft = std::min(window.paintLeft, left);
+    window.paintTop = std::min(window.paintTop, top);
+    window.paintRight = std::max(window.paintRight, right);
+    window.paintBottom = std::max(window.paintBottom, bottom);
 }
 
 void SyntheticDllRuntime::captureGuestWindowBacking(uint32_t hwnd) {
@@ -2680,6 +2754,53 @@ bool SyntheticDllRuntime::isOwnedPopupWindow(uint32_t hwnd) const {
            !(it->second.style & kWindowStyleChild);
 }
 
+bool SyntheticDllRuntime::hasCoveringRootPopup(uint32_t hwnd) const {
+    auto target = windows_.find(hwnd);
+    if (target == windows_.end() || target->second.destroyed || isOwnedPopupWindow(hwnd)) return false;
+
+    uint32_t current = hwnd;
+    uint32_t root = hwnd;
+    bool nestedChild = false;
+    while (current) {
+        auto it = windows_.find(current);
+        if (it == windows_.end()) break;
+        if (it->second.style & kWindowStyleChild) {
+            nestedChild = true;
+            root = it->second.parent;
+            current = it->second.parent;
+        } else {
+            root = current;
+            break;
+        }
+    }
+    auto rootWindow = windows_.find(root);
+    if (!nestedChild || rootWindow == windows_.end() || rootWindow->second.destroyed ||
+        rootWindow->second.parent) {
+        return false;
+    }
+
+    if ((target->second.style & kWindowStyleChild) && target->second.parent == root) {
+        return false;
+    }
+
+    const auto [rootX, rootY] = guestWindowOrigin(root);
+    const int32_t rootRight = rootX + rootWindow->second.width;
+    const int32_t rootBottom = rootY + rootWindow->second.height;
+    for (const auto& [popupHwnd, popup] : windows_) {
+        if (!popup.visible || popup.destroyed || popup.parent != root ||
+            (popup.style & kWindowStyleChild)) {
+            continue;
+        }
+        const auto [popupX, popupY] = guestWindowOrigin(popupHwnd);
+        if (popupX <= rootX && popupY <= rootY &&
+            popupX + popup.width >= rootRight &&
+            popupY + popup.height >= rootBottom) {
+            return true;
+        }
+    }
+    return false;
+}
+
 uint32_t SyntheticDllRuntime::readFramebufferTargetPixel(uint32_t targetHwnd,
                                                          int32_t x,
                                                          int32_t y) const {
@@ -2791,7 +2912,11 @@ uint32_t SyntheticDllRuntime::windowAtPoint(uint32_t rootGuestHwnd, int32_t x, i
             if (current == rootGuestHwnd) return true;
             auto it = windows_.find(current);
             if (it == windows_.end()) break;
-            current = (it->second.style & kWindowStyleChild) ? it->second.parent : 0;
+            if ((it->second.style & kWindowStyleChild) || it->second.parent == rootGuestHwnd) {
+                current = it->second.parent;
+            } else {
+                current = 0;
+            }
         }
         return false;
     };
@@ -2812,7 +2937,17 @@ uint32_t SyntheticDllRuntime::windowAtPoint(uint32_t rootGuestHwnd, int32_t x, i
         const GuestWindow& window = it->second;
         if (window.destroyed || !window.visible || !belongsToRoot(hwnd)) continue;
         const auto [ox, oy] = originOf(hwnd);
-        if (x < ox || y < oy || x >= ox + window.width || y >= oy + window.height) continue;
+        int32_t left = ox;
+        int32_t top = oy;
+        int32_t right = ox + window.width;
+        int32_t bottom = oy + window.height;
+        if ((window.width <= 0 || window.height <= 0) && window.paintBoundsValid) {
+            left = window.paintLeft;
+            top = window.paintTop;
+            right = window.paintRight;
+            bottom = window.paintBottom;
+        }
+        if (x < left || y < top || x >= right || y >= bottom) continue;
         best = hwnd;
         bestX = ox;
         bestY = oy;
@@ -2934,6 +3069,8 @@ void SyntheticDllRuntime::fillFramebufferRect(const GuestDc& dc,
     right = std::clamp<int32_t>(right, 0, framebufferWidth_);
     top = std::clamp<int32_t>(top, 0, framebufferHeight_);
     bottom = std::clamp<int32_t>(bottom, 0, framebufferHeight_);
+    noteGuestWindowPaint(dc.hwnd, left, top, right, bottom);
+    retireOwnedPopupsCoveredByChildArea(dc.hwnd, left, top, right, bottom);
     for (int32_t y = top; y < bottom; ++y) {
         for (int32_t x = left; x < right; ++x) {
             writeFramebufferTargetPixel(dc.hwnd, x, y, pixel);
@@ -2957,6 +3094,11 @@ void SyntheticDllRuntime::drawFramebufferLine(const GuestDc& dc,
     x1 += originX;
     y0 += originY;
     y1 += originY;
+    noteGuestWindowPaint(dc.hwnd,
+                         std::clamp<int32_t>(std::min(x0, x1), 0, framebufferWidth_),
+                         std::clamp<int32_t>(std::min(y0, y1), 0, framebufferHeight_),
+                         std::clamp<int32_t>(std::max(x0, x1) + 1, 0, framebufferWidth_),
+                         std::clamp<int32_t>(std::max(y0, y1) + 1, 0, framebufferHeight_));
     const int32_t dx = std::abs(x1 - x0);
     const int32_t sx = x0 < x1 ? 1 : -1;
     const int32_t dy = -std::abs(y1 - y0);
@@ -3068,16 +3210,32 @@ bool SyntheticDllRuntime::drawDcLine(const GuestDc& dc,
 bool SyntheticDllRuntime::fillDcPolygon(const GuestDc& dc,
                                         const std::vector<std::pair<int32_t, int32_t>>& points,
                                         uint32_t pixel) {
-    if (points.size() < 3 || pixel == 0xffffffffu) return false;
+    if (points.size() < 3 || pixel == 0) return false;
 
-    int32_t minY = points.front().second;
-    int32_t maxY = points.front().second;
-    for (const auto& point : points) {
+    std::vector<std::pair<int32_t, int32_t>> translatedPoints = points;
+    auto bitmapIt = bitmaps_.find(dc.selectedBitmap);
+    if (bitmapIt == bitmaps_.end()) {
+        int32_t originX = 0;
+        int32_t originY = 0;
+        if (dc.hwnd) std::tie(originX, originY) = guestWindowOrigin(dc.hwnd);
+        for (auto& point : translatedPoints) {
+            point.first += originX;
+            point.second += originY;
+        }
+        captureGuestWindowBacking(dc.hwnd);
+    }
+
+    int32_t minY = translatedPoints.front().second;
+    int32_t maxY = translatedPoints.front().second;
+    int32_t minX = translatedPoints.front().first;
+    int32_t maxX = translatedPoints.front().first;
+    for (const auto& point : translatedPoints) {
+        minX = std::min(minX, point.first);
+        maxX = std::max(maxX, point.first);
         minY = std::min(minY, point.second);
         maxY = std::max(maxY, point.second);
     }
 
-    auto bitmapIt = bitmaps_.find(dc.selectedBitmap);
     std::vector<uint8_t> raw;
     int32_t bitmapHeight = 0;
     if (bitmapIt != bitmaps_.end()) {
@@ -3092,6 +3250,11 @@ bool SyntheticDllRuntime::fillDcPolygon(const GuestDc& dc,
         maxY = std::clamp<int32_t>(maxY, 0, bitmapHeight - 1);
     } else {
         if (!framebuffer_) return false;
+        noteGuestWindowPaint(dc.hwnd,
+                             std::clamp<int32_t>(minX, 0, framebufferWidth_),
+                             std::clamp<int32_t>(minY, 0, framebufferHeight_),
+                             std::clamp<int32_t>(maxX + 1, 0, framebufferWidth_),
+                             std::clamp<int32_t>(maxY + 1, 0, framebufferHeight_));
         minY = std::clamp<int32_t>(minY, 0, framebufferHeight_ - 1);
         maxY = std::clamp<int32_t>(maxY, 0, framebufferHeight_ - 1);
     }
@@ -3101,9 +3264,9 @@ bool SyntheticDllRuntime::fillDcPolygon(const GuestDc& dc,
     for (int32_t y = minY; y <= maxY; ++y) {
         intersections.clear();
         const double scanY = double(y) + 0.5;
-        for (size_t i = 0; i < points.size(); ++i) {
-            const auto& p0 = points[i];
-            const auto& p1 = points[(i + 1) % points.size()];
+        for (size_t i = 0; i < translatedPoints.size(); ++i) {
+            const auto& p0 = translatedPoints[i];
+            const auto& p1 = translatedPoints[(i + 1) % translatedPoints.size()];
             if (p0.second == p1.second) continue;
             const int32_t edgeMinY = std::min(p0.second, p1.second);
             const int32_t edgeMaxY = std::max(p0.second, p1.second);
@@ -4036,6 +4199,8 @@ bool SyntheticDllRuntime::bitBltToFramebuffer(const GuestDc& dstDc,
     int32_t outTop = dstH < 0 ? dstY + dstH : dstY;
     outLeft += originX;
     outTop += originY;
+    noteGuestWindowPaint(dstDc.hwnd, outLeft, outTop, outLeft + outW, outTop + outH);
+    retireOwnedPopupsCoveredByChildArea(dstDc.hwnd, outLeft, outTop, outLeft + outW, outTop + outH);
 
     for (int32_t y = 0; y < outH; ++y) {
         const int32_t dstPy = outTop + y;
@@ -4274,6 +4439,8 @@ bool SyntheticDllRuntime::transparentImageToFramebuffer(const GuestDc& dstDc,
     int32_t outTop = dstH < 0 ? dstY + dstH : dstY;
     outLeft += originX;
     outTop += originY;
+    noteGuestWindowPaint(dstDc.hwnd, outLeft, outTop, outLeft + outW, outTop + outH);
+    retireOwnedPopupsCoveredByChildArea(dstDc.hwnd, outLeft, outTop, outLeft + outW, outTop + outH);
 
     for (int32_t y = 0; y < outH; ++y) {
         const int32_t dstPy = outTop + y;
@@ -5284,6 +5451,8 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(const std::string& name,
         GuestDc* dc = lookupGuestDc(a0);
         auto brush = dc ? brushes_.find(dc->selectedBrush) : brushes_.end();
         auto pen = dc ? pens_.find(dc->selectedPen) : pens_.end();
+        const bool hasBrush = brush != brushes_.end() && brush->second.colorRef != 0xffffffffu;
+        const bool hasPen = pen != pens_.end() && pen->second.style != 5 && pen->second.colorRef != 0xffffffffu;
         if (!dc || !a1 || a2 < 2 || (brush == brushes_.end() && pen == pens_.end())) {
             lastError_ = dc ? 87 : 6;
             ret = 0;
@@ -5294,10 +5463,10 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(const std::string& name,
                 const uint32_t point = a1 + index * 8;
                 points.emplace_back(int32_t(readU32(point)), int32_t(readU32(point + 4)));
             }
-            if (brush != brushes_.end()) {
+            if (hasBrush) {
                 fillDcPolygon(*dc, points, colorRefToPixel(brush->second.colorRef));
             }
-            if (pen != pens_.end()) {
+            if (hasPen) {
                 const uint32_t pixel = colorRefToPixel(pen->second.colorRef);
                 for (size_t index = 0; index < points.size(); ++index) {
                     const auto& from = points[index];
@@ -8015,7 +8184,9 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             lastError_ = 87;
             ret = 0;
         } else {
-            fillDcRect(*dc, left, top, right, bottom, colorRefToPixel(brush->second.colorRef));
+            if (brush->second.colorRef != 0xffffffffu) {
+                fillDcRect(*dc, left, top, right, bottom, colorRefToPixel(brush->second.colorRef));
+            }
             lastError_ = 0;
             ret = 1;
         }
@@ -8027,29 +8198,37 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             lastError_ = dc ? 120 : 6;
             ret = 0;
         } else {
-            fillDcRect(*dc, int32_t(a1), int32_t(a2),
-                       int32_t(a1) + int32_t(a3),
-                       int32_t(a2) + int32_t(stackArg(4)),
-                       colorRefToPixel(brush->second.colorRef));
+            if (brush->second.colorRef != 0xffffffffu) {
+                fillDcRect(*dc, int32_t(a1), int32_t(a2),
+                           int32_t(a1) + int32_t(a3),
+                           int32_t(a2) + int32_t(stackArg(4)),
+                           colorRefToPixel(brush->second.colorRef));
+            }
             lastError_ = 0;
             ret = 1;
         }
     } else if (name == "Rectangle") {
         GuestDc* dc = lookupGuestDc(a0);
         auto brush = dc ? brushes_.find(dc->selectedBrush) : brushes_.end();
-        if (!dc || brush == brushes_.end()) {
+        auto pen = dc ? pens_.find(dc->selectedPen) : pens_.end();
+        if (!dc || (brush == brushes_.end() && pen == pens_.end())) {
             lastError_ = dc ? 87 : 6;
             ret = 0;
         } else {
-            const uint32_t pixel = colorRefToPixel(brush->second.colorRef);
             const int32_t left = int32_t(a1);
             const int32_t top = int32_t(a2);
             const int32_t right = int32_t(a3);
             const int32_t bottom = int32_t(stackArg(4));
-            drawDcLine(*dc, left, top, right - 1, top, pixel);
-            drawDcLine(*dc, left, bottom - 1, right - 1, bottom - 1, pixel);
-            drawDcLine(*dc, left, top, left, bottom - 1, pixel);
-            drawDcLine(*dc, right - 1, top, right - 1, bottom - 1, pixel);
+            if (brush != brushes_.end() && brush->second.colorRef != 0xffffffffu) {
+                fillDcRect(*dc, left, top, right, bottom, colorRefToPixel(brush->second.colorRef));
+            }
+            if (pen != pens_.end() && pen->second.style != 5 && pen->second.colorRef != 0xffffffffu) {
+                const uint32_t pixel = colorRefToPixel(pen->second.colorRef);
+                drawDcLine(*dc, left, top, right - 1, top, pixel);
+                drawDcLine(*dc, left, bottom - 1, right - 1, bottom - 1, pixel);
+                drawDcLine(*dc, left, top, left, bottom - 1, pixel);
+                drawDcLine(*dc, right - 1, top, right - 1, bottom - 1, pixel);
+            }
             lastError_ = 0;
             ret = 1;
         }
@@ -8071,14 +8250,14 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
     } else if (name == "LineTo") {
         GuestDc* dc = lookupGuestDc(a0);
         auto pen = dc ? pens_.find(dc->selectedPen) : pens_.end();
-        auto brush = dc ? brushes_.find(dc->selectedBrush) : brushes_.end();
-        if (!dc || (pen == pens_.end() && brush == brushes_.end())) {
+        if (!dc || pen == pens_.end()) {
             lastError_ = dc ? 87 : 6;
             ret = 0;
         } else {
-            const uint32_t colorRef = pen != pens_.end() ? pen->second.colorRef : brush->second.colorRef;
-            drawDcLine(*dc, dc->x, dc->y, int32_t(a1), int32_t(a2),
-                       colorRefToPixel(colorRef));
+            if (pen->second.style != 5 && pen->second.colorRef != 0xffffffffu) {
+                drawDcLine(*dc, dc->x, dc->y, int32_t(a1), int32_t(a2),
+                           colorRefToPixel(pen->second.colorRef));
+            }
             dc->x = int32_t(a1);
             dc->y = int32_t(a2);
             lastError_ = 0;
@@ -8506,6 +8685,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             it->second.y = int32_t(a2);
             it->second.width = int32_t(a3);
             it->second.height = int32_t(stackArg(4));
+            if (sizeChanged) it->second.paintBoundsValid = false;
 #if defined(_WIN32)
             if (it->second.hostHwnd) {
                 HWND hwnd = reinterpret_cast<HWND>(it->second.hostHwnd);
@@ -8554,9 +8734,13 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             if (!(flags & 0x0001u)) {
                 it->second.width = newWidth;
                 it->second.height = newHeight;
+                it->second.paintBoundsValid = false;
             }
             if (flags & 0x0040u) it->second.visible = true;  // SWP_SHOWWINDOW
-            if (flags & 0x0080u) it->second.visible = false; // SWP_HIDEWINDOW
+            if (flags & 0x0080u) {
+                it->second.visible = false; // SWP_HIDEWINDOW
+                it->second.paintBoundsValid = false;
+            }
 #if defined(_WIN32)
             if (it->second.hostHwnd) {
                 HWND hwnd = reinterpret_cast<HWND>(it->second.hostHwnd);
@@ -8675,6 +8859,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             if (wasVisible) eraseGuestWindowArea(a0, it->second);
             it->second.visible = false;
             it->second.destroyed = true;
+            it->second.paintBoundsValid = false;
             GuestMessage destroy{};
             destroy.hwnd = a0;
             destroy.message = 0x0002; // WM_DESTROY
@@ -8701,6 +8886,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
         } else {
             const bool wasVisible = it->second.visible;
             it->second.visible = a1 != 0;
+            if (!it->second.visible) it->second.paintBoundsValid = false;
             spdlog::info("ShowWindow guest=0x{:08x} cmd={} oldVisible={} newVisible={}",
                          a0, int32_t(a1), wasVisible ? 1 : 0, it->second.visible ? 1 : 0);
             ensureHostWindow(a0, it->second);
@@ -8740,7 +8926,38 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             ret = 1;
         }
     } else if (name == "DefWindowProcW") {
-        ret = (a1 == 0x0081) ? 1 : 0; // WM_NCCREATE defaults to TRUE.
+        if (a1 == 0x0081) { // WM_NCCREATE defaults to TRUE.
+            ret = 1;
+        } else if (a1 == 0x000c) { // WM_SETTEXT
+            auto it = windows_.find(a0);
+            if (it == windows_.end() || it->second.destroyed) {
+                lastError_ = 1400;
+                ret = 0;
+            } else {
+                it->second.title = a3 ? readUtf16(a3) : std::string{};
+                queueGuestPaint(a0, true);
+                lastError_ = 0;
+                ret = 1;
+            }
+        } else if (a1 == 0x000d) { // WM_GETTEXT
+            auto it = windows_.find(a0);
+            if (it == windows_.end() || it->second.destroyed) {
+                lastError_ = 1400;
+                ret = 0;
+            } else if (!a2 || !a3) {
+                lastError_ = 0;
+                ret = 0;
+            } else {
+                ret = writeUtf16(a3, it->second.title, a2);
+                lastError_ = 0;
+            }
+        } else if (a1 == 0x000e) { // WM_GETTEXTLENGTH
+            auto it = windows_.find(a0);
+            ret = it == windows_.end() || it->second.destroyed ? 0 : uint32_t(it->second.title.size());
+            lastError_ = it == windows_.end() || it->second.destroyed ? 1400 : 0;
+        } else {
+            ret = 0;
+        }
     } else if (name == "GetMessagePos") {
         ret = 0;
     } else if (name == "TranslateMessage") {
@@ -9959,12 +10176,13 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         }
     };
     auto dispatchQueuedPaintForBlockingApi = [&](PendingBlockingApi& pending, const char* reason) {
-        if (pending.paintDispatches >= 16) return false;
+        if (pending.paintDispatches >= 6) return false;
         auto paint = std::find_if(guestMessages_.begin(), guestMessages_.end(),
                                   [&](const GuestMessage& message) {
                                       if (message.message != 0x0014 && message.message != 0x000f) return false;
                                       auto window = windows_.find(message.hwnd);
-                                      return window != windows_.end() && !window->second.destroyed && window->second.wndProc;
+                                      return window != windows_.end() && !window->second.destroyed && window->second.wndProc &&
+                                             !hasCoveringRootPopup(message.hwnd);
                                   });
         if (paint == guestMessages_.end()) return false;
         const GuestMessage message = *paint;
@@ -10115,6 +10333,7 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         }
         auto& pending = pendingUpdateWindows_.back();
         auto window = windows_.find(pending.hwnd);
+        const std::string sourceName = pending.sourceName.empty() ? "UpdateWindow" : pending.sourceName;
         uint32_t wndProc = pending.wndProc;
         if (window == windows_.end() || window->second.destroyed || !window->second.visible) {
             const uint32_t originalRa = pending.originalRa;
@@ -10124,16 +10343,16 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
             setReg(UC_MIPS_REG_V0, 1);
             setReg(UC_MIPS_REG_RA, originalRa);
             setReg(UC_MIPS_REG_PC, originalRa);
-            spdlog::info("UpdateWindow skipped invisible/destroyed hwnd=0x{:08x}", hwnd);
+            spdlog::info("{} skipped invisible/destroyed hwnd=0x{:08x}", sourceName, hwnd);
             pumpHostMessages();
             return;
         }
         if (window->second.wndProc) wndProc = window->second.wndProc;
-        wndProc = translatedWndProc(wndProc, "UpdateWindow");
+        wndProc = translatedWndProc(wndProc, sourceName.c_str());
         if (pending.stage == 0) {
             pending.stage = 1;
-            spdlog::info("UpdateWindow synchronous WM_PAINT hwnd=0x{:08x} wndproc=0x{:08x}",
-                         pending.hwnd, wndProc);
+            spdlog::info("{} synchronous WM_PAINT hwnd=0x{:08x} wndproc=0x{:08x}",
+                         sourceName, pending.hwnd, wndProc);
             setReg(UC_MIPS_REG_A0, pending.hwnd);
             setReg(UC_MIPS_REG_A1, 0x000f); // WM_PAINT
             setReg(UC_MIPS_REG_A2, 0);
@@ -10149,8 +10368,8 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         setReg(UC_MIPS_REG_V0, 1);
         setReg(UC_MIPS_REG_RA, originalRa);
         setReg(UC_MIPS_REG_PC, originalRa);
-        spdlog::info("UpdateWindow synchronous paint complete hwnd=0x{:08x} return=0x{:08x}",
-                     hwnd, originalRa);
+        spdlog::info("{} synchronous paint complete hwnd=0x{:08x} return=0x{:08x}",
+                     sourceName, hwnd, originalRa);
         presentHostWindows(true);
         pumpHostMessages();
         return;
@@ -10232,7 +10451,7 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         }
         ensureHostWindow(a0, it->second);
         const uint32_t eraseDc = makeGuestDc(a0);
-        pendingUpdateWindows_.push_back(PendingUpdateWindow{a0, wndProc, ra, eraseDc, 0});
+        pendingUpdateWindows_.push_back(PendingUpdateWindow{a0, wndProc, ra, eraseDc, 0, "UpdateWindow"});
         spdlog::info("UpdateWindow synchronous WM_ERASEBKGND hwnd=0x{:08x} wndproc=0x{:08x}",
                      a0, wndProc);
         setReg(UC_MIPS_REG_A0, a0);

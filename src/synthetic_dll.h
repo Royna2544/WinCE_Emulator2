@@ -118,6 +118,11 @@ private:
         uintptr_t hostHwnd{};
         bool visible{};
         bool destroyed{};
+        bool paintBoundsValid{};
+        int32_t paintLeft{};
+        int32_t paintTop{};
+        int32_t paintRight{};
+        int32_t paintBottom{};
         bool backingValid{};
         int32_t backingX{};
         int32_t backingY{};
@@ -252,6 +257,7 @@ private:
         uint32_t originalRa{};
         uint32_t eraseDc{};
         uint32_t stage{};
+        std::string sourceName;
     };
     struct GuestCpuContext {
         std::map<int, uint32_t> registers;
@@ -442,11 +448,22 @@ private:
     void queueGuestPaint(uint32_t hwnd, bool erase);
     std::pair<int32_t, int32_t> guestWindowOrigin(uint32_t hwnd) const;
     void retireOwnedPopupsCoveredByChild(uint32_t childHwnd);
+    void retireOwnedPopupsCoveredByChildArea(uint32_t childHwnd,
+                                             int32_t left,
+                                             int32_t top,
+                                             int32_t right,
+                                             int32_t bottom);
+    void noteGuestWindowPaint(uint32_t hwnd,
+                              int32_t left,
+                              int32_t top,
+                              int32_t right,
+                              int32_t bottom);
     void captureGuestWindowBacking(uint32_t hwnd);
     bool restoreGuestWindowBacking(uint32_t hwnd, GuestWindow& window);
     void eraseGuestWindowArea(uint32_t hwnd, const GuestWindow& window);
     bool isWindowOrDescendant(uint32_t hwnd, uint32_t ancestor) const;
     bool isOwnedPopupWindow(uint32_t hwnd) const;
+    bool hasCoveringRootPopup(uint32_t hwnd) const;
     uint32_t readFramebufferTargetPixel(uint32_t targetHwnd, int32_t x, int32_t y) const;
     void writeFramebufferTargetPixel(uint32_t targetHwnd, int32_t x, int32_t y, uint32_t pixel);
     void pumpHostMessages();
