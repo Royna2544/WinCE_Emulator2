@@ -764,7 +764,8 @@ LRESULT CALLBACK hostPresenterWndProc(HWND hwnd, UINT message, WPARAM wParam, LP
         return 0;
     }
     if (message == WM_ERASEBKGND) return 1;
-    if (message == WM_MOUSEMOVE || message == WM_LBUTTONDOWN || message == WM_LBUTTONUP) {
+    if ((message == WM_MOUSEMOVE && (wParam & MK_LBUTTON)) ||
+        message == WM_LBUTTONDOWN || message == WM_LBUTTONUP) {
         if (presenter && presenter->runtime) {
             RECT client{};
             GetClientRect(hwnd, &client);
@@ -2516,6 +2517,55 @@ void SyntheticDllRuntime::queueGuestPaint(uint32_t hwnd, bool erase) {
     invalidateHostWindows();
 }
 
+void SyntheticDllRuntime::prioritizeQueuedWindowMessages(uint32_t hwnd) {
+    std::deque<GuestMessage> selected;
+    for (auto it = guestMessages_.begin(); it != guestMessages_.end();) {
+        if (it->hwnd == hwnd) {
+            selected.push_back(*it);
+            it = guestMessages_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    while (!selected.empty()) {
+        guestMessages_.push_front(selected.back());
+        selected.pop_back();
+    }
+}
+
+void SyntheticDllRuntime::queueVisibleFullScreenPopupPaint(uint32_t hwnd) {
+    auto it = windows_.find(hwnd);
+    if (it == windows_.end() || it->second.destroyed || !it->second.visible ||
+        !isOwnedPopupWindow(hwnd) || !guestWindowCoversFramebuffer(hwnd)) {
+        return;
+    }
+    const bool replacesOlderFullScreenPopup = std::any_of(windows_.begin(), windows_.end(),
+                                                          [&](const auto& entry) {
+                                                              const uint32_t otherHwnd = entry.first;
+                                                              const GuestWindow& other = entry.second;
+                                                              return otherHwnd < hwnd && !other.destroyed && other.visible &&
+                                                                     isOwnedPopupWindow(otherHwnd) &&
+                                                                     guestWindowCoversFramebuffer(otherHwnd);
+                                                          });
+    if (!replacesOlderFullScreenPopup) return;
+
+    const bool hasShow = std::any_of(guestMessages_.begin(), guestMessages_.end(),
+                                     [&](const GuestMessage& message) {
+                                         return message.hwnd == hwnd && message.message == 0x0018;
+                                     });
+    if (!hasShow) {
+        GuestMessage show{};
+        show.hwnd = hwnd;
+        show.message = 0x0018; // WM_SHOWWINDOW
+        show.wParam = 1;
+        show.time = uint32_t(++tick_ * 16);
+        guestMessages_.push_back(show);
+    }
+    queueGuestPaint(hwnd, true);
+    prioritizeQueuedWindowMessages(hwnd);
+    spdlog::info("prioritized visible full-screen owned popup paint hwnd=0x{:08x}", hwnd);
+}
+
 std::pair<int32_t, int32_t> SyntheticDllRuntime::guestWindowOrigin(uint32_t hwnd) const {
     int32_t x = 0;
     int32_t y = 0;
@@ -2556,6 +2606,9 @@ void SyntheticDllRuntime::captureGuestWindowBacking(uint32_t hwnd) {
     if (it == windows_.end()) return;
     const bool childWindow = (it->second.style & kWindowStyleChild) != 0;
     const bool ownedPopup = isOwnedPopupWindow(hwnd);
+    const bool fullScreenPopup = ownedPopup && guestWindowCoversFramebuffer(hwnd);
+    if (ownedPopup && !fullScreenPopup && coveringFullScreenOwnedPopup(hwnd)) return;
+    if (fullScreenPopup) retireOlderFullScreenOwnedPopupsForPopup(hwnd);
     const uint32_t visualParent = (childWindow || ownedPopup) ? it->second.parent : 0;
     if (!visualParent || it->second.backingValid ||
         !framebuffer_ || framebufferWidth_ <= 0 || framebufferHeight_ <= 0 ||
@@ -2590,12 +2643,109 @@ void SyntheticDllRuntime::captureGuestWindowBacking(uint32_t hwnd) {
                  hwnd, left, top, width, height);
 }
 
-bool SyntheticDllRuntime::restoreGuestWindowBacking(uint32_t hwnd, GuestWindow& window) {
+bool SyntheticDllRuntime::guestWindowCoversFramebuffer(uint32_t hwnd) const {
+    auto it = windows_.find(hwnd);
+    if (it == windows_.end() || it->second.destroyed || !framebuffer_ ||
+        framebufferWidth_ <= 0 || framebufferHeight_ <= 0) {
+        return false;
+    }
+    const auto [x, y] = guestWindowOrigin(hwnd);
+    return x <= 0 && y <= 0 &&
+           x + it->second.width >= framebufferWidth_ &&
+           y + it->second.height >= framebufferHeight_;
+}
+
+bool SyntheticDllRuntime::isWindowInOwnedPopupStack(uint32_t hwnd, uint32_t ancestor) const {
+    for (uint32_t current = hwnd; current;) {
+        if (current == ancestor) return true;
+        auto it = windows_.find(current);
+        if (it == windows_.end()) break;
+        current = it->second.parent;
+    }
+    return false;
+}
+
+uint32_t SyntheticDllRuntime::coveringFullScreenOwnedPopup(uint32_t hwnd) const {
+    for (auto it = windows_.rbegin(); it != windows_.rend(); ++it) {
+        const uint32_t popupHwnd = it->first;
+        const GuestWindow& popup = it->second;
+        if (popupHwnd == hwnd || popup.destroyed || !popup.visible || !popup.backingValid ||
+            !isOwnedPopupWindow(popupHwnd) || !guestWindowCoversFramebuffer(popupHwnd)) {
+            continue;
+        }
+        if (isWindowInOwnedPopupStack(hwnd, popupHwnd)) continue;
+        return popupHwnd;
+    }
+    return 0;
+}
+
+void SyntheticDllRuntime::retireOlderFullScreenOwnedPopupsForPopup(uint32_t popupHwnd) {
+    auto target = windows_.find(popupHwnd);
+    if (target == windows_.end() || target->second.destroyed || !target->second.visible ||
+        !isOwnedPopupWindow(popupHwnd) || !guestWindowCoversFramebuffer(popupHwnd)) {
+        return;
+    }
+
+    std::vector<uint32_t> retired;
+    for (auto& [hwnd, window] : windows_) {
+        if (hwnd >= popupHwnd || window.destroyed || !window.visible ||
+            !isOwnedPopupWindow(hwnd) || !guestWindowCoversFramebuffer(hwnd)) {
+            continue;
+        }
+
+        restoreGuestWindowBacking(hwnd, window, true, false);
+        window.visible = false;
+        window.backingValid = false;
+        window.backingPixels.clear();
+        retired.push_back(hwnd);
+    }
+
+    if (retired.empty()) return;
+    guestMessages_.erase(std::remove_if(guestMessages_.begin(), guestMessages_.end(),
+                                        [&](const GuestMessage& message) {
+                                            return std::find(retired.begin(), retired.end(), message.hwnd) != retired.end();
+                                        }),
+                         guestMessages_.end());
+    for (uint32_t hwnd : retired) {
+        spdlog::info("retired older full-screen owned popup hwnd=0x{:08x} for popup hwnd=0x{:08x}",
+                     hwnd, popupHwnd);
+    }
+}
+
+bool SyntheticDllRuntime::restoreGuestWindowBacking(uint32_t hwnd,
+                                                   GuestWindow& window,
+                                                   bool allowCoveredByNewer,
+                                                   bool presentRestoredFrame) {
     (void)hwnd;
     if (!window.backingValid || window.backingPixels.empty() ||
         !framebuffer_ || framebufferWidth_ <= 0 || framebufferHeight_ <= 0 ||
         window.backingWidth <= 0 || window.backingHeight <= 0) {
         return false;
+    }
+    if (!allowCoveredByNewer && isOwnedPopupWindow(hwnd) && guestWindowCoversFramebuffer(hwnd)) {
+        const auto coversFramebuffer = [&](const GuestWindow& candidate) {
+            const auto [x, y] = guestWindowOrigin(candidate.hwnd);
+            return x <= 0 && y <= 0 &&
+                   x + candidate.width >= framebufferWidth_ &&
+                   y + candidate.height >= framebufferHeight_;
+        };
+        for (const auto& [candidateHwnd, candidate] : windows_) {
+            if (candidateHwnd > hwnd && !candidate.destroyed && candidate.visible &&
+                candidate.parent && !(candidate.style & kWindowStyleChild) && coversFramebuffer(candidate)) {
+                spdlog::info("skipped stale full-screen owned popup backing restore hwnd=0x{:08x} newer=0x{:08x}",
+                             hwnd, candidateHwnd);
+                window.backingValid = false;
+                window.backingPixels.clear();
+                return true;
+            }
+        }
+    }
+    if (isOwnedPopupWindow(hwnd) && !guestWindowCoversFramebuffer(hwnd) &&
+        coveringFullScreenOwnedPopup(hwnd)) {
+        spdlog::info("skipped covered owned popup backing restore hwnd=0x{:08x}", hwnd);
+        window.backingValid = false;
+        window.backingPixels.clear();
+        return true;
     }
     const int32_t left = std::clamp<int32_t>(window.backingX, 0, framebufferWidth_);
     const int32_t top = std::clamp<int32_t>(window.backingY, 0, framebufferHeight_);
@@ -2622,7 +2772,7 @@ bool SyntheticDllRuntime::restoreGuestWindowBacking(uint32_t hwnd, GuestWindow& 
                  hwnd, left, top, copyWidth, copyHeight);
     window.backingValid = false;
     window.backingPixels.clear();
-    presentHostWindows(true);
+    if (presentRestoredFrame) presentHostWindows(true);
     return true;
 }
 
@@ -2733,6 +2883,11 @@ uint32_t SyntheticDllRuntime::readFramebufferTargetPixel(uint32_t targetHwnd,
     if (!framebuffer_ || x < 0 || y < 0 || x >= framebufferWidth_ || y >= framebufferHeight_) {
         return 0xff000000u;
     }
+    if (targetHwnd && isOwnedPopupWindow(targetHwnd) &&
+        !guestWindowCoversFramebuffer(targetHwnd) &&
+        coveringFullScreenOwnedPopup(targetHwnd)) {
+        return framebuffer_[size_t(y) * size_t(framebufferWidth_) + size_t(x)];
+    }
     if (!isOwnedPopupWindow(targetHwnd)) {
         for (const auto& [hwnd, window] : windows_) {
             if (!window.visible || !window.backingValid || window.backingPixels.empty() ||
@@ -2759,6 +2914,11 @@ void SyntheticDllRuntime::writeFramebufferTargetPixel(uint32_t targetHwnd,
                                                       int32_t y,
                                                       uint32_t pixel) {
     if (!framebuffer_ || x < 0 || y < 0 || x >= framebufferWidth_ || y >= framebufferHeight_) {
+        return;
+    }
+    if (targetHwnd && isOwnedPopupWindow(targetHwnd) &&
+        !guestWindowCoversFramebuffer(targetHwnd) &&
+        coveringFullScreenOwnedPopup(targetHwnd)) {
         return;
     }
     bool covered = false;
@@ -10235,6 +10395,7 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
             lastError_ = 0;
             setReg(UC_MIPS_REG_V0, hwnd);
             spdlog::info("CreateWindowExW synchronous create complete hwnd=0x{:08x}", hwnd);
+            queueVisibleFullScreenPopupPaint(hwnd);
         }
         setReg(UC_MIPS_REG_RA, originalRa);
         setReg(UC_MIPS_REG_PC, originalRa);

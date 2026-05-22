@@ -447,6 +447,8 @@ private:
     void presentHostWindows(bool force);
     void invalidateHostWindows();
     void queueGuestPaint(uint32_t hwnd, bool erase);
+    void prioritizeQueuedWindowMessages(uint32_t hwnd);
+    void queueVisibleFullScreenPopupPaint(uint32_t hwnd);
     std::pair<int32_t, int32_t> guestWindowOrigin(uint32_t hwnd) const;
     void noteGuestWindowPaint(uint32_t hwnd,
                               int32_t left,
@@ -454,7 +456,14 @@ private:
                               int32_t right,
                               int32_t bottom);
     void captureGuestWindowBacking(uint32_t hwnd);
-    bool restoreGuestWindowBacking(uint32_t hwnd, GuestWindow& window);
+    bool guestWindowCoversFramebuffer(uint32_t hwnd) const;
+    bool isWindowInOwnedPopupStack(uint32_t hwnd, uint32_t ancestor) const;
+    uint32_t coveringFullScreenOwnedPopup(uint32_t hwnd) const;
+    void retireOlderFullScreenOwnedPopupsForPopup(uint32_t popupHwnd);
+    bool restoreGuestWindowBacking(uint32_t hwnd,
+                                   GuestWindow& window,
+                                   bool allowCoveredByNewer = false,
+                                   bool presentRestoredFrame = true);
     void eraseGuestWindowArea(uint32_t hwnd, const GuestWindow& window);
     bool isWindowOrDescendant(uint32_t hwnd, uint32_t ancestor) const;
     bool isOwnedPopupWindow(uint32_t hwnd) const;
