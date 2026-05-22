@@ -2333,6 +2333,18 @@ uint32_t SyntheticDllRuntime::makeStockObject(int32_t index) {
         handle = makeGuestFont(font, true);
         break;
     }
+    case 21: { // DEFAULT_BITMAP
+        handle = makeGuestHandle({GuestHandle::Kind::HostBitmap, 0, 0});
+        GuestBitmap bitmap{};
+        bitmap.width = 1;
+        bitmap.heightRaw = -1;
+        bitmap.bpp = 1;
+        bitmap.stride = 4;
+        bitmap.palette = defaultIndexedPalette(1);
+        bitmap.stock = true;
+        bitmaps_[handle] = std::move(bitmap);
+        break;
+    }
     default:
         return 0;
     }
@@ -2502,6 +2514,52 @@ void SyntheticDllRuntime::queueGuestPaint(uint32_t hwnd, bool erase) {
     invalidateHostWindows();
 }
 
+void SyntheticDllRuntime::retireCoveringRootPopupsForNestedChild(uint32_t childHwnd) {
+    auto child = windows_.find(childHwnd);
+    if (child == windows_.end() || child->second.destroyed || !child->second.visible ||
+        !(child->second.style & kWindowStyleChild) || !child->second.parent) {
+        return;
+    }
+    auto parent = windows_.find(child->second.parent);
+    if (parent == windows_.end() || parent->second.destroyed ||
+        !(parent->second.style & kWindowStyleChild) || !parent->second.parent) {
+        return;
+    }
+    auto root = windows_.find(parent->second.parent);
+    if (root == windows_.end() || root->second.destroyed || root->second.parent) return;
+
+    const auto [rootX, rootY] = guestWindowOrigin(root->first);
+    const int32_t rootRight = rootX + root->second.width;
+    const int32_t rootBottom = rootY + root->second.height;
+    std::vector<uint32_t> retired;
+    for (auto& [hwnd, window] : windows_) {
+        if (!window.visible || window.destroyed || window.parent != root->first ||
+            (window.style & kWindowStyleChild)) {
+            continue;
+        }
+        const auto [popupX, popupY] = guestWindowOrigin(hwnd);
+        if (popupX > rootX || popupY > rootY ||
+            popupX + window.width < rootRight ||
+            popupY + window.height < rootBottom) {
+            continue;
+        }
+        window.visible = false;
+        window.backingValid = false;
+        window.backingPixels.clear();
+        retired.push_back(hwnd);
+    }
+    if (retired.empty()) return;
+    guestMessages_.erase(std::remove_if(guestMessages_.begin(), guestMessages_.end(),
+                                        [&](const GuestMessage& message) {
+                                            return std::find(retired.begin(), retired.end(), message.hwnd) != retired.end();
+                                        }),
+                         guestMessages_.end());
+    for (uint32_t hwnd : retired) {
+        spdlog::info("retired covering root popup hwnd=0x{:08x} before nested child paint hwnd=0x{:08x}",
+                     hwnd, childHwnd);
+    }
+}
+
 std::pair<int32_t, int32_t> SyntheticDllRuntime::guestWindowOrigin(uint32_t hwnd) const {
     int32_t x = 0;
     int32_t y = 0;
@@ -2642,7 +2700,6 @@ void SyntheticDllRuntime::captureGuestWindowBacking(uint32_t hwnd) {
     auto parent = windows_.find(visualParent);
     if (parent == windows_.end()) return;
     if (childWindow && !parent->second.parent) return;
-    if (ownedPopup && parent->second.parent) return;
 
     const auto [originX, originY] = guestWindowOrigin(hwnd);
     const int32_t left = std::clamp<int32_t>(originX, 0, framebufferWidth_);
@@ -2711,6 +2768,10 @@ void SyntheticDllRuntime::eraseGuestWindowArea(uint32_t hwnd, const GuestWindow&
     }
     auto mutableWindow = windows_.find(hwnd);
     if (mutableWindow != windows_.end() && restoreGuestWindowBacking(hwnd, mutableWindow->second)) {
+        return;
+    }
+    if (isOwnedPopupWindow(hwnd)) {
+        spdlog::info("skipped black erase for owned popup hwnd=0x{:08x} without saved backing", hwnd);
         return;
     }
     if (window.parent) {
@@ -8120,21 +8181,45 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             ret = 0;
             lastError_ = 6;
         } else if (object->second.kind == GuestHandle::Kind::GuestBrush) {
+            auto brush = brushes_.find(a0);
+            if (brush != brushes_.end() && brush->second.stock) {
+                ret = 1;
+                lastError_ = 0;
+                return true;
+            }
             brushes_.erase(a0);
             guestHandles_.erase(object);
             ret = 1;
             lastError_ = 0;
         } else if (object->second.kind == GuestHandle::Kind::GuestPen) {
+            auto pen = pens_.find(a0);
+            if (pen != pens_.end() && pen->second.stock) {
+                ret = 1;
+                lastError_ = 0;
+                return true;
+            }
             pens_.erase(a0);
             guestHandles_.erase(object);
             ret = 1;
             lastError_ = 0;
         } else if (object->second.kind == GuestHandle::Kind::GuestFont) {
+            auto font = fonts_.find(a0);
+            if (font != fonts_.end() && font->second.stock) {
+                ret = 1;
+                lastError_ = 0;
+                return true;
+            }
             fonts_.erase(a0);
             guestHandles_.erase(object);
             ret = 1;
             lastError_ = 0;
         } else if (object->second.kind == GuestHandle::Kind::HostBitmap) {
+            auto bitmap = bitmaps_.find(a0);
+            if (bitmap != bitmaps_.end() && bitmap->second.stock) {
+                ret = 1;
+                lastError_ = 0;
+                return true;
+            }
 #if defined(_WIN32)
             if (object->second.hostValue) DeleteObject(reinterpret_cast<HGDIOBJ>(object->second.hostValue));
 #endif
@@ -8416,7 +8501,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
     } else if (name == "CreateCompatibleDC") {
         ret = makeGuestDc(0);
         if (GuestDc* dc = lookupGuestDc(ret)) {
-            dc->selectedBitmap = 0;
+            dc->selectedBitmap = makeStockObject(21); // DEFAULT_BITMAP
         }
         lastError_ = ret ? 0 : 8;
     } else if (name == "DeleteDC") {
@@ -10461,6 +10546,61 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         setReg(UC_MIPS_REG_RA, updateWindowContinuationStub_);
         setReg(UC_MIPS_REG_PC, wndProc);
         return;
+    }
+
+    if (mutableEntry.moduleName == "coredll.dll" && name == "InvalidateRect") {
+        uint32_t target = a0;
+        if (!target) {
+            for (const auto& [hwnd, window] : windows_) {
+                if (!window.destroyed && !window.parent) {
+                    target = hwnd;
+                    break;
+                }
+            }
+        }
+        auto it = windows_.find(target);
+        bool dispatchNow = false;
+        if (it != windows_.end() && !it->second.destroyed && it->second.visible &&
+            (it->second.style & kWindowStyleChild) && it->second.parent &&
+            it->second.width > 1 && it->second.height > 1 && updateWindowContinuationStub_ &&
+            pendingUpdateWindows_.empty()) {
+            retireCoveringRootPopupsForNestedChild(target);
+            auto parent = windows_.find(it->second.parent);
+            const int64_t area = int64_t(it->second.width) * int64_t(it->second.height);
+            const int64_t framebufferArea = int64_t(framebufferWidth_) * int64_t(framebufferHeight_);
+            dispatchNow = parent != windows_.end() && parent->second.parent &&
+                          area > 0 && framebufferArea > 0 && area <= framebufferArea / 2 &&
+                          !hasCoveringRootPopup(target);
+        }
+        if (dispatchNow) {
+            queueGuestPaint(target, a2 != 0);
+            const auto oldSize = guestMessages_.size();
+            std::erase_if(guestMessages_, [&](const GuestMessage& message) {
+                return message.hwnd == target &&
+                       (message.message == 0x0014 || message.message == 0x000f);
+            });
+            const uint32_t wndProc = translatedWndProc(it->second.wndProc, "InvalidateRect");
+            if (!wndProc) {
+                lastError_ = 0;
+                setReg(UC_MIPS_REG_V0, 1);
+                pumpHostMessages();
+                return;
+            }
+            const bool erase = a2 != 0;
+            const uint32_t eraseDc = erase ? makeGuestDc(target) : 0;
+            pendingUpdateWindows_.push_back(PendingUpdateWindow{
+                target, wndProc, ra, eraseDc, erase ? 0u : 1u, "InvalidateRect",
+            });
+            spdlog::info("InvalidateRect immediate child paint hwnd=0x{:08x} erase={} removedQueued={} wndproc=0x{:08x}",
+                         target, erase ? 1 : 0, oldSize - guestMessages_.size(), wndProc);
+            setReg(UC_MIPS_REG_A0, target);
+            setReg(UC_MIPS_REG_A1, erase ? 0x0014 : 0x000f);
+            setReg(UC_MIPS_REG_A2, erase ? eraseDc : 0);
+            setReg(UC_MIPS_REG_A3, 0);
+            setReg(UC_MIPS_REG_RA, updateWindowContinuationStub_);
+            setReg(UC_MIPS_REG_PC, wndProc);
+            return;
+        }
     }
 
     if (mutableEntry.moduleName == "coredll.dll" && name == "DestroyWindow") {

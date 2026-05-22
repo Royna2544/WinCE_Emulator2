@@ -169,6 +169,7 @@ private:
         uint32_t greenMask{};
         uint32_t blueMask{};
         std::vector<uint32_t> palette;
+        bool stock{};
     };
     struct BitmapProbeStats {
         uint32_t sampled{};
@@ -446,6 +447,7 @@ private:
     void presentHostWindows(bool force);
     void invalidateHostWindows();
     void queueGuestPaint(uint32_t hwnd, bool erase);
+    void retireCoveringRootPopupsForNestedChild(uint32_t childHwnd);
     std::pair<int32_t, int32_t> guestWindowOrigin(uint32_t hwnd) const;
     void retireOwnedPopupsCoveredByChild(uint32_t childHwnd);
     void retireOwnedPopupsCoveredByChildArea(uint32_t childHwnd,
