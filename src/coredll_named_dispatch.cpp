@@ -20,6 +20,121 @@
 namespace {
 constexpr uint32_t kWindowStyleChild = 0x40000000u;
 
+enum class CoredllOrdinal : uint16_t {
+    GetAPIAddress = 0x002C,
+    GlobalMemoryStatus = 0x0058,
+    SystemParametersInfoW = 0x0059,
+    CreateDIBSection = 0x005A,
+    RegisterClassW = 0x005F,
+    DeviceIoControl = 0x00B3,
+    IsDBCSLeadByteEx = 0x00C0,
+    IsWctype = 0x00C1,
+    MultiByteToWideChar = 0x00C4,
+    WideCharToMultiByte = 0x00C5,
+    CharLowerW = 0x00DD,
+    CharUpperW = 0x00E0,
+    FormatMessageW = 0x00EA,
+    CreateWindowExW = 0x00F6,
+    SetWindowPos = 0x00F7,
+    GetWindowRect = 0x00F8,
+    GetClientRect = 0x00F9,
+    InvalidateRect = 0x00FA,
+    GetWindow = 0x00FB,
+    ScreenToClient = 0x00FF,
+    ScreenToClientCompat = 0x0100,
+    SetWindowLongW = 0x0102,
+    GetWindowLongW = 0x0103,
+    DefWindowProcW = 0x0108,
+    DestroyWindow = 0x0109,
+    ShowWindow = 0x010A,
+    UpdateWindow = 0x010B,
+    GetParent = 0x010D,
+    MoveWindow = 0x0110,
+    FindWindowW = 0x011E,
+    GetStoreInformation = 0x0143,
+    WNetConnectionDialog1W = 0x01BE,
+    WNetGetUniversalNameW = 0x01C2,
+    WNetGetUserW = 0x01C3,
+    CreateProcessW = 0x01ED,
+    WaitForSingleObject = 0x01F1,
+    LoadLibraryW = 0x0210,
+    GetProcAddressW = 0x0212,
+    GetModuleFileNameW = 0x0219,
+    OutputDebugStringW = 0x021D,
+    GetSystemInfo = 0x021E,
+    CreateFileMappingW = 0x0224,
+    MapViewOfFile = 0x0225,
+    UnmapViewOfFile = 0x0226,
+    FlushViewOfFile = 0x0227,
+    CloseHandle = 0x0229,
+    KernelIoControl = 0x022D,
+    IsDialogMessageW = 0x02BA,
+    GetVersionExW = 0x02CD,
+    DispatchMessageW = 0x035B,
+    GetMessageW = 0x035D,
+    GetMessagePos = 0x035E,
+    GetMessageWNoWait = 0x035F,
+    PeekMessageW = 0x0360,
+    PostMessageW = 0x0361,
+    PostQuitMessage = 0x0362,
+    TranslateMessage = 0x0366,
+    SetTimer = 0x036B,
+    KillTimer = 0x036C,
+    GetClassInfoW = 0x036E,
+    RegisterTaskBar = 0x037C,
+    CreateFontIndirectW = 0x037F,
+    ExtTextOutW = 0x0380,
+    CreateBitmap = 0x0385,
+    CreateCompatibleBitmap = 0x0386,
+    BitBlt = 0x0387,
+    StretchBlt = 0x0389,
+    TransparentImage = 0x038A,
+    CreateCompatibleDC = 0x038E,
+    DeleteDC = 0x038F,
+    DeleteObject = 0x0390,
+    GetDeviceCaps = 0x0394,
+    GetObjectW = 0x0396,
+    GetStockObject = 0x0397,
+    SelectObject = 0x0399,
+    SetBkColor = 0x039A,
+    SetBkMode = 0x039B,
+    SetTextColor = 0x039C,
+    CreatePatternBrush = 0x039D,
+    CreatePen = 0x039E,
+    CreatePenIndirect = 0x03A2,
+    CreateSolidBrush = 0x03A3,
+    FillRect = 0x03A7,
+    PatBlt = 0x03AA,
+    Polygon = 0x03AB,
+    Polyline = 0x03AC,
+    Rectangle = 0x03AD,
+    SetBrushOrgEx = 0x03AF,
+    DrawTextW = 0x03B1,
+    CombineRgn = 0x03C8,
+    GetClipBox = 0x03CB,
+    CreateRectRgn = 0x03D4,
+    GetModuleHandleW = 0x0499,
+    GetProcAddressA = 0x04CE,
+    KernelLibIoControl = 0x05D1,
+    RegisterDesktop = 0x05E3,
+    GlobalAddAtomW = 0x05EF,
+    GlobalDeleteAtom = 0x05F0,
+    GlobalFindAtomW = 0x05F1,
+    SetWindowRgn = 0x0576,
+    GetWindowRgn = 0x0577,
+    MoveToEx = 0x0673,
+    LineTo = 0x0674,
+    SetTextAlign = 0x0676,
+    SetDIBColorTable = 0x0682,
+    StretchDIBits = 0x0683,
+    SetBitmapBits = 0x06BD,
+    SetDIBitsToDevice = 0x06BE,
+};
+
+constexpr uint16_t ord(CoredllOrdinal ordinal) {
+    return static_cast<uint16_t>(ordinal);
+}
+
 uint64_t hostTickMilliseconds() {
     return GetTickCount64();
 }
@@ -95,14 +210,14 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(uint16_t ordinal,
     const uint32_t a3 = args.a3;
     const std::string name = "coredll.ordinal";
 
-    if (ordinal == 0x0385) return handleCreateBitmap(args, ret);
-    if (ordinal == 0x0396) return handleGetObjectW(args, ret);
-    if (ordinal == 0x0682) return handleSetDIBColorTable(args, ret);
-    if (ordinal == 0x06BD) return handleSetBitmapBits(args, ret);
-    if (ordinal == 0x06BE) return handleSetDIBitsToDevice(args, ret);
+    if (ordinal == ord(CoredllOrdinal::CreateBitmap)) return handleCreateBitmap(args, ret);
+    if (ordinal == ord(CoredllOrdinal::GetObjectW)) return handleGetObjectW(args, ret);
+    if (ordinal == ord(CoredllOrdinal::SetDIBColorTable)) return handleSetDIBColorTable(args, ret);
+    if (ordinal == ord(CoredllOrdinal::SetBitmapBits)) return handleSetBitmapBits(args, ret);
+    if (ordinal == ord(CoredllOrdinal::SetDIBitsToDevice)) return handleSetDIBitsToDevice(args, ret);
 
-    if (ordinal == 0x00E0 || ordinal == 0x00DD) {
-        const bool makeUpper = ordinal == 0x00E0;
+    if (ordinal == ord(CoredllOrdinal::CharUpperW) || ordinal == ord(CoredllOrdinal::CharLowerW)) {
+        const bool makeUpper = ordinal == ord(CoredllOrdinal::CharUpperW);
         if (a0 <= 0xffffu) {
             ret = uint32_t(makeUpper ? std::towupper(wint_t(a0))
                                      : std::towlower(wint_t(a0)));
@@ -116,7 +231,7 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(uint16_t ordinal,
             }
             ret = a0;
         }
-    } else if (ordinal == 0x03A2) {
+    } else if (ordinal == ord(CoredllOrdinal::CreatePenIndirect)) {
         if (!a0) {
             lastError_ = 87;
             ret = 0;
@@ -124,7 +239,7 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(uint16_t ordinal,
             ret = makeGuestPen(readU32(a0), readU32(a0 + 4), readU32(a0 + 12));
             lastError_ = 0;
         }
-    } else if (ordinal == 0x005A) {
+    } else if (ordinal == ord(CoredllOrdinal::CreateDIBSection)) {
         if (!a1 || !a3) {
             lastError_ = 87;
             ret = 0;
@@ -185,7 +300,7 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(uint16_t ordinal,
                          ret && bitmaps_.count(ret) ? bitmaps_[ret].blueMask : 0,
                          stride, bits, ret);
         }
-    } else if (ordinal == 0x0386) {
+    } else if (ordinal == ord(CoredllOrdinal::CreateCompatibleBitmap)) {
         const uint32_t width = std::max<uint32_t>(a1, 1);
         const uint32_t height = std::max<uint32_t>(a2, 1);
         const uint32_t bpp = 32;
@@ -199,7 +314,7 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(uint16_t ordinal,
         lastError_ = ret ? 0 : 8;
         spdlog::info("CreateCompatibleBitmap {}x{} bits=0x{:08x} bitmap=0x{:08x}",
                      width, height, bits, ret);
-    } else if (ordinal == 0x03AB) {
+    } else if (ordinal == ord(CoredllOrdinal::Polygon)) {
         GuestDc* dc = lookupGuestDc(a0);
         auto brush = dc ? brushes_.find(dc->selectedBrush) : brushes_.end();
         auto pen = dc ? pens_.find(dc->selectedPen) : pens_.end();
@@ -233,7 +348,7 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(uint16_t ordinal,
             lastError_ = 0;
             ret = 1;
         }
-    } else if (ordinal == 0x03AC) {
+    } else if (ordinal == ord(CoredllOrdinal::Polyline)) {
         GuestDc* dc = lookupGuestDc(a0);
         auto pen = dc ? pens_.find(dc->selectedPen) : pens_.end();
         if (!dc || !a1 || a2 < 2 || pen == pens_.end()) {
@@ -256,230 +371,7 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(uint16_t ordinal,
             lastError_ = 0;
             ret = 1;
         }
-    } else if (ordinal == 0x0414 || ordinal == 0x0416) {
-        copyGuest(a0, a1, a2);
-        ret = a0;
-    } else if (ordinal == 0x0417) {
-        fillGuest(a0, uint8_t(a1 & 0xffu), a2);
-        ret = a0;
-    } else if (ordinal == 0x0449 || ordinal == 0x0038 || ordinal == 0x044B ||
-               ordinal == 0x0448 || ordinal == 0x046C) {
-        std::vector<uint32_t> values;
-        if (ordinal == 0x044B) {
-            values.reserve(16);
-            for (uint32_t i = 0; i < 16; ++i) values.push_back(readU32(a2 + i * 4));
-        } else if (ordinal == 0x046C) {
-            values.reserve(16);
-            for (uint32_t i = 0; i < 16; ++i) values.push_back(readU32(a3 + i * 4));
-        } else if (ordinal == 0x0448) {
-            values = {a3};
-            for (uint32_t i = 4; i < 16; ++i) values.push_back(stackArg(i));
-        } else {
-            values = {a2, a3};
-            for (uint32_t i = 4; i < 16; ++i) values.push_back(stackArg(i));
-        }
-        size_t argIndex = 0;
-        auto nextArg = [&]() -> uint32_t {
-            return argIndex < values.size() ? values[argIndex++] : 0;
-        };
-        const std::string format = readUtf16((ordinal == 0x0448 || ordinal == 0x046C) ? a2 : a1, 2048);
-        std::string out;
-        for (size_t i = 0; i < format.size(); ++i) {
-            if (format[i] != '%' || i + 1 >= format.size()) {
-                out.push_back(format[i]);
-                continue;
-            }
-            if (format[i + 1] == '%') {
-                out.push_back('%');
-                ++i;
-                continue;
-            }
-            ++i;
-            bool zeroPad = false;
-            if (format[i] == '0') {
-                zeroPad = true;
-                ++i;
-            }
-            int width = 0;
-            while (i < format.size() && std::isdigit(static_cast<unsigned char>(format[i]))) {
-                width = width * 10 + (format[i++] - '0');
-            }
-            char lengthModifier = 0;
-            if (i < format.size() && (format[i] == 'l' || format[i] == 'h')) {
-                lengthModifier = format[i++];
-            }
-            if (i >= format.size()) break;
-            const char spec = format[i];
-            const uint32_t value = spec == 'c' || spec == 'C' || spec == 'd' ||
-                                   spec == 'i' || spec == 'u' || spec == 'x' ||
-                                   spec == 'X' || spec == 's' || spec == 'S'
-                ? nextArg()
-                : 0;
-            char buffer[64]{};
-            switch (spec) {
-            case 's':
-            case 'S':
-                if (spec == 'S' || lengthModifier == 'h') {
-                    out += readAscii(value, 2048);
-                } else {
-                    std::string text = readUtf16(value, 2048);
-                    if (text.empty()) text = readAscii(value, 2048);
-                    out += text;
-                }
-                break;
-            case 'c':
-            case 'C':
-                out.push_back(char(value & 0xffu));
-                break;
-            case 'd':
-            case 'i':
-                if (width) std::snprintf(buffer, sizeof(buffer), zeroPad ? "%0*d" : "%*d", width, int32_t(value));
-                else std::snprintf(buffer, sizeof(buffer), "%d", int32_t(value));
-                out += buffer;
-                break;
-            case 'u':
-                if (width) std::snprintf(buffer, sizeof(buffer), zeroPad ? "%0*u" : "%*u", width, value);
-                else std::snprintf(buffer, sizeof(buffer), "%u", value);
-                out += buffer;
-                break;
-            case 'x':
-            case 'X':
-                if (width) std::snprintf(buffer, sizeof(buffer), zeroPad ? "%0*x" : "%*x", width, value);
-                else std::snprintf(buffer, sizeof(buffer), "%x", value);
-                out += buffer;
-                break;
-            default:
-                out.push_back('%');
-                out.push_back(spec);
-                break;
-            }
-        }
-        ret = writeUtf16(a0, out, (ordinal == 0x0448 || ordinal == 0x046C) ? a1 : uint32_t(out.size() + 1));
-        if (out.find(".db") != std::string::npos || out.find(".bin") != std::string::npos ||
-            out.find("\\") != std::string::npos || out.find("/") != std::string::npos) {
-            spdlog::info("synthetic coredll.dll!{} formatted \"{}\" -> 0x{:08x}",
-                         name, out, a0);
-        } else if (out.empty() && (ordinal == 0x0038 || ordinal == 0x0449)) {
-            spdlog::info("synthetic coredll.dll!{} formatted empty format=\"{}\" a2w=\"{}\" a2a=\"{}\" a3=0x{:08x}",
-                         name, format, readUtf16(a2, 128), readAscii(a2, 128), a3);
-        }
-    } else if (ordinal == 0x044E || ordinal == 0x02CF || ordinal == 0x02D9) {
-        std::vector<uint32_t> values = ordinal == 0x02CF
-            ? std::vector<uint32_t>{a2, a3}
-            : (ordinal == 0x02D9 ? std::vector<uint32_t>{a3} : std::vector<uint32_t>{a1, a2, a3});
-        for (uint32_t i = 4; i < 16; ++i) values.push_back(stackArg(i));
-        size_t argIndex = 0;
-        auto nextArg = [&]() -> uint32_t {
-            return argIndex < values.size() ? values[argIndex++] : 0;
-        };
-        const std::string format = readAscii(ordinal == 0x02CF ? a1 : (ordinal == 0x02D9 ? a2 : a0), 2048);
-        std::string out;
-        for (size_t i = 0; i < format.size(); ++i) {
-            if (format[i] != '%' || i + 1 >= format.size()) {
-                out.push_back(format[i]);
-                continue;
-            }
-            if (format[i + 1] == '%') {
-                out.push_back('%');
-                ++i;
-                continue;
-            }
-            ++i;
-            bool zeroPad = false;
-            if (format[i] == '0') {
-                zeroPad = true;
-                ++i;
-            }
-            int width = 0;
-            while (i < format.size() && std::isdigit(static_cast<unsigned char>(format[i]))) {
-                width = width * 10 + (format[i++] - '0');
-            }
-            if (i < format.size() && (format[i] == 'l' || format[i] == 'h')) ++i;
-            if (i >= format.size()) break;
-            const char spec = format[i];
-            const uint32_t value = spec == 'c' || spec == 'C' || spec == 'd' ||
-                                   spec == 'i' || spec == 'u' || spec == 'x' ||
-                                   spec == 'X' || spec == 'p' || spec == 's' ||
-                                   spec == 'S'
-                ? nextArg()
-                : 0;
-            char buffer[64]{};
-            switch (spec) {
-            case 's':
-                out += readAscii(value, 2048);
-                break;
-            case 'S':
-                out += readUtf16(value, 2048);
-                break;
-            case 'c':
-            case 'C':
-                out.push_back(char(value & 0xffu));
-                break;
-            case 'd':
-            case 'i':
-                if (width) std::snprintf(buffer, sizeof(buffer), zeroPad ? "%0*d" : "%*d", width, int32_t(value));
-                else std::snprintf(buffer, sizeof(buffer), "%d", int32_t(value));
-                out += buffer;
-                break;
-            case 'u':
-                if (width) std::snprintf(buffer, sizeof(buffer), zeroPad ? "%0*u" : "%*u", width, value);
-                else std::snprintf(buffer, sizeof(buffer), "%u", value);
-                out += buffer;
-                break;
-            case 'p':
-                std::snprintf(buffer, sizeof(buffer), "0x%08x", value);
-                out += buffer;
-                break;
-            case 'x':
-            case 'X':
-                if (width) std::snprintf(buffer, sizeof(buffer), zeroPad ? "%0*x" : "%*x", width, value);
-                else std::snprintf(buffer, sizeof(buffer), "%x", value);
-                out += buffer;
-                break;
-            default:
-                out.push_back('%');
-                out.push_back(spec);
-                break;
-            }
-        }
-        if (ordinal == 0x02CF || ordinal == 0x02D9) {
-            if (ordinal == 0x02D9) {
-                const uint32_t capacity = a1;
-                if (a0 && capacity) {
-                    const uint32_t copy = std::min<uint32_t>(capacity - 1, uint32_t(out.size()));
-                    if (copy) uc_mem_write(uc_, a0, out.data(), copy);
-                    const char nul = 0;
-                    uc_mem_write(uc_, a0 + copy, &nul, sizeof(nul));
-                }
-            } else {
-                writeAscii(a0, out);
-            }
-            if (out.find(".db") != std::string::npos || out.find(".bin") != std::string::npos ||
-                out.find("\\") != std::string::npos || out.find("/") != std::string::npos) {
-                spdlog::info("synthetic coredll.dll!{} formatted \"{}\" -> 0x{:08x}",
-                             name, out, a0);
-            }
-        } else if (!out.empty()) {
-            spdlog::info("printf: {}", out);
-        }
-        ret = uint32_t(out.size());
-    } else if (ordinal == 0x004E) {
-        const std::string value = readUtf16(a0, 128);
-        char* end = nullptr;
-        ret = uint32_t(std::strtol(value.c_str(), &end, 10));
-    } else if (ordinal == 0x0438) {
-        const uint32_t radix = (a2 >= 2 && a2 <= 36) ? a2 : 10;
-        uint32_t value = a0;
-        std::string digits;
-        do {
-            const uint32_t digit = value % radix;
-            digits.push_back(char(digit < 10 ? ('0' + digit) : ('a' + digit - 10)));
-            value /= radix;
-        } while (value);
-        std::reverse(digits.begin(), digits.end());
-        writeUtf16(a1, digits, uint32_t(digits.size() + 1));
-        ret = a1;
-    } else if (ordinal == 0x02CD) {
+    } else if (ordinal == ord(CoredllOrdinal::GetVersionExW)) {
         if (a0) {
             writeU32(a0 + 4, 4);
             writeU32(a0 + 8, 20);
@@ -487,231 +379,19 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(uint16_t ordinal,
             writeU32(a0 + 16, 3);
         }
         ret = a0 ? 1 : 0;
-    } else if (ordinal == 0x003B || ordinal == 0x0045) {
-        const uint16_t target = uint16_t(a1 & 0xffffu);
-        uint32_t found = 0;
-        for (uint32_t offset = 0; a0; offset += 2) {
-            uint16_t ch = 0;
-            if (uc_mem_read(uc_, a0 + offset, &ch, sizeof(ch)) != UC_ERR_OK) break;
-            if (ch == target) {
-                found = a0 + offset;
-                if (ordinal == 0x003B) break;
-            }
-            if (!ch) break;
-        }
-        ret = found;
-    } else if (ordinal == 0x0049) {
-        ret = 0;
-        uint16_t needleFirst = 0;
-        if (a0 && a1 && uc_mem_read(uc_, a1, &needleFirst, sizeof(needleFirst)) == UC_ERR_OK) {
-            if (!needleFirst) {
-                ret = a0;
-            } else {
-                for (uint32_t hayOffset = 0; hayOffset < 0x200000; hayOffset += 2) {
-                    uint16_t hay = 0;
-                    if (uc_mem_read(uc_, a0 + hayOffset, &hay, sizeof(hay)) != UC_ERR_OK || !hay) break;
-                    if (hay != needleFirst) continue;
-                    bool match = true;
-                    for (uint32_t needleOffset = 2; needleOffset < 0x200000; needleOffset += 2) {
-                        uint16_t needle = 0;
-                        uint16_t candidate = 0;
-                        if (uc_mem_read(uc_, a1 + needleOffset, &needle, sizeof(needle)) != UC_ERR_OK) {
-                            match = false;
-                            break;
-                        }
-                        if (!needle) break;
-                        if (uc_mem_read(uc_, a0 + hayOffset + needleOffset, &candidate, sizeof(candidate)) != UC_ERR_OK ||
-                            candidate != needle) {
-                            match = false;
-                            break;
-                        }
-                    }
-                    if (match) {
-                        ret = a0 + hayOffset;
-                        break;
-                    }
-                }
-            }
-        }
-    } else if (ordinal == 0x003F) {
-        uint32_t count = 0;
-        for (;; ++count) {
-            uint16_t ch = 0;
-            if (uc_mem_read(uc_, a0 + count * 2, &ch, sizeof(ch)) != UC_ERR_OK || !ch) break;
-        }
-        ret = count;
-    } else if (ordinal == 0x003D) {
-        uint32_t offset = 0;
-        for (;; offset += 2) {
-            uint16_t ch = 0;
-            uc_mem_read(uc_, a1 + offset, &ch, sizeof(ch));
-            uc_mem_write(uc_, a0 + offset, &ch, sizeof(ch));
-            if (!ch) break;
-        }
-        ret = a0;
-    } else if (ordinal == 0x003E) {
-        uint32_t count = 0;
-        for (;; ++count) {
-            uint16_t ch = 0;
-            if (uc_mem_read(uc_, a0 + count * 2, &ch, sizeof(ch)) != UC_ERR_OK || !ch) break;
-            bool rejected = false;
-            for (uint32_t offset = 0; a1; offset += 2) {
-                uint16_t reject = 0;
-                if (uc_mem_read(uc_, a1 + offset, &reject, sizeof(reject)) != UC_ERR_OK || !reject) break;
-                if (ch == reject) {
-                    rejected = true;
-                    break;
-                }
-            }
-            if (rejected) break;
-        }
-        ret = count;
-    } else if (ordinal == 0x0041 || ordinal == 0x00E5) {
-        ret = 0;
-        for (uint32_t i = 0; i < a2; ++i) {
-            uint16_t left = 0;
-            uint16_t right = 0;
-            uc_mem_read(uc_, a0 + i * 2, &left, sizeof(left));
-            uc_mem_read(uc_, a1 + i * 2, &right, sizeof(right));
-            if (ordinal == 0x00E5) {
-                if (left >= 'A' && left <= 'Z') left = uint16_t(left - 'A' + 'a');
-                if (right >= 'A' && right <= 'Z') right = uint16_t(right - 'A' + 'a');
-            }
-            if (left != right || !left || !right) {
-                ret = uint32_t(int(left) - int(right));
-                break;
-            }
-        }
-    } else if (ordinal == 0x00E6) {
-        ret = 0;
-        for (uint32_t i = 0; i < 0x100000; ++i) {
-            uint16_t left = 0;
-            uint16_t right = 0;
-            uc_mem_read(uc_, a0 + i * 2, &left, sizeof(left));
-            uc_mem_read(uc_, a1 + i * 2, &right, sizeof(right));
-            if (left >= 'A' && left <= 'Z') left = uint16_t(left - 'A' + 'a');
-            if (right >= 'A' && right <= 'Z') right = uint16_t(right - 'A' + 'a');
-            if (left != right || !left || !right) {
-                ret = uint32_t(int(left) - int(right));
-                break;
-            }
-        }
-    } else if (ordinal == 0x004A) {
-        const std::string value = readUtf16(a0);
-        ret = allocate(uint32_t((value.size() + 1) * 2), false);
-        writeUtf16(ret, value, uint32_t(value.size() + 1));
-    } else if (ordinal == 0x042C) {
-        ret = uint32_t(readAscii(a0).size());
-    } else if (ordinal == 0x042A) {
-        uint32_t offset = 0;
-        for (;; ++offset) {
-            char ch = 0;
-            uc_mem_read(uc_, a1 + offset, &ch, sizeof(ch));
-            uc_mem_write(uc_, a0 + offset, &ch, sizeof(ch));
-            if (!ch) break;
-        }
-        ret = a0;
-    } else if (ordinal == 0x0427) {
-        uint32_t dstLen = 0;
-        for (; dstLen < 0x100000; ++dstLen) {
-            char ch = 0;
-            if (uc_mem_read(uc_, a0 + dstLen, &ch, sizeof(ch)) != UC_ERR_OK || !ch) break;
-        }
-        uint32_t offset = 0;
-        for (;; ++offset) {
-            char ch = 0;
-            uc_mem_read(uc_, a1 + offset, &ch, sizeof(ch));
-            uc_mem_write(uc_, a0 + dstLen + offset, &ch, sizeof(ch));
-            if (!ch) break;
-        }
-        ret = a0;
-    } else if (ordinal == 0x0431) {
-        const std::string delimiters = readAscii(a1, 256);
-        uint32_t cursor = a0 ? a0 : strtokNext_;
-        auto isDelimiter = [&](char ch) {
-            return delimiters.find(ch) != std::string::npos;
-        };
-        char ch = 0;
-        while (cursor && uc_mem_read(uc_, cursor, &ch, sizeof(ch)) == UC_ERR_OK && ch && isDelimiter(ch)) {
-            ++cursor;
-        }
-        if (!cursor || uc_mem_read(uc_, cursor, &ch, sizeof(ch)) != UC_ERR_OK || !ch) {
-            strtokNext_ = 0;
-            ret = 0;
-        } else {
-            ret = cursor;
-            for (;; ++cursor) {
-                if (uc_mem_read(uc_, cursor, &ch, sizeof(ch)) != UC_ERR_OK || !ch) {
-                    strtokNext_ = 0;
-                    break;
-                }
-                if (isDelimiter(ch)) {
-                    const char nul = 0;
-                    uc_mem_write(uc_, cursor, &nul, sizeof(nul));
-                    strtokNext_ = cursor + 1;
-                    break;
-                }
-            }
-        }
-    } else if (ordinal == 0x0413) {
-        ret = 0;
-        for (uint32_t offset = 0; offset < a2; ++offset) {
-            unsigned char left = 0;
-            unsigned char right = 0;
-            if (uc_mem_read(uc_, a0 + offset, &left, sizeof(left)) != UC_ERR_OK ||
-                uc_mem_read(uc_, a1 + offset, &right, sizeof(right)) != UC_ERR_OK) {
-                ret = 0xffffffffu;
-                break;
-            }
-            if (left != right) {
-                ret = uint32_t(int(left) - int(right));
-                break;
-            }
-        }
-    } else if (ordinal == 0x0429) {
-        uint32_t offset = 0;
-        for (;; ++offset) {
-            unsigned char left = 0;
-            unsigned char right = 0;
-            uc_mem_read(uc_, a0 + offset, &left, sizeof(left));
-            uc_mem_read(uc_, a1 + offset, &right, sizeof(right));
-            if (left != right || !left || !right) {
-                ret = uint32_t(int(left) - int(right));
-                break;
-            }
-        }
-    } else if (ordinal == 0x042B) {
-        const std::string source = readAscii(a0);
-        const std::string reject = readAscii(a1);
-        size_t count = 0;
-        while (count < source.size() && reject.find(source[count]) == std::string::npos) ++count;
-        ret = uint32_t(count);
-    } else if (ordinal == 0x0582 || ordinal == 0x0583) {
-        std::string left = lowerAscii(readAscii(a0));
-        std::string right = lowerAscii(readAscii(a1));
-        if (ordinal == 0x0583) {
-            left = left.substr(0, a2);
-            right = right.substr(0, a2);
-        }
-        ret = uint32_t(left.compare(right));
-    } else if (ordinal == 0x002C) {
+    } else if (ordinal == ord(CoredllOrdinal::GetAPIAddress)) {
         if (!a0 && !a1 && !a2 && a3 == 0x1c) {
             ret = allocate(0x38, true);
         } else {
             ret = 0;
         }
-    } else if (ordinal == 0x0009) {
-        uint32_t old = 0;
-        uc_mem_read(uc_, a0, &old, sizeof(old));
-        if (old == a1) uc_mem_write(uc_, a0, &a2, sizeof(a2));
-        ret = old;
-    } else if (ordinal == 0x00C0) {
+    } else if (ordinal == ord(CoredllOrdinal::IsDBCSLeadByteEx)) {
         const uint32_t codePage = guestAnsiCodePage(a0);
         const uint8_t ch = uint8_t(a1);
         ret = (codePage == 949 && ch >= 0x81 && ch <= 0xfe) ? 1 : 0;
-    } else if (ordinal == 0x00C1) {
+    } else if (ordinal == ord(CoredllOrdinal::IsWctype)) {
         ret = 0;
-    } else if (ordinal == 0x00C4) {
+    } else if (ordinal == ord(CoredllOrdinal::MultiByteToWideChar)) {
         const uint32_t wideOut = stackArg(4);
         const uint32_t wideCapacity = stackArg(5);
         const int32_t byteCount = int32_t(a3);
@@ -769,58 +449,6 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(uint16_t ordinal,
             ret = wideOut && wideCapacity ? std::min(needed, wideCapacity) : needed;
 #endif
         }
-    } else if (ordinal == 0x0443) {
-        ret = uint32_t(std::toupper(int(a0)));
-    } else if (ordinal == 0x0628) {
-        // Full vector construction needs repeated guest callback transfers. The
-        // current callers survive a fail-closed no-construction result.
-        ret = 0;
-    } else if (ordinal == 0x04CC) {
-        ret = 0;
-    } else if (ordinal == 0x04CB) {
-        ret = a1 && a2 == 0x38 ? 0 : allocate(0x100, true);
-    } else if (ordinal == 0x07D0) {
-        constexpr uint32_t kJmpBufMagic = 0x4a4d5032u; // "JMP2"
-        ret = 0;
-        if (a0 && isGuestRangeReadable(a0, 56)) {
-            writeU32(a0 + 0, kJmpBufMagic);
-            writeU32(a0 + 4, args.ra);
-            writeU32(a0 + 8, reg(UC_MIPS_REG_SP));
-            writeU32(a0 + 12, reg(UC_MIPS_REG_GP));
-            writeU32(a0 + 16, reg(UC_MIPS_REG_S0));
-            writeU32(a0 + 20, reg(UC_MIPS_REG_S1));
-            writeU32(a0 + 24, reg(UC_MIPS_REG_S2));
-            writeU32(a0 + 28, reg(UC_MIPS_REG_S3));
-            writeU32(a0 + 32, reg(UC_MIPS_REG_S4));
-            writeU32(a0 + 36, reg(UC_MIPS_REG_S5));
-            writeU32(a0 + 40, reg(UC_MIPS_REG_S6));
-            writeU32(a0 + 44, reg(UC_MIPS_REG_S7));
-            writeU32(a0 + 48, reg(UC_MIPS_REG_FP));
-            writeU32(a0 + 52, 0);
-        }
-    } else if (ordinal == 0x040C) {
-        constexpr uint32_t kJmpBufMagic = 0x4a4d5032u; // "JMP2"
-        ret = a1 ? a1 : 1;
-        if (a0 && isGuestRangeReadable(a0, 56) && readU32(a0) == kJmpBufMagic) {
-            const uint32_t savedRa = readU32(a0 + 4);
-            setReg(UC_MIPS_REG_RA, savedRa);
-            setReg(UC_MIPS_REG_SP, readU32(a0 + 8));
-            setReg(UC_MIPS_REG_GP, readU32(a0 + 12));
-            setReg(UC_MIPS_REG_S0, readU32(a0 + 16));
-            setReg(UC_MIPS_REG_S1, readU32(a0 + 20));
-            setReg(UC_MIPS_REG_S2, readU32(a0 + 24));
-            setReg(UC_MIPS_REG_S3, readU32(a0 + 28));
-            setReg(UC_MIPS_REG_S4, readU32(a0 + 32));
-            setReg(UC_MIPS_REG_S5, readU32(a0 + 36));
-            setReg(UC_MIPS_REG_S6, readU32(a0 + 40));
-            setReg(UC_MIPS_REG_S7, readU32(a0 + 44));
-            setReg(UC_MIPS_REG_FP, readU32(a0 + 48));
-            setReg(UC_MIPS_REG_PC, savedRa);
-            spdlog::info("longjmp restored guest context jmpbuf=0x{:08x} pc=0x{:08x} value={}",
-                         a0, savedRa, ret);
-        } else {
-            spdlog::warn("longjmp received invalid or uninitialized jmp_buf=0x{:08x}", a0);
-        }
     } else {
         return false;
     }
@@ -837,7 +465,7 @@ bool SyntheticDllRuntime::dispatchSimpleHostWin32(uint16_t ordinal,
     const uint32_t a2 = args.a2;
     const std::string name = "coredll.ordinal";
 
-    if (ordinal == 0x036B) {
+    if (ordinal == ord(CoredllOrdinal::SetTimer)) {
         if (a0 && !windows_.count(a0)) {
             lastError_ = 1400;
             ret = 0;
@@ -868,35 +496,35 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
     const uint32_t a3 = args.a3;
     const uint32_t ra = args.ra;
     const std::string name = "coredll.ordinal";
-    if (ordinal == 0x0059) {
+    if (ordinal == ord(CoredllOrdinal::SystemParametersInfoW)) {
         ret = handleSystemParametersInfoW(a0, a1, a2, a3);
         return true;
     }
-    if (ordinal == 0x0394) {
+    if (ordinal == ord(CoredllOrdinal::GetDeviceCaps)) {
         ret = handleGetDeviceCaps(a0, a1);
         return true;
     }
-    if (ordinal == 0x00B3) {
+    if (ordinal == ord(CoredllOrdinal::DeviceIoControl)) {
         ret = dispatchDeviceIoControl(a0, a1, a2, a3);
         return true;
     }
-    if (ordinal == 0x00C5) {
+    if (ordinal == ord(CoredllOrdinal::WideCharToMultiByte)) {
         ret = handleWideCharToMultiByte(a0, a1, a2, a3);
         return true;
     }
-    if (ordinal == 0x0224) {
+    if (ordinal == ord(CoredllOrdinal::CreateFileMappingW)) {
         ret = handleCreateFileMappingW(a0, a1, a2, a3);
         return true;
     }
-    if (ordinal == 0x0225) {
+    if (ordinal == ord(CoredllOrdinal::MapViewOfFile)) {
         ret = handleMapViewOfFile(a0, a1, a2, a3);
         return true;
     }
-    if (ordinal == 0x0226) {
+    if (ordinal == ord(CoredllOrdinal::UnmapViewOfFile)) {
         ret = handleUnmapViewOfFile(a0);
         return true;
     }
-    if (ordinal == 0x0227) {
+    if (ordinal == ord(CoredllOrdinal::FlushViewOfFile)) {
         ret = handleFlushViewOfFile(a0, a1);
         return true;
     }
@@ -951,7 +579,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
         return 0;
     };
 
-    if (ordinal == 0x02BA) {
+    if (ordinal == ord(CoredllOrdinal::IsDialogMessageW)) {
         // CE/MFC uses this in PreTranslateMessage. The emulator queues and
         // dispatches messages itself, so only report that the message was not
         // consumed by dialog navigation.
@@ -959,7 +587,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
         lastError_ = windows_.count(a0) || !a0 ? 0 : 1400;
         return true;
     }
-    if (ordinal == 0x022D) {
+    if (ordinal == ord(CoredllOrdinal::KernelIoControl)) {
         const uint32_t outPtr = a3;
         const uint32_t outSize = stackArg(4);
         const uint32_t bytesReturnedPtr = stackArg(5);
@@ -1054,10 +682,10 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
         }
         spdlog::info("KernelIoControl code=0x{:08x} device=0x{:04x} function=0x{:03x} method={} access={} out=0x{:08x} outSize={} bytesReturned=0x{:08x} -> {} lastError={}",
                      a0, device, function, method, access, outPtr, outSize, bytesReturnedPtr, ret, lastError_);
-    } else if (ordinal == 0x05D1) {
+    } else if (ordinal == ord(CoredllOrdinal::KernelLibIoControl)) {
         lastError_ = 120;
         ret = 0;
-    } else if (ordinal == 0x0058) {
+    } else if (ordinal == ord(CoredllOrdinal::GlobalMemoryStatus)) {
         if (!a0) {
             lastError_ = 87;
             ret = 0;
@@ -1087,7 +715,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             ret = 0;
             lastError_ = 0;
         }
-    } else if (ordinal == 0x0229) {
+    } else if (ordinal == ord(CoredllOrdinal::CloseHandle)) {
         auto debugName = fileHandleDebugNames_.find(a0);
         const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
         const std::string lowerPath = lowerAscii(debugPath);
@@ -1102,9 +730,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
                          scannedRecords, recordCount, ra);
         }
         ret = closeGuestHandle(a0);
-    } else if (ordinal == 0x00B4) {
-        ret = closeGuestHandle(a0);
-    } else if (ordinal == 0x01F1) {
+    } else if (ordinal == ord(CoredllOrdinal::WaitForSingleObject)) {
         auto* handle = lookupGuestHandle(a0);
         if (handle && handle->kind == GuestHandle::Kind::GuestThread) {
             auto thread = guestThreads_.find(a0);
@@ -1125,7 +751,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             ret = handle ? 0 : 0xffffffffu;
             if (!handle) lastError_ = 6;
         }
-    } else if (ordinal == 0x01ED) {
+    } else if (ordinal == ord(CoredllOrdinal::CreateProcessW)) {
         const std::string application = readUtf16(a0, 2048);
         const std::string commandLine = readUtf16(a1, 4096);
         const uint32_t processInfo = stackArg(9);
@@ -1149,15 +775,15 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
         }
         spdlog::info("CreateProcessW app=\"{}\" host=\"{}\" cmd=\"{}\" pi=0x{:08x} -> {} lastError={}",
                      application, pathToUtf8(hostApplication), commandLine, processInfo, ret, lastError_);
-    } else if (ordinal == 0x0219) {
+    } else if (ordinal == ord(CoredllOrdinal::GetModuleFileNameW)) {
         ret = writeUtf16(a1, mainModulePath_, a2);
         lastError_ = ret ? 0 : 122;
         spdlog::info("GetModuleFileNameW module=0x{:08x} path=\"{}\" chars={} lastError={}",
                      a0, mainModulePath_, ret, lastError_);
-    } else if (ordinal == 0x021D) {
+    } else if (ordinal == ord(CoredllOrdinal::OutputDebugStringW)) {
         spdlog::info("OutputDebugStringW: {}", readUtf16(a0));
         ret = 0;
-    } else if (ordinal == 0x00EA) {
+    } else if (ordinal == ord(CoredllOrdinal::FormatMessageW)) {
         const uint32_t bufferPtr = stackArg(4);
         const uint32_t capacity = stackArg(5);
         std::string message = "Error " + std::to_string(a2);
@@ -1180,7 +806,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             ret = bufferPtr && capacity ? writeUtf16(bufferPtr, message, capacity) : 0;
         }
         lastError_ = ret ? 0 : 122;
-    } else if (ordinal == 0x0210 || ordinal == 0x0499) {
+    } else if (ordinal == ord(CoredllOrdinal::LoadLibraryW) || ordinal == ord(CoredllOrdinal::GetModuleHandleW)) {
         const std::string requested = readUtf16(a0);
         const std::string pathKey = lowerAscii(requested);
         const std::string nameKey = lowerAscii(pathToUtf8(pathFromUtf8(requested).filename()));
@@ -1190,7 +816,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             ret = it->second.base;
         } else if (auto it = loadedModulesByName_.find(nameKey); it != loadedModulesByName_.end()) {
             ret = it->second.base;
-        } else if (ordinal == 0x0210) {
+        } else if (ordinal == ord(CoredllOrdinal::LoadLibraryW)) {
             if (auto syntheticModule = createModule(nameKey)) {
                 registerLoadedModule(syntheticModule->moduleName,
                                      std::filesystem::path("[synthetic]") / syntheticModule->moduleName,
@@ -1206,7 +832,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
         }
         spdlog::info("{} requested=\"{}\" -> 0x{:08x}", name, requested, ret);
         lastError_ = ret ? 0 : 126;
-    } else if (ordinal == 0x04CE || ordinal == 0x0212) {
+    } else if (ordinal == ord(CoredllOrdinal::GetProcAddressA) || ordinal == ord(CoredllOrdinal::GetProcAddressW)) {
         ret = 0;
         auto module = loadedModulesByBase_.find(a0);
         if (module != loadedModulesByBase_.end()) {
@@ -1216,7 +842,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
                 spdlog::info("{} module=0x{:08x} ordinal={} -> 0x{:08x}",
                              name, a0, a1, ret);
             } else {
-                const std::string proc = ordinal == 0x0212 ? readUtf16(a1) : readAscii(a1, 256);
+                const std::string proc = ordinal == ord(CoredllOrdinal::GetProcAddressW) ? readUtf16(a1) : readAscii(a1, 256);
                 auto exported = module->second.exportsByName.find(lowerAscii(proc));
                 if (exported != module->second.exportsByName.end()) ret = module->second.base + exported->second;
                 spdlog::info("{} module=0x{:08x} proc=\"{}\" -> 0x{:08x}",
@@ -1224,7 +850,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             }
         }
         lastError_ = ret ? 0 : 127;
-    } else if (ordinal == 0x005F) {
+    } else if (ordinal == ord(CoredllOrdinal::RegisterClassW)) {
         std::array<uint8_t, 40> bytes{};
         if (!a0 || uc_mem_read(uc_, a0, bytes.data(), bytes.size()) != UC_ERR_OK) {
             lastError_ = 87;
@@ -1251,7 +877,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             spdlog::info("RegisterClassW class=\"{}\" atom=0x{:04x}", className, ret);
             lastError_ = 0;
         }
-    } else if (ordinal == 0x036E) {
+    } else if (ordinal == ord(CoredllOrdinal::GetClassInfoW)) {
         std::string className;
         if (a1 < 0x10000) {
             auto it = windowClassNamesByAtom_.find(uint16_t(a1));
@@ -1268,7 +894,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = 1411;
             ret = 0;
         }
-    } else if (ordinal == 0x011E) {
+    } else if (ordinal == ord(CoredllOrdinal::FindWindowW)) {
         ret = 0;
         const std::string className = a0 < 0x10000
             ? (windowClassNamesByAtom_.count(uint16_t(a0)) ? windowClassNamesByAtom_[uint16_t(a0)] : std::string{})
@@ -1281,7 +907,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             }
         }
         lastError_ = ret ? 0 : 1400;
-    } else if (ordinal == 0x00F6) {
+    } else if (ordinal == ord(CoredllOrdinal::CreateWindowExW)) {
         std::string className;
         if (a1 < 0x10000) {
             auto it = windowClassNamesByAtom_.find(uint16_t(a1));
@@ -1359,7 +985,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
         size.time = uint32_t(++tick_ * 16);
         guestMessages_.push_back(size);
         lastError_ = 0;
-    } else if (ordinal == 0x00F8) {
+    } else if (ordinal == ord(CoredllOrdinal::GetWindowRect)) {
         auto it = windows_.find(a0);
         if (!a1 || it == windows_.end()) {
             lastError_ = it == windows_.end() ? 1400 : 87;
@@ -1370,7 +996,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = 0;
             ret = 1;
         }
-    } else if (ordinal == 0x00F9) {
+    } else if (ordinal == ord(CoredllOrdinal::GetClientRect)) {
         auto it = windows_.find(a0);
         if (!a1 || it == windows_.end()) {
             lastError_ = it == windows_.end() ? 1400 : 87;
@@ -1380,7 +1006,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = 0;
             ret = 1;
         }
-    } else if (ordinal == 0x00FA) {
+    } else if (ordinal == ord(CoredllOrdinal::InvalidateRect)) {
         const uint32_t target = a0 ? a0 : firstWindow();
         if (!target || !windows_.count(target)) {
             lastError_ = 1400;
@@ -1390,7 +1016,8 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = 0;
             ret = 1;
         }
-    } else if (ordinal == 0x00FF) {
+    } else if (ordinal == ord(CoredllOrdinal::ScreenToClient) ||
+               ordinal == ord(CoredllOrdinal::ScreenToClientCompat)) {
         auto it = windows_.find(a0);
         if (!a1 || it == windows_.end()) {
             lastError_ = it == windows_.end() ? 1400 : 87;
@@ -1404,7 +1031,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = 0;
             ret = 1;
         }
-    } else if (ordinal == 0x036C) {
+    } else if (ordinal == ord(CoredllOrdinal::KillTimer)) {
         if (a0 && !windows_.count(a0)) {
             lastError_ = 1400;
             ret = 0;
@@ -1413,13 +1040,13 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = 0;
             ret = 1;
         }
-    } else if (ordinal == 0x039E) {
+    } else if (ordinal == ord(CoredllOrdinal::CreatePen)) {
         ret = makeGuestPen(a0, a1, a2);
         lastError_ = 0;
-    } else if (ordinal == 0x03A3) {
+    } else if (ordinal == ord(CoredllOrdinal::CreateSolidBrush)) {
         ret = makeGuestBrush(a0);
         lastError_ = 0;
-    } else if (ordinal == 0x03D4) {
+    } else if (ordinal == ord(CoredllOrdinal::CreateRectRgn)) {
 #if defined(_WIN32)
         HRGN region = CreateRectRgn(int(a0), int(a1), int(a2), int(a3));
         ret = region ? makeGuestHandle({GuestHandle::Kind::HostRegion, reinterpret_cast<uintptr_t>(region), 0}) : 0;
@@ -1428,7 +1055,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
         ret = makeGuestHandle({GuestHandle::Kind::HostRegion, 0, 0});
         lastError_ = ret ? 0 : 8;
 #endif
-    } else if (ordinal == 0x03C8) {
+    } else if (ordinal == ord(CoredllOrdinal::CombineRgn)) {
 #if defined(_WIN32)
         auto dest = guestHandles_.find(a0);
         auto src1 = guestHandles_.find(a1);
@@ -1455,7 +1082,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
         ret = 0;
         lastError_ = 120;
 #endif
-    } else if (ordinal == 0x037F) {
+    } else if (ordinal == ord(CoredllOrdinal::CreateFontIndirectW)) {
         std::array<uint8_t, 92> font{};
         if (!a0 || uc_mem_read(uc_, a0, font.data(), font.size()) != UC_ERR_OK) {
             lastError_ = 87;
@@ -1464,10 +1091,10 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             ret = makeGuestFont(font);
             lastError_ = 0;
         }
-    } else if (ordinal == 0x0397) {
+    } else if (ordinal == ord(CoredllOrdinal::GetStockObject)) {
         ret = makeStockObject(int32_t(a0));
         lastError_ = ret ? 0 : 87;
-    } else if (ordinal == 0x0399) {
+    } else if (ordinal == ord(CoredllOrdinal::SelectObject)) {
         GuestDc* dc = lookupGuestDc(a0);
         auto object = guestHandles_.find(a1);
         if (!dc || object == guestHandles_.end()) {
@@ -1493,7 +1120,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = 6;
             ret = 0;
         }
-    } else if (ordinal == 0x0390) {
+    } else if (ordinal == ord(CoredllOrdinal::DeleteObject)) {
         auto object = guestHandles_.find(a0);
         if (object == guestHandles_.end()) {
             lastError_ = 6;
@@ -1560,20 +1187,23 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = 6;
             ret = 0;
         }
-    } else if (ordinal == 0x039A || ordinal == 0x039C || ordinal == 0x039B || ordinal == 0x0676) {
+    } else if (ordinal == ord(CoredllOrdinal::SetBkColor) ||
+               ordinal == ord(CoredllOrdinal::SetTextColor) ||
+               ordinal == ord(CoredllOrdinal::SetBkMode) ||
+               ordinal == ord(CoredllOrdinal::SetTextAlign)) {
         GuestDc* dc = lookupGuestDc(a0);
         if (!dc) {
             lastError_ = 6;
             ret = 0xffffffffu;
-        } else if (ordinal == 0x039A) {
+        } else if (ordinal == ord(CoredllOrdinal::SetBkColor)) {
             ret = dc->bkColor;
             dc->bkColor = a1;
             lastError_ = 0;
-        } else if (ordinal == 0x039C) {
+        } else if (ordinal == ord(CoredllOrdinal::SetTextColor)) {
             ret = dc->textColor;
             dc->textColor = a1;
             lastError_ = 0;
-        } else if (ordinal == 0x039B) {
+        } else if (ordinal == ord(CoredllOrdinal::SetBkMode)) {
             ret = dc->bkMode;
             dc->bkMode = a1;
             lastError_ = 0;
@@ -1582,7 +1212,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             dc->textAlign = a1;
             lastError_ = 0;
         }
-    } else if (ordinal == 0x03A7) {
+    } else if (ordinal == ord(CoredllOrdinal::FillRect)) {
         GuestDc* dc = lookupGuestDc(a0);
         int32_t left = 0, top = 0, right = 0, bottom = 0;
         auto brush = brushes_.find(a2);
@@ -1596,7 +1226,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = 0;
             ret = 1;
         }
-    } else if (ordinal == 0x03AA) {
+    } else if (ordinal == ord(CoredllOrdinal::PatBlt)) {
         GuestDc* dc = lookupGuestDc(a0);
         auto brush = dc ? brushes_.find(dc->selectedBrush) : brushes_.end();
         const uint32_t rop = stackArg(5);
@@ -1613,7 +1243,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = 0;
             ret = 1;
         }
-    } else if (ordinal == 0x03AD) {
+    } else if (ordinal == ord(CoredllOrdinal::Rectangle)) {
         GuestDc* dc = lookupGuestDc(a0);
         auto brush = dc ? brushes_.find(dc->selectedBrush) : brushes_.end();
         auto pen = dc ? pens_.find(dc->selectedPen) : pens_.end();
@@ -1638,7 +1268,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = 0;
             ret = 1;
         }
-    } else if (ordinal == 0x0673) {
+    } else if (ordinal == ord(CoredllOrdinal::MoveToEx)) {
         GuestDc* dc = lookupGuestDc(a0);
         if (!dc) {
             lastError_ = 6;
@@ -1653,7 +1283,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = 0;
             ret = 1;
         }
-    } else if (ordinal == 0x0674) {
+    } else if (ordinal == ord(CoredllOrdinal::LineTo)) {
         GuestDc* dc = lookupGuestDc(a0);
         auto pen = dc ? pens_.find(dc->selectedPen) : pens_.end();
         if (!dc || pen == pens_.end()) {
@@ -1669,7 +1299,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = 0;
             ret = 1;
         }
-    } else if (ordinal == 0x0683) {
+    } else if (ordinal == ord(CoredllOrdinal::StretchDIBits)) {
         GuestDc* dc = lookupGuestDc(a0);
         if (!dc) {
             lastError_ = 6;
@@ -1700,7 +1330,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
                 ret = 0xffffffffu;
             }
         }
-    } else if (ordinal == 0x038A) {
+    } else if (ordinal == ord(CoredllOrdinal::TransparentImage)) {
         GuestDc* dstDc = lookupGuestDc(a0);
         GuestDc* srcDc = lookupGuestDc(stackArg(5));
         auto srcBitmap = srcDc ? bitmaps_.find(srcDc->selectedBitmap) : bitmaps_.end();
@@ -1805,13 +1435,13 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = ok ? 0 : 120;
             ret = ok ? 1 : 0;
         }
-    } else if (ordinal == 0x0380 || ordinal == 0x03B1) {
+    } else if (ordinal == ord(CoredllOrdinal::ExtTextOutW) || ordinal == ord(CoredllOrdinal::DrawTextW)) {
         GuestDc* dc = lookupGuestDc(a0);
         if (!dc) {
             lastError_ = 6;
             ret = 0;
         } else {
-            const bool drawTextCall = ordinal == 0x03B1;
+            const bool drawTextCall = ordinal == ord(CoredllOrdinal::DrawTextW);
             const bool ok = drawTextCall
                 ? drawHostTextToDc(*dc, 0, 0, 0, a2, a1, int32_t(a3), stackArg(4), true)
                 : drawHostTextToDc(*dc, int32_t(a1), int32_t(a2), a3, stackArg(4),
@@ -1819,13 +1449,13 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = ok ? 0 : 120;
             ret = ok ? 1 : 0;
         }
-    } else if (ordinal == 0x038E) {
+    } else if (ordinal == ord(CoredllOrdinal::CreateCompatibleDC)) {
         ret = makeGuestDc(0);
         if (GuestDc* dc = lookupGuestDc(ret)) {
             dc->selectedBitmap = makeStockObject(21); // DEFAULT_BITMAP
         }
         lastError_ = ret ? 0 : 8;
-    } else if (ordinal == 0x038F) {
+    } else if (ordinal == ord(CoredllOrdinal::DeleteDC)) {
         auto handle = guestHandles_.find(a0);
         if (handle == guestHandles_.end() || handle->second.kind != GuestHandle::Kind::GuestDc) {
             lastError_ = 6;
@@ -1836,10 +1466,10 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = 0;
             ret = 1;
         }
-    } else if (ordinal == 0x0387 || ordinal == 0x0389) {
+    } else if (ordinal == ord(CoredllOrdinal::BitBlt) || ordinal == ord(CoredllOrdinal::StretchBlt)) {
         GuestDc* dstDc = lookupGuestDc(a0);
         GuestDc* srcDc = lookupGuestDc(stackArg(5));
-        const bool stretch = ordinal == 0x0389;
+        const bool stretch = ordinal == ord(CoredllOrdinal::StretchBlt);
         const uint32_t rop = stretch ? stackArg(10) : stackArg(8);
         const int32_t dstW = int32_t(a3);
         const int32_t dstH = int32_t(stackArg(4));
@@ -1999,7 +1629,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = ok ? 0 : 120;
             ret = ok ? 1 : 0;
         }
-    } else if (ordinal == 0x0103) {
+    } else if (ordinal == ord(CoredllOrdinal::GetWindowLongW)) {
         auto it = windows_.find(a0);
         if (it == windows_.end() || it->second.destroyed) {
             lastError_ = 1400;
@@ -2008,7 +1638,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = 0;
             ret = getWindowLongValue(it->second, int32_t(a1));
         }
-    } else if (ordinal == 0x0102) {
+    } else if (ordinal == ord(CoredllOrdinal::SetWindowLongW)) {
         auto it = windows_.find(a0);
         if (it == windows_.end() || it->second.destroyed) {
             lastError_ = 1400;
@@ -2017,7 +1647,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = 0;
             ret = setWindowLongValue(it->second, int32_t(a1), a2);
         }
-    } else if (ordinal == 0x010D) {
+    } else if (ordinal == ord(CoredllOrdinal::GetParent)) {
         auto it = windows_.find(a0);
         if (it == windows_.end() || it->second.destroyed) {
             lastError_ = 1400;
@@ -2026,7 +1656,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = 0;
             ret = it->second.parent;
         }
-    } else if (ordinal == 0x00FB) {
+    } else if (ordinal == ord(CoredllOrdinal::GetWindow)) {
         auto it = windows_.find(a0);
         if (it == windows_.end() || it->second.destroyed) {
             lastError_ = 1400;
@@ -2079,7 +1709,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = 1400;
             ret = 0;
         }
-    } else if (ordinal == 0x0110) {
+    } else if (ordinal == ord(CoredllOrdinal::MoveWindow)) {
         auto it = windows_.find(a0);
         if (it == windows_.end() || it->second.destroyed) {
             lastError_ = 1400;
@@ -2105,7 +1735,7 @@ ensureHostWindow(a0, it->second);
             lastError_ = 0;
             ret = 1;
         }
-    } else if (ordinal == 0x00F7) {
+    } else if (ordinal == ord(CoredllOrdinal::SetWindowPos)) {
         auto it = windows_.find(a0);
         if (it == windows_.end() || it->second.destroyed) {
             lastError_ = 1400;
@@ -2162,7 +1792,7 @@ ensureHostWindow(a0, it->second);
             lastError_ = 0;
             ret = 1;
         }
-    } else if (ordinal == 0x0576) {
+    } else if (ordinal == ord(CoredllOrdinal::SetWindowRgn)) {
         auto it = windows_.find(a0);
         if (it == windows_.end()) {
             lastError_ = 1400;
@@ -2195,7 +1825,7 @@ ensureHostWindow(a0, it->second);
             lastError_ = 0;
 #endif
         }
-    } else if (ordinal == 0x0577) {
+    } else if (ordinal == ord(CoredllOrdinal::GetWindowRgn)) {
         auto it = windows_.find(a0);
         if (it == windows_.end()) {
             lastError_ = 1400;
@@ -2217,7 +1847,7 @@ ensureHostWindow(a0, it->second);
             lastError_ = 0;
 #endif
         }
-    } else if (ordinal == 0x0109) {
+    } else if (ordinal == ord(CoredllOrdinal::DestroyWindow)) {
         auto it = windows_.find(a0);
         if (it == windows_.end() || it->second.destroyed) {
             lastError_ = 1400;
@@ -2254,7 +1884,7 @@ ensureHostWindow(a0, it->second);
             lastError_ = 0;
             ret = 1;
         }
-    } else if (ordinal == 0x010A) {
+    } else if (ordinal == ord(CoredllOrdinal::ShowWindow)) {
         auto it = windows_.find(a0);
         if (it == windows_.end() || it->second.destroyed) {
             lastError_ = 1400;
@@ -2290,7 +1920,7 @@ ensureHostWindow(a0, it->second);
             lastError_ = 0;
             ret = wasVisible ? 1 : 0;
         }
-    } else if (ordinal == 0x010B) {
+    } else if (ordinal == ord(CoredllOrdinal::UpdateWindow)) {
         auto it = windows_.find(a0);
         if (it == windows_.end() || it->second.destroyed) {
             lastError_ = 1400;
@@ -2301,7 +1931,7 @@ ensureHostWindow(a0, it->second);
             lastError_ = 0;
             ret = 1;
         }
-    } else if (ordinal == 0x0108) {
+    } else if (ordinal == ord(CoredllOrdinal::DefWindowProcW)) {
         if (a1 == 0x0081) { // WM_NCCREATE defaults to TRUE.
             ret = 1;
         } else if (a1 == 0x000c) { // WM_SETTEXT
@@ -2334,11 +1964,11 @@ ensureHostWindow(a0, it->second);
         } else {
             ret = 0;
         }
-    } else if (ordinal == 0x035E) {
+    } else if (ordinal == ord(CoredllOrdinal::GetMessagePos)) {
         ret = 0;
-    } else if (ordinal == 0x0366) {
+    } else if (ordinal == ord(CoredllOrdinal::TranslateMessage)) {
         ret = a0 ? 1 : 0;
-    } else if (ordinal == 0x0362) {
+    } else if (ordinal == ord(CoredllOrdinal::PostQuitMessage)) {
         quitPosted_ = true;
         GuestMessage message{};
         message.message = 0x0012; // WM_QUIT
@@ -2346,7 +1976,7 @@ ensureHostWindow(a0, it->second);
         message.time = uint32_t(++tick_ * 16);
         guestMessages_.push_back(message);
         ret = 0;
-    } else if (ordinal == 0x0361) {
+    } else if (ordinal == ord(CoredllOrdinal::PostMessageW)) {
         if (!windows_.count(a0)) {
             lastError_ = 1400;
             ret = 0;
@@ -2361,8 +1991,11 @@ ensureHostWindow(a0, it->second);
             lastError_ = 0;
             ret = 1;
         }
-    } else if (ordinal == 0x035D || ordinal == 0x035F || ordinal == 0x0360) {
-        const bool peek = ordinal == 0x0360 || ordinal == 0x035F;
+    } else if (ordinal == ord(CoredllOrdinal::GetMessageW) ||
+               ordinal == ord(CoredllOrdinal::GetMessageWNoWait) ||
+               ordinal == ord(CoredllOrdinal::PeekMessageW)) {
+        const bool peek = ordinal == ord(CoredllOrdinal::PeekMessageW) ||
+                          ordinal == ord(CoredllOrdinal::GetMessageWNoWait);
         const uint32_t removeFlags = peek ? stackArg(4) : 1;
         enqueueDueTimers();
         GuestMessage message{};
@@ -2399,7 +2032,7 @@ ensureHostWindow(a0, it->second);
             writeGuestMessage(a0, message);
             ret = 1;
         }
-    } else if (ordinal == 0x021E) {
+    } else if (ordinal == ord(CoredllOrdinal::GetSystemInfo)) {
         if (a0) {
             writeU32(a0, 0); // wProcessorArchitecture + wReserved
             writeU32(a0 + 4, 0x1000);
@@ -2413,13 +2046,13 @@ ensureHostWindow(a0, it->second);
             writeU32(a0 + 36, 0);
         }
         ret = 0;
-    } else if (ordinal == 0x0143) {
+    } else if (ordinal == ord(CoredllOrdinal::GetStoreInformation)) {
         if (a0) {
             writeU32(a0, 64u * 1024u * 1024u);
             writeU32(a0 + 4, 32u * 1024u * 1024u);
         }
         ret = a0 ? 1 : 0;
-    } else if (ordinal == 0x05EF) {
+    } else if (ordinal == ord(CoredllOrdinal::GlobalAddAtomW)) {
         const std::string atomName = lowerAscii(readUtf16(a0));
         if (atomName.empty()) {
             lastError_ = 87;
@@ -2434,12 +2067,12 @@ ensureHostWindow(a0, it->second);
             lastError_ = 0;
             ret = it->second;
         }
-    } else if (ordinal == 0x05F1) {
+    } else if (ordinal == ord(CoredllOrdinal::GlobalFindAtomW)) {
         const std::string atomName = lowerAscii(readUtf16(a0));
         auto it = atomsByName_.find(atomName);
         ret = it == atomsByName_.end() ? 0 : it->second;
         lastError_ = ret ? 0 : 2;
-    } else if (ordinal == 0x05F0) {
+    } else if (ordinal == ord(CoredllOrdinal::GlobalDeleteAtom)) {
         auto it = atomNames_.find(uint16_t(a0));
         if (it != atomNames_.end()) {
             atomsByName_.erase(it->second);
@@ -2447,9 +2080,10 @@ ensureHostWindow(a0, it->second);
         }
         ret = 0;
         lastError_ = 0;
-    } else if (ordinal == 0x01C3) {
+    } else if (ordinal == ord(CoredllOrdinal::WNetGetUserW)) {
         ret = handleWNetGetUserW(a0, a1, a2);
-    } else if (ordinal == 0x01C2 || ordinal == 0x01BE) {
+    } else if (ordinal == ord(CoredllOrdinal::WNetGetUniversalNameW) ||
+               ordinal == ord(CoredllOrdinal::WNetConnectionDialog1W)) {
         lastError_ = 1200;
         ret = 1200;
     } else {
