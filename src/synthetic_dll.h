@@ -447,14 +447,7 @@ private:
     void presentHostWindows(bool force);
     void invalidateHostWindows();
     void queueGuestPaint(uint32_t hwnd, bool erase);
-    void retireCoveringRootPopupsForNestedChild(uint32_t childHwnd);
     std::pair<int32_t, int32_t> guestWindowOrigin(uint32_t hwnd) const;
-    void retireOwnedPopupsCoveredByChild(uint32_t childHwnd);
-    void retireOwnedPopupsCoveredByChildArea(uint32_t childHwnd,
-                                             int32_t left,
-                                             int32_t top,
-                                             int32_t right,
-                                             int32_t bottom);
     void noteGuestWindowPaint(uint32_t hwnd,
                               int32_t left,
                               int32_t top,
