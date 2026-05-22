@@ -2,6 +2,7 @@ param(
     [string]$Emulator = ".\x64\Debug\iNavi_Unicorn_Emulator.exe",
     [string]$Target = "C:\Users\royna\Downloads\INAVI\INavi\INavi.exe",
     [string]$Registry = ".\regs.json",
+    [string]$SdmmcPath = "\SDMMC Disk",
     [string[]]$FsRoot = @(
         "C:\Users\royna\Downloads\INAVI",
         "C:\Users\royna\Downloads\DUMPPLZ\FILES",
@@ -243,7 +244,7 @@ $stdoutPath = Join-Path $runDir "emulator.stdout.log"
 $stderrPath = Join-Path $runDir "emulator.stderr.log"
 $manifestPath = Join-Path $runDir "manifest.json"
 
-$argumentList = @($Target, "--registry", $Registry)
+$argumentList = @($Target, "--registry", $Registry, "--sdmmc-path", $SdmmcPath)
 foreach ($root in $FsRoot) {
     $argumentList += @("--fs-root", $root)
 }

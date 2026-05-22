@@ -11,6 +11,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 struct SyntheticModule {
@@ -31,6 +32,7 @@ public:
     void setFramebuffer(uint32_t* bgra, int width, int height);
     void setRegistryPath(const std::filesystem::path& path);
     void setFileSystemRoots(std::vector<std::filesystem::path> roots);
+    void setSdmmcPath(std::string path);
     void setGpsCommPort(std::string port);
     void registerLoadedModule(const std::string& moduleName, const std::filesystem::path& path, uint32_t base,
                               const std::map<std::string, uint32_t>& exportsByName = {},
@@ -43,11 +45,320 @@ public:
     static void hookCode(uc_engine* uc, uint64_t address, uint32_t size, void* user);
 
 private:
-    struct ExportEntry {
-        std::string moduleName;
-        std::string name;
-        uint16_t ordinal{};
-        uint64_t calls{};
+    enum class SyntheticModuleKind : uint8_t {
+        Unknown,
+        Coredll,
+        Commctrl,
+        Winsock,
+        Ole32,
+        OleAut32,
+    };
+    enum class SyntheticExportCode : uint16_t {
+        Unknown,
+        CommctrlInitCommonControls,
+        CommctrlInitCommonControlsEx,
+        CommctrlCommandBarCreate,
+        CommctrlCommandBarShow,
+        CommctrlCommandBarAddBitmap,
+        CommctrlCommandBarInsertComboBox,
+        CommctrlCommandBarInsertControl,
+        CommctrlCommandBarInsertMenubar,
+        CommctrlCommandBarGetMenu,
+        CommctrlCommandBarAddAdornments,
+        CommctrlCommandBarGetItemWindow,
+        CommctrlCommandBarHeight,
+        CommctrlIsCommandBarMessage,
+        CommctrlCreateUpDownControl,
+        CommctrlCreateToolbar,
+        CommctrlCreateToolbarEx,
+        CommctrlCreateStatusWindowW,
+        CommctrlPropertySheetW,
+        CommctrlCreatePropertySheetPageW,
+        CommctrlDestroyPropertySheetPage,
+        CommctrlDrawStatusTextW,
+        CommctrlInvertRect,
+        CommctrlCommandBarInsertMenubarEx,
+        CommctrlCommandBarDrawMenuBar,
+        CommctrlCommandBarAlignAdornments,
+        CommctrlInitClass,
+        CommctrlListViewSetItemSpacing,
+        WinsockCleanup,
+        WinsockStartup,
+        WinsockFdIsSet,
+        WinsockAccept,
+        WinsockBind,
+        WinsockCloseSocket,
+        WinsockConnect,
+        WinsockGetHostByName,
+        WinsockGetHostName,
+        WinsockHtonl,
+        WinsockHtons,
+        WinsockInetAddr,
+        WinsockInetNtoa,
+        WinsockIoctlSocket,
+        WinsockListen,
+        WinsockNtohl,
+        WinsockNtohs,
+        WinsockRecv,
+        WinsockSelect,
+        WinsockSend,
+        WinsockSetSockOpt,
+        WinsockSocket,
+        CoreDllWaveOutGetNumDevs,
+        CoreDllWaveOutSetVolume,
+        CoreDllWaveOutClose,
+        CoreDllWaveOutPrepareHeader,
+        CoreDllWaveOutUnprepareHeader,
+        CoreDllWaveOutWrite,
+        CoreDllWaveOutReset,
+        CoreDllWaveOutOpen,
+        CoreDllWaveInClose,
+        CoreDllWaveInUnprepareHeader,
+        CoreDllWaveInAddBuffer,
+        CoreDllWaveInReset,
+        CoreDllWaveInGetID,
+        CoreDllWaveInMessage,
+        CoreDllWaveInOpen,
+        CoreDllMixerGetControlDetails,
+        CoreDllRegCreateKeyExW,
+        CoreDllRegCloseKey,
+        CoreDllRegDeleteKeyW,
+        CoreDllRegDeleteValueW,
+        CoreDllRegEnumValueW,
+        CoreDllRegEnumKeyExW,
+        CoreDllRegOpenKeyExW,
+        CoreDllRegQueryInfoKeyW,
+        CoreDllRegQueryValueExW,
+        CoreDllRegSetValueExW,
+        CoreDllRegFlushKey,
+        CoreDllSystemTimeToFileTime,
+        CoreDllFileTimeToSystemTime,
+        CoreDllGetLocalTime,
+        CoreDllGetSystemTime,
+        CoreDllGetTimeZoneInformation,
+        CoreDllSleep,
+        CoreDllGetTickCount,
+        CoreDllQueryPerformanceCounter,
+        CoreDllQueryPerformanceFrequency,
+        CoreDllGetProcessIndexFromID,
+        CoreDllGetLastError,
+        CoreDllSetLastError,
+        CoreDllIsBadReadPtr,
+        CoreDllIsBadWritePtr,
+        CoreDllIsProcessDying,
+        CoreDllLocalAlloc,
+        CoreDllLocalReAlloc,
+        CoreDllLocalSize,
+        CoreDllLocalFree,
+        CoreDllRemoteLocalReAlloc,
+        CoreDllHeapCreate,
+        CoreDllHeapDestroy,
+        CoreDllHeapAlloc,
+        CoreDllHeapReAlloc,
+        CoreDllHeapSize,
+        CoreDllHeapFree,
+        CoreDllGetProcessHeap,
+        CoreDllVirtualAlloc,
+        CoreDllVirtualFree,
+        CoreDllLocalAllocTrace,
+        CoreDllFree,
+        CoreDllMalloc,
+        CoreDllRealloc,
+        CoreDllOperatorDelete,
+        CoreDllOperatorNew,
+        CoreDllOperatorVectorNew,
+        CoreDllOperatorVectorDelete,
+        CoreDllOperatorNewNoThrow,
+        CoreDllOperatorVectorNewNoThrow,
+        CoreDllOperatorDeleteNoThrow,
+        CoreDllOperatorVectorDeleteNoThrow,
+        CoreDllRemoteHeapFree,
+        CoreDllInitializeCriticalSection,
+        CoreDllDeleteCriticalSection,
+        CoreDllEnterCriticalSection,
+        CoreDllLeaveCriticalSection,
+        CoreDllTryEnterCriticalSection,
+        CoreDllTlsGetValue,
+        CoreDllTlsSetValue,
+        CoreDllTlsCall,
+        CoreDllInterlockedTestExchange,
+        CoreDllInterlockedIncrement,
+        CoreDllInterlockedDecrement,
+        CoreDllInterlockedExchange,
+        CoreDllInterlockedExchangeAdd,
+        CoreDllInterlockedCompareExchange,
+        CoreDllClearCommError,
+        CoreDllGetCommState,
+        CoreDllPurgeComm,
+        CoreDllSetCommMask,
+        CoreDllSetCommState,
+        CoreDllSetCommTimeouts,
+        CoreDllSetupComm,
+        CoreDllCopyRect,
+        CoreDllEqualRect,
+        CoreDllInflateRect,
+        CoreDllIsRectEmpty,
+        CoreDllPtInRect,
+        CoreDllSetRect,
+        CoreDllSetRectEmpty,
+        CoreDllCreateThread,
+        CoreDllCreateEventW,
+        CoreDllEventModify,
+        CoreDllWaitForMultipleObjects,
+        CoreDllResumeThread,
+        CoreDllSetThreadPriority,
+        CoreDllGetThreadPriority,
+        CoreDllCreateMutexW,
+        CoreDllReleaseMutex,
+        CoreDllAtoi,
+        CoreDllAtof,
+        CoreDllCos,
+        CoreDllHypot,
+        CoreDllRand,
+        CoreDllSqrt,
+        CoreDllSrand,
+        CoreDllSin,
+        CoreDllStrtol,
+        CoreDllStrtoul,
+        CoreDllWcstoul,
+        CoreDllFmodf,
+        CoreDllLlDiv,
+        CoreDllFloatToLongLong,
+        CoreDllFloatAdd,
+        CoreDllDoubleAdd,
+        CoreDllFloatSub,
+        CoreDllDoubleSub,
+        CoreDllFloatMul,
+        CoreDllDoubleMul,
+        CoreDllFloatDiv,
+        CoreDllDoubleDiv,
+        CoreDllFloatToLong,
+        CoreDllFloatToUnsignedLong,
+        CoreDllDoubleToLong,
+        CoreDllDoubleToUnsignedLong,
+        CoreDllLongToDouble,
+        CoreDllUnsignedLongToDouble,
+        CoreDllFloatToDouble,
+        CoreDllDoubleToFloat,
+        CoreDllLongToFloat,
+        CoreDllFloatLessThan,
+        CoreDllFloatLessEqual,
+        CoreDllFloatEqual,
+        CoreDllFloatGreaterEqual,
+        CoreDllFloatGreaterThan,
+        CoreDllFloatNotEqual,
+        CoreDllDoubleLessThan,
+        CoreDllDoubleLessEqual,
+        CoreDllDoubleEqual,
+        CoreDllDoubleGreaterEqual,
+        CoreDllDoubleGreaterThan,
+        CoreDllFgetc,
+        CoreDllFgets,
+        CoreDllFopen,
+        CoreDllFclose,
+        CoreDllFread,
+        CoreDllFwrite,
+        CoreDllFflush,
+        CoreDllFeof,
+        CoreDllFerror,
+        CoreDllFseek,
+        CoreDllFtell,
+        CoreDllWfopen,
+        CoreDllLongjmp,
+        CoreDllMemcmp,
+        CoreDllMemcpy,
+        CoreDllMemmove,
+        CoreDllMemset,
+        CoreDllStrcat,
+        CoreDllStrcmp,
+        CoreDllStrcpy,
+        CoreDllStrcspn,
+        CoreDllStrlen,
+        CoreDllStrtok,
+        CoreDllStricmp,
+        CoreDllStrnicmp,
+        CoreDllUltow,
+        CoreDllToupper,
+        CoreDllSnwprintf,
+        CoreDllSwprintf,
+        CoreDllVswprintf,
+        CoreDllPrintf,
+        CoreDllVsnwprintf,
+        CoreDllGetCrtStorageEx,
+        CoreDllGetCrtFlags,
+        CoreDllSetjmp,
+        CoreDllEhvecCtor,
+        CoreDllSprintf,
+        CoreDllSnprintf,
+        CoreDllWsprintfW,
+        CoreDllWcschr,
+        CoreDllWcscpy,
+        CoreDllWcscspn,
+        CoreDllWcslen,
+        CoreDllWcsncmp,
+        CoreDllWcsrchr,
+        CoreDllWcsstr,
+        CoreDllWcsdup,
+        CoreDllWtol,
+        CoreDllWcsnicmp,
+        CoreDllWcsicmp,
+        CoreDllCreateDirectoryW,
+        CoreDllDeleteFileW,
+        CoreDllGetFileAttributesW,
+        CoreDllFindFirstFileW,
+        CoreDllCreateFileW,
+        CoreDllReadFile,
+        CoreDllWriteFile,
+        CoreDllGetFileSize,
+        CoreDllSetFilePointer,
+        CoreDllFlushFileBuffers,
+        CoreDllSetFileTime,
+        CoreDllFindClose,
+        CoreDllFindNextFileW,
+        CoreDllGetFileAttributesExW,
+        CoreDllGetWindowTextW,
+        CoreDllGetWindowTextLengthW,
+        CoreDllEnableWindow,
+        CoreDllIsWindowEnabled,
+        CoreDllSetFocus,
+        CoreDllGetFocus,
+        CoreDllGetCapture,
+        CoreDllSetCapture,
+        CoreDllReleaseCapture,
+        CoreDllBeginPaint,
+        CoreDllEndPaint,
+        CoreDllGetDC,
+        CoreDllReleaseDC,
+        CoreDllValidateRect,
+        CoreDllGetDCEx,
+        CoreDllFindResource,
+        CoreDllFindResourceW,
+        CoreDllLoadResource,
+        CoreDllSizeofResource,
+        CoreDllLoadAcceleratorsW,
+        CoreDllLoadIconW,
+        CoreDllLoadImageW,
+        CoreDllLoadMenuW,
+        CoreDllLoadStringW,
+        CoreDllLoadCursorW,
+        CoreDllRemoveMenu,
+        CoreDllCheckMenuItem,
+        CoreDllCheckMenuRadioItem,
+        CoreDllSetCursor,
+        CoreDllGetCursorPos,
+        CoreDllGetSystemMetrics,
+        CoreDllGetSysColor,
+        CoreDllGetSysColorBrush,
+        CoreDllRegisterWindowMessageW,
+        CoreDllAdjustWindowRectEx,
+        CoreDllGetDlgItem,
+        CoreDllGetDlgCtrlID,
+        CoreDllGetForegroundWindow,
+        CoreDllSetForegroundWindow,
+        CoreDllSetActiveWindow,
+        CoreDllGetActiveWindow,
+        CoreDllMessageBoxW,
+        CoreDllIsWindowVisible,
     };
     struct GuestCallArgs {
         uint32_t a0{};
@@ -55,6 +366,36 @@ private:
         uint32_t a2{};
         uint32_t a3{};
         uint32_t ra{};
+    };
+    using OrdinalHandlerFunction = bool (SyntheticDllRuntime::*)(SyntheticExportCode code,
+                                                                 const GuestCallArgs& args,
+                                                                 uint32_t& ret);
+    struct ExportEntry {
+        std::string moduleName;
+        std::string name;
+        SyntheticModuleKind moduleKind{SyntheticModuleKind::Unknown};
+        SyntheticExportCode code{SyntheticExportCode::Unknown};
+        uint16_t ordinal{};
+        uint64_t calls{};
+    };
+    struct OrdinalHandlerSpec {
+        const char* name{};
+        SyntheticExportCode code{SyntheticExportCode::Unknown};
+        OrdinalHandlerFunction handler{};
+    };
+    using OrdinalHandlerMap = std::unordered_map<uint16_t, OrdinalHandlerSpec>;
+    struct OrdinalHandlerGroup {
+        const char* name{};
+        OrdinalHandlerMap handlers;
+    };
+    struct RegisteredSyntheticDll {
+        std::string name;
+        OrdinalHandlerMap handlers;
+    };
+    struct SyntheticDllSpec {
+        const char* name{};
+        uint16_t maxOrdinal{};
+        OrdinalHandlerMap handlers;
     };
     struct GuestHandle {
         enum class Kind {
@@ -82,6 +423,7 @@ private:
             GuestProcess,
             GuestThread,
             GuestSerialDevice,
+            GuestFind,
             GuestWindow,
             GuestDc,
             GuestBrush,
@@ -249,6 +591,7 @@ private:
     };
     struct PendingBlockingApi {
         std::string name;
+        uint16_t ordinal{};
         GuestCallArgs args;
         uint32_t paintDispatches{};
     };
@@ -311,11 +654,14 @@ private:
     uint32_t updateWindowContinuationStub_ = 0;
     uint32_t threadExitStub_ = 0;
     std::string mainModulePath_ = "\\INavi\\INavi.exe";
+    std::string sdmmcGuestRoot_ = "\\SDMMC Disk";
+    std::filesystem::path hostMainModulePath_;
     uint32_t mainModuleBase_ = 0;
     std::filesystem::path hostBaseDir_;
     std::vector<std::filesystem::path> fileSystemRoots_;
     uint16_t nextAtom_ = 0xc000;
     std::map<uint32_t, ExportEntry> exportsByAddress_;
+    std::map<std::string, RegisteredSyntheticDll> registeredDllsByName_;
     std::map<uint32_t, uint32_t> allocationSizes_;
     std::map<uint32_t, uint32_t> allocationCapacities_;
     std::multimap<uint32_t, uint32_t> freeBlocksBySize_;
@@ -378,25 +724,333 @@ private:
     nlohmann::json registry_;
     bool registryDirty_{};
     std::string gpsCommPort_;
+    bool diagnosticDumpsEnabled_{};
 
     std::optional<SyntheticModule> createCoredll();
     std::optional<SyntheticModule> createCommctrl();
+    std::optional<SyntheticModule> createWinsock(const std::string& dllName);
+    std::optional<SyntheticModule> createOle32();
+    std::optional<SyntheticModule> createOleAut32();
     std::optional<SyntheticModule> createGenericOrdinalDll(const std::string& moduleName, uint16_t maxOrdinal);
-    void registerExport(SyntheticModule& module, uint16_t ordinal, const std::string& name);
+    std::optional<SyntheticModule> createGenericOrdinalDll(const SyntheticDllSpec& spec);
+    void registerCommctrlExports(SyntheticModule& module);
+    void registerCoredllAudioExports(SyntheticModule& module);
+    void registerCoredllRegistryExports(SyntheticModule& module);
+    void registerCoredllTimeExports(SyntheticModule& module);
+    void registerCoredllSystemExports(SyntheticModule& module);
+    void registerCoredllMemoryExports(SyntheticModule& module);
+    void registerCoredllSyncExports(SyntheticModule& module);
+    void registerCoredllCommExports(SyntheticModule& module);
+    void registerCoredllRectExports(SyntheticModule& module);
+    void registerCoredllThreadExports(SyntheticModule& module);
+    void registerCoredllMathExports(SyntheticModule& module);
+    void registerCoredllCrtExports(SyntheticModule& module);
+    void registerCoredllFsExports(SyntheticModule& module);
+    void registerCoredllWindowExports(SyntheticModule& module);
+    void registerCoredllPaintExports(SyntheticModule& module);
+    void registerCoredllResExports(SyntheticModule& module);
+    void registerCoredllGuiExports(SyntheticModule& module);
+    void registerHandlers(SyntheticModule& module, const OrdinalHandlerGroup& group);
+    void registerHandlers(SyntheticModule& module, const OrdinalHandlerMap& handlers);
+    void registerExport(SyntheticModule& module, uint16_t ordinal, const std::string& name,
+                        SyntheticExportCode code = SyntheticExportCode::Unknown);
     void writeStub(uint32_t address);
+    SyntheticModuleKind moduleKindForName(const std::string& moduleName) const;
+    const OrdinalHandlerSpec* findOrdinalHandler(const ExportEntry& entry) const;
     void dispatch(const ExportEntry& entry);
-    bool dispatchSimpleHostWin32(const std::string& name, const GuestCallArgs& args, uint32_t& ret);
-    bool dispatchHostWin32(const std::string& name, const GuestCallArgs& args, uint32_t& ret);
-    bool dispatchGuestMemoryApi(const std::string& name, const GuestCallArgs& args, uint32_t& ret);
-    bool dispatchCommctrl(const std::string& name, const GuestCallArgs& args, uint32_t& ret);
-    bool dispatchRegistryApi(const std::string& name, const GuestCallArgs& args, uint32_t& ret);
-    bool dispatchWinsock(const std::string& name, const GuestCallArgs& args, uint32_t& ret);
+    bool dispatchHostWin32(uint16_t ordinal, const GuestCallArgs& args, uint32_t& ret);
+    bool dispatchGuestMemoryApi(uint16_t ordinal, const GuestCallArgs& args, uint32_t& ret);
+    bool dispatchSimpleHostWin32(uint16_t ordinal, const GuestCallArgs& args, uint32_t& ret);
     bool dispatchOle32(const std::string& name, const GuestCallArgs& args, uint32_t& ret);
     bool dispatchOleAut32(const std::string& name, const GuestCallArgs& args, uint32_t& ret);
-    bool dispatchWinmm(const std::string& name, const GuestCallArgs& args, uint32_t& ret);
+    bool handleCommctrlInitCommonControls(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleCommctrlInitClass(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleCommctrlCommandBarCreate(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleCommctrlCommandBarShow(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleCommctrlCommandBarHeight(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleCommctrlCommandBarInsertComboBox(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleCommctrlCommandBarInsertControl(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleCommctrlCommandBarAddBitmap(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleCommctrlCommandBarInsertMenubar(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleCommctrlCommandBarGetMenu(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleCommctrlCommandBarAdornments(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleCommctrlIsCommandBarMessage(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleCommctrlCreateStatusWindowW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleCommctrlCreateToolbar(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleCommctrlDrawStatusTextW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleCommctrlInvertRect(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleCommctrlCreatePropertySheetPageW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleCommctrlDestroyPropertySheetPage(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleCommctrlPropertySheetW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleCommctrlListViewSetItemSpacing(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWinsockCleanup(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWinsockStartup(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWinsockFdIsSet(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWinsockAccept(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWinsockBind(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWinsockCloseSocket(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWinsockConnect(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWinsockGetHostByName(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWinsockGetHostName(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWinsockHtonl(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWinsockHtons(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWinsockInetAddr(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWinsockInetNtoa(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWinsockIoctlSocket(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWinsockListen(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWinsockNtohl(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWinsockNtohs(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWinsockRecv(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWinsockSelect(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWinsockSend(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWinsockSetSockOpt(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWinsockSocket(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWaveOutGetNumDevs(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWaveOutSetVolume(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWaveOutClose(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWaveOutPrepareHeader(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWaveOutUnprepareHeader(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWaveOutWrite(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWaveOutReset(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWaveOutOpen(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWaveInClose(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWaveInUnprepareHeader(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWaveInAddBuffer(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWaveInReset(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWaveInGetID(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWaveInMessage(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWaveInOpen(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleMixerGetControlDetails(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleRegCreateKeyExW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleRegCloseKey(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleRegDeleteKeyW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleRegDeleteValueW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleRegEnumValueW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleRegEnumKeyExW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleRegOpenKeyExW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleRegQueryInfoKeyW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleRegQueryValueExW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleRegSetValueExW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleRegFlushKey(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleSystemTimeToFileTime(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleFileTimeToSystemTime(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleGetLocalTime(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleGetSystemTime(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleGetTimeZoneInformation(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleSleep(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleGetTickCount(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleQueryPerformanceCounter(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleQueryPerformanceFrequency(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleGetProcessIndexFromID(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleGetLastError(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleSetLastError(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleIsBadReadPtr(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleIsBadWritePtr(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleIsProcessDying(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleLocalAlloc(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleLocalReAlloc(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleLocalSize(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleLocalFree(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleRemoteLocalReAlloc(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleHeapCreate(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleHeapDestroy(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleHeapAlloc(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleHeapReAlloc(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleHeapSize(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleHeapFree(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleGetProcessHeap(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleVirtualAlloc(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleVirtualFree(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleLocalAllocTrace(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleFree(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleMalloc(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleRealloc(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleOperatorDelete(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleOperatorNew(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleOperatorVectorNew(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleOperatorVectorDelete(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleOperatorNewNoThrow(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleOperatorVectorNewNoThrow(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleOperatorDeleteNoThrow(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleOperatorVectorDeleteNoThrow(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleRemoteHeapFree(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleInitializeCriticalSection(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleDeleteCriticalSection(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleEnterCriticalSection(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleLeaveCriticalSection(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleTryEnterCriticalSection(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleTlsGetValue(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleTlsSetValue(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleTlsCall(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleInterlockedTestExchange(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleInterlockedIncrement(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleInterlockedDecrement(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleInterlockedExchange(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleInterlockedExchangeAdd(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleInterlockedCompareExchange(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleClearCommError(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleGetCommState(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handlePurgeComm(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleSetCommMask(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleSetCommState(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleSetCommTimeouts(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleSetupComm(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleCopyRect(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleEqualRect(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleInflateRect(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleIsRectEmpty(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handlePtInRect(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleSetRect(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleSetRectEmpty(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleCreateThread(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleCreateEventW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleEventModify(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWaitForMultipleObjects(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleResumeThread(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleSetThreadPriority(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleGetThreadPriority(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleCreateMutexW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleReleaseMutex(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleAtoi(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleAtof(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleCos(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleHypot(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleRand(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleSqrt(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleSrand(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleSin(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleStrtol(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleStrtoul(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWcstoul(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleFmodf(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleLlDiv(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleFloatToLongLong(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleFloatAdd(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleDoubleAdd(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleFloatSub(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleDoubleSub(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleFloatMul(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleDoubleMul(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleFloatDiv(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleDoubleDiv(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleFloatToLong(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleFloatToUnsignedLong(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleDoubleToLong(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleDoubleToUnsignedLong(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleLongToDouble(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleUnsignedLongToDouble(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleFloatToDouble(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleDoubleToFloat(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleLongToFloat(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleFloatLessThan(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleFloatLessEqual(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleFloatEqual(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleFloatGreaterEqual(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleFloatGreaterThan(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleFloatNotEqual(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleDoubleLessThan(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleDoubleLessEqual(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleDoubleEqual(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleDoubleGreaterEqual(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleDoubleGreaterThan(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleFgetc(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleFgets(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleFopen(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleFclose(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleFread(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleFwrite(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleFflush(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleFeof(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleFerror(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleFseek(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleFtell(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWfopen(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleLongjmp(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleMemcmp(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleMemcpy(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleMemset(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleStrcat(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleStrcmp(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleStrcpy(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleStrcspn(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleStrlen(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleStrtok(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleStricmp(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleStrnicmp(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleUltow(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleToupper(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWideFormat(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleNarrowFormat(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleGetCrtStorageEx(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleGetCrtFlags(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleSetjmp(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleEhvecCtor(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWcschr(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWcscpy(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWcscspn(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWcslen(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWcsncmp(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWcsicmp(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWcsstr(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWcsdup(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWtol(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleCreateDirectoryW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleDeleteFileW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleGetFileAttributesW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleFindFirstFileW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleCreateFileW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleReadFile(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleWriteFile(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleGetFileSize(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleSetFilePointer(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleFlushFileBuffers(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleSetFileTime(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleFindClose(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleFindNextFileW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleGetFileAttributesExW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleGetWindowTextW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleGetWindowTextLengthW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleEnableWindow(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleIsWindowEnabled(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleSetFocus(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleGetFocus(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleGetCapture(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleSetCapture(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleReleaseCapture(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleBeginPaint(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleEndPaint(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleGetDC(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleReleaseDC(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleValidateRect(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleGetDCEx(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleFindResource(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleSizeofResource(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleLoadResource(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleLoadStringW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleLoadAcceleratorsW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleLoadIconW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleLoadImageW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleLoadMenuW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleLoadCursorOrdinalW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleRemoveMenu(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleCheckMenuItem(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleCheckMenuRadioItem(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleSetCursor(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleGetCursorPos(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleGetSystemMetrics(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleGetSysColor(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleGetSysColorBrushOrdinal(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleRegisterWindowMessageW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleAdjustWindowRectEx(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleGetDlgItem(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleGetDlgCtrlID(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleGetForegroundWindow(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleSetForegroundWindow(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleSetActiveWindow(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleGetActiveWindow(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleMessageBoxW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleIsWindowVisible(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     uint32_t handleWNetGetUserW(uint32_t providerName, uint32_t userName, uint32_t lengthPtr);
-    uint32_t handleWaveInGetID(uint32_t waveInHandle, uint32_t deviceIdPtr);
-    uint32_t handleWaveInBuffer(const std::string& name, uint32_t waveInHandle, uint32_t headerPtr);
     uint32_t handleSystemParametersInfoW(uint32_t action, uint32_t uiParam, uint32_t pvParam, uint32_t flags);
     uint32_t handleLoadCursorW(uint32_t instance, uint32_t cursorName);
     uint32_t handleLoadImageApi(const std::string& name, uint32_t instance, uint32_t imageName,
@@ -444,6 +1098,7 @@ private:
     uint32_t loadMenuResourceHandle(uint32_t nameArg);
     void ensureHostWindow(uint32_t guestHwnd, GuestWindow& window);
     void destroyHostWindow(GuestWindow& window);
+    void syncHostWindowPlacement(GuestWindow& window, bool present);
     void presentHostWindows(bool force);
     void invalidateHostWindows();
     void queueGuestPaint(uint32_t hwnd, bool erase);
@@ -552,6 +1207,8 @@ private:
     std::string readUtf16(uint32_t address, size_t maxChars = 512) const;
     uint32_t writeUtf16(uint32_t address, const std::string& value, uint32_t maxChars) const;
     std::filesystem::path resolveGuestPath(const std::string& guestPath) const;
+    void refreshGuestMainModulePath();
+    std::vector<std::string> virtualRootNames() const;
     bool isUnderFileSystemRoot(const std::filesystem::path& path) const;
     uint32_t normalizeVirtualFileMiss(const std::filesystem::path& hostPath, uint32_t error) const;
 };

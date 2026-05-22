@@ -325,6 +325,37 @@ std::string normalizedPathKey(const std::filesystem::path& path) {
     return lowerAscii(text);
 }
 
+bool startsWithPathKey(const std::string& pathKey, const std::string& rootKey) {
+    return pathKey == rootKey ||
+           (pathKey.size() > rootKey.size() &&
+            pathKey.compare(0, rootKey.size(), rootKey) == 0 &&
+            (rootKey.empty() || rootKey.back() == '\\' || pathKey[rootKey.size()] == '\\'));
+}
+
+std::string pathWithBackslashes(std::filesystem::path path) {
+    std::string text = pathToUtf8(path.lexically_normal());
+    std::replace(text.begin(), text.end(), '/', '\\');
+    while (!text.empty() && text.front() == '\\') text.erase(text.begin());
+    return text;
+}
+
+std::string normalizeGuestRootPath(std::string text) {
+    std::replace(text.begin(), text.end(), '/', '\\');
+    while (!text.empty() && std::isspace(static_cast<unsigned char>(text.front()))) text.erase(text.begin());
+    while (!text.empty() && std::isspace(static_cast<unsigned char>(text.back()))) text.pop_back();
+    while (text.size() > 1 && text.back() == '\\') text.pop_back();
+    if (text.empty()) return "\\SDMMC Disk";
+    if (text.front() != '\\') text.insert(text.begin(), '\\');
+    return text;
+}
+
+bool isStorageMountName(const std::string& component) {
+    std::string name = lowerAscii(component);
+    std::replace(name.begin(), name.end(), '_', ' ');
+    while (name.find("  ") != std::string::npos) name.replace(name.find("  "), 2, " ");
+    return name == "sdmmc disk" || name == "sdmmc" || name == "storage card";
+}
+
 std::string registryRootName(uint32_t hkey) {
     switch (hkey) {
     case 0x80000000u: return "hkcr";
@@ -585,13 +616,15 @@ bool sameModule(std::string name, std::string_view wanted) {
     return name == wanted;
 }
 
-bool isRegistryApiName(const std::string& name) {
-    return name == "RegCreateKeyExW" || name == "RegOpenKeyExW" ||
-           name == "RegQueryValueExW" || name == "RegSetValueExW" ||
-           name == "RegDeleteValueW" || name == "RegDeleteKeyW" ||
-           name == "RegEnumKeyExW" || name == "RegEnumValueW" ||
-           name == "RegQueryInfoKeyW" || name == "RegFlushKey" ||
-           name == "RegCloseKey";
+bool envFlagEnabled(const char* name) {
+    char* rawValue = nullptr;
+    size_t valueSize = 0;
+    if (_dupenv_s(&rawValue, &valueSize, name) != 0 || !rawValue) return false;
+    std::string value(rawValue);
+    std::free(rawValue);
+    if (value.empty()) return false;
+    std::string text = lowerAscii(value);
+    return text != "0" && text != "false" && text != "no" && text != "off";
 }
 
 uint16_t readLe16(const std::vector<uint8_t>& bytes, size_t offset) {
@@ -819,6 +852,11 @@ ATOM registerHostPresenterClass() {
 
 SyntheticDllRuntime::SyntheticDllRuntime(uc_engine* uc) : uc_(uc) {
     if (!uc_) throw std::runtime_error("SyntheticDllRuntime requires a Unicorn engine");
+#if defined(NDEBUG)
+    diagnosticDumpsEnabled_ = false;
+#else
+    diagnosticDumpsEnabled_ = envFlagEnabled("INAVI_EMU_DUMPS");
+#endif
     uc_mem_map(uc_, heapBase_, heapLimit_ - heapBase_, UC_PROT_ALL);
     uc_mem_map(uc_, 0x00005000, 0x00001000, UC_PROT_ALL);
     initializeUserKData();
@@ -844,9 +882,10 @@ void SyntheticDllRuntime::updateCurrentThreadKData(uint32_t currentThreadValue, 
 
 void SyntheticDllRuntime::setMainModulePath(std::string path) {
     if (path.empty()) return;
-    mainModulePath_ = path;
-    hostBaseDir_ = std::filesystem::path(std::move(path)).parent_path();
-    loadMainResources(mainModulePath_);
+    hostMainModulePath_ = std::filesystem::path(path);
+    hostBaseDir_ = hostMainModulePath_.parent_path();
+    refreshGuestMainModulePath();
+    loadMainResources(path);
 }
 
 void SyntheticDllRuntime::setMainModuleBase(uint32_t base) {
@@ -858,6 +897,12 @@ void SyntheticDllRuntime::setFileSystemRoots(std::vector<std::filesystem::path> 
     for (auto& root : roots) {
         if (!root.empty()) fileSystemRoots_.push_back(std::move(root));
     }
+    refreshGuestMainModulePath();
+}
+
+void SyntheticDllRuntime::setSdmmcPath(std::string path) {
+    sdmmcGuestRoot_ = normalizeGuestRootPath(std::move(path));
+    refreshGuestMainModulePath();
 }
 
 void SyntheticDllRuntime::setGpsCommPort(std::string port) {
@@ -989,89 +1034,9 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed() {
 std::optional<SyntheticModule> SyntheticDllRuntime::createModule(const std::string& dllName) {
     if (sameModule(dllName, "coredll.dll")) return createCoredll();
     if (sameModule(dllName, "commctrl.dll")) return createCommctrl();
-    if (sameModule(dllName, "winsock.dll") || sameModule(dllName, "ws2.dll")) {
-        const std::string moduleName = sameModule(dllName, "ws2.dll") ? "WS2.dll" : "WINSOCK.dll";
-        auto module = createGenericOrdinalDll(moduleName, 128);
-        if (module) {
-            registerExport(*module, 0x0001, "WSACleanup");
-            registerExport(*module, 0x0003, "WSAStartup");
-            registerExport(*module, 0x0005, "__WSAFDIsSet");
-            registerExport(*module, 0x0006, "accept");
-            registerExport(*module, 0x0007, "bind");
-            registerExport(*module, 0x0008, "closesocket");
-            registerExport(*module, 0x0009, "connect");
-            registerExport(*module, 0x000B, "gethostbyname");
-            registerExport(*module, 0x000C, "gethostname");
-            registerExport(*module, 0x0010, "htonl");
-            registerExport(*module, 0x0011, "htons");
-            registerExport(*module, 0x0012, "inet_addr");
-            registerExport(*module, 0x0013, "inet_ntoa");
-            registerExport(*module, 0x0014, "ioctlsocket");
-            registerExport(*module, 0x0015, "listen");
-            registerExport(*module, 0x0016, "ntohl");
-            registerExport(*module, 0x0017, "ntohs");
-            registerExport(*module, 0x0018, "recv");
-            registerExport(*module, 0x001A, "select");
-            registerExport(*module, 0x001B, "send");
-            registerExport(*module, 0x001E, "setsockopt");
-            registerExport(*module, 0x0020, "socket");
-        }
-        return module;
-    }
-    if (sameModule(dllName, "ole32.dll")) {
-        auto module = createGenericOrdinalDll("ole32.dll", 512);
-        if (module) {
-            registerExport(*module, 0x0000, "CLSIDFromProgID");
-            registerExport(*module, 0x0001, "CLSIDFromString");
-            registerExport(*module, 0x0002, "CoCreateInstance");
-            registerExport(*module, 0x0006, "CoInitializeEx");
-            registerExport(*module, 0x0009, "CoTaskMemAlloc");
-            registerExport(*module, 0x000A, "CoTaskMemFree");
-            registerExport(*module, 0x000B, "CoTaskMemRealloc");
-            registerExport(*module, 0x000D, "CoUninitialize");
-            registerExport(*module, 0x000E, "CoTaskMemSize");
-            registerExport(*module, 0x0011, "ProgIDFromCLSID");
-            registerExport(*module, 0x0013, "StringFromGUID2");
-            registerExport(*module, 0x0014, "StringFromIID");
-            registerExport(*module, 0x001B, "CoCreateGuid");
-            registerExport(*module, 0x001C, "ReadClassStm");
-            registerExport(*module, 0x001D, "OleSave");
-            registerExport(*module, 0x001E, "OleRun");
-            registerExport(*module, 0x001F, "OleIsRunning");
-            registerExport(*module, 0x0022, "StringFromCLSID");
-            registerExport(*module, 0x0025, "CreateOleAdviseHolder");
-            registerExport(*module, 0x0026, "WriteClassStm");
-            registerExport(*module, 0x0027, "OleDraw");
-            registerExport(*module, 0x0028, "OleSetContainedObject");
-            registerExport(*module, 0x01F0, "__ComQueryInterface");
-            registerExport(*module, 0x01F1, "__ComAddRef");
-            registerExport(*module, 0x01F2, "__ComRelease");
-            comQueryInterfaceStub_ = module->imageBase + module->exportsByOrdinal[0x01F0];
-            comAddRefStub_ = module->imageBase + module->exportsByOrdinal[0x01F1];
-            comReleaseStub_ = module->imageBase + module->exportsByOrdinal[0x01F2];
-        }
-        return module;
-    }
-    if (sameModule(dllName, "oleaut32.dll")) {
-        auto module = createGenericOrdinalDll("OLEAUT32.dll", 512);
-        if (module) {
-            registerExport(*module, 0x0001, "CreateErrorInfo");
-            registerExport(*module, 0x000C, "LoadRegTypeLib");
-            registerExport(*module, 0x000D, "LoadTypeLib");
-            registerExport(*module, 0x000F, "RegisterTypeLib");
-            registerExport(*module, 0x0025, "SetErrorInfo");
-            registerExport(*module, 0x0026, "SysAllocString");
-            registerExport(*module, 0x0027, "SysAllocStringByteLen");
-            registerExport(*module, 0x0028, "SysAllocStringLen");
-            registerExport(*module, 0x0029, "SysFreeString");
-            registerExport(*module, 0x002C, "SysStringByteLen");
-            registerExport(*module, 0x002D, "SysStringLen");
-            registerExport(*module, 0x00D8, "VarUI4FromStr");
-            registerExport(*module, 0x00DC, "VariantChangeType");
-            registerExport(*module, 0x00DE, "VariantClear");
-        }
-        return module;
-    }
+    if (sameModule(dllName, "winsock.dll") || sameModule(dllName, "ws2.dll")) return createWinsock(dllName);
+    if (sameModule(dllName, "ole32.dll")) return createOle32();
+    if (sameModule(dllName, "oleaut32.dll")) return createOleAut32();
     return std::nullopt;
 }
 
@@ -1093,88 +1058,25 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     // Ordinals and names are from the Windows CE 4.2 Standard SDK MIPSII
     // coredll.lib COFF import-object headers. Keep these SDK ordinals
     // authoritative; runtime surprises belong in TODO.md until verified.
-    registerExport(module, 0x0002, "InitializeCriticalSection");
-    registerExport(module, 0x0003, "DeleteCriticalSection");
-    registerExport(module, 0x0004, "EnterCriticalSection");
-    registerExport(module, 0x0005, "LeaveCriticalSection");
+    registerCoredllSyncExports(module);
     registerExport(module, 0x0006, "ExitThread");
-    registerExport(module, 0x0009, "InterlockedTestExchange");
-    registerExport(module, 0x000A, "InterlockedIncrement");
-    registerExport(module, 0x000B, "InterlockedDecrement");
-    registerExport(module, 0x000C, "InterlockedExchange");
-    registerExport(module, 0x000F, "TlsGetValue");
-    registerExport(module, 0x0010, "TlsSetValue");
-    registerExport(module, 0x0013, "SystemTimeToFileTime");
-    registerExport(module, 0x0014, "FileTimeToSystemTime");
-    registerExport(module, 0x0017, "GetLocalTime");
-    registerExport(module, 0x0023, "GetLocalTime");
-    registerExport(module, 0x0019, "GetSystemTime");
-    registerExport(module, 0x0025, "GetSystemTime");
-    registerExport(module, 0x001B, "GetTimeZoneInformation");
+    registerCoredllTimeExports(module);
     registerExport(module, 0x002C, "GetAPIAddress");
-    registerExport(module, 0x0021, "LocalAlloc");
-    registerExport(module, 0x0022, "LocalReAlloc");
-    registerExport(module, 0x0023, "LocalSize");
-    registerExport(module, 0x0024, "LocalFree");
-    registerExport(module, 0x0026, "RemoteLocalReAlloc");
-    registerExport(module, 0x002C, "HeapCreate");
-    registerExport(module, 0x002D, "HeapDestroy");
-    registerExport(module, 0x002E, "HeapAlloc");
-    registerExport(module, 0x002F, "HeapReAlloc");
-    registerExport(module, 0x0030, "HeapSize");
-    registerExport(module, 0x0031, "HeapFree");
-    registerExport(module, 0x0032, "GetProcessHeap");
-    registerExport(module, 0x0038, "wsprintfW");
-    registerExport(module, 0x003B, "wcschr");
-    registerExport(module, 0x003D, "wcscpy");
-    registerExport(module, 0x003E, "wcscspn");
-    registerExport(module, 0x003F, "wcslen");
+    registerCoredllMemoryExports(module);
     registerExport(module, 0x0059, "SystemParametersInfoW");
-    registerExport(module, 0x0041, "wcsncmp");
-    registerExport(module, 0x0045, "wcsrchr");
-    registerExport(module, 0x0049, "wcsstr");
-    registerExport(module, 0x004A, "_wcsdup");
-    registerExport(module, 0x004E, "_wtol");
     registerExport(module, 0x0058, "GlobalMemoryStatus");
     registerExport(module, 0x005A, "CreateDIBSection");
-    registerExport(module, 0x005E, "LoadAcceleratorsW");
     registerExport(module, 0x005F, "RegisterClassW");
-    registerExport(module, 0x0060, "CopyRect");
-    registerExport(module, 0x0061, "EqualRect");
-    registerExport(module, 0x0062, "InflateRect");
-    registerExport(module, 0x0064, "IsRectEmpty");
-    registerExport(module, 0x0066, "PtInRect");
-    registerExport(module, 0x0067, "SetRect");
-    registerExport(module, 0x0068, "SetRectEmpty");
-    registerExport(module, 0x006C, "ClearCommError");
-    registerExport(module, 0x0071, "GetCommState");
-    registerExport(module, 0x0073, "PurgeComm");
-    registerExport(module, 0x0075, "SetCommMask");
-    registerExport(module, 0x0076, "SetCommState");
-    registerExport(module, 0x0077, "SetCommTimeouts");
-    registerExport(module, 0x0078, "SetupComm");
-    registerExport(module, 0x00A0, "CreateDirectoryW");
-    registerExport(module, 0x00A5, "DeleteFileW");
-    registerExport(module, 0x00A6, "GetFileAttributesW");
-    registerExport(module, 0x00A7, "FindFirstFileW");
-    registerExport(module, 0x00A8, "CreateFileW");
-    registerExport(module, 0x00AA, "ReadFile");
-    registerExport(module, 0x00AB, "WriteFile");
-    registerExport(module, 0x00AC, "GetFileSize");
-    registerExport(module, 0x00AD, "SetFilePointer");
-    registerExport(module, 0x00AF, "FlushFileBuffers");
-    registerExport(module, 0x00B1, "SetFileTime");
+    registerCoredllRectExports(module);
+    registerCoredllCommExports(module);
+    registerCoredllFsExports(module);
     registerExport(module, 0x00B3, "DeviceIoControl");
-    registerExport(module, 0x00B4, "FindClose");
-    registerExport(module, 0x00B5, "FindNextFileW");
     registerExport(module, 0x00C0, "IsDBCSLeadByteEx");
     registerExport(module, 0x00C1, "iswctype");
     registerExport(module, 0x00C4, "MultiByteToWideChar");
     registerExport(module, 0x00C5, "WideCharToMultiByte");
     registerExport(module, 0x00DD, "CharLowerW");
     registerExport(module, 0x00E0, "CharUpperW");
-    registerExport(module, 0x00E5, "_wcsnicmp");
-    registerExport(module, 0x00E6, "_wcsicmp");
     registerExport(module, 0x00EA, "FormatMessageW");
     registerExport(module, 0x00F6, "CreateWindowExW");
     registerExport(module, 0x00F7, "SetWindowPos");
@@ -1183,13 +1085,10 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x00FA, "InvalidateRect");
     registerExport(module, 0x00FB, "GetWindow");
     registerExport(module, 0x00FF, "ScreenToClient");
-    registerExport(module, 0x0101, "GetWindowTextW");
     registerExport(module, 0x0102, "SetWindowLongW");
     registerExport(module, 0x0103, "GetWindowLongW");
-    registerExport(module, 0x0104, "BeginPaint");
-    registerExport(module, 0x0105, "EndPaint");
-    registerExport(module, 0x0106, "GetDC");
-    registerExport(module, 0x0107, "ReleaseDC");
+    registerCoredllPaintExports(module);
+    registerCoredllGuiExports(module);
     registerExport(module, 0x0108, "DefWindowProcW");
     registerExport(module, 0x0109, "DestroyWindow");
     registerExport(module, 0x010A, "ShowWindow");
@@ -1197,58 +1096,23 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x010D, "GetParent");
     registerExport(module, 0x0110, "MoveWindow");
     registerExport(module, 0x0100, "ScreenToClient");
-    registerExport(module, 0x0114, "GetWindowTextLengthW");
-    registerExport(module, 0x0116, "ValidateRect");
-    registerExport(module, 0x011F, "EnableWindow");
-    registerExport(module, 0x0120, "IsWindowEnabled");
+    registerCoredllWindowExports(module);
     registerExport(module, 0x011D, "CallWindowProcW");
     registerExport(module, 0x011E, "FindWindowW");
     registerExport(module, 0x0143, "GetStoreInformation");
-    registerExport(module, 0x017B, "waveOutGetNumDevs");
-    registerExport(module, 0x017E, "waveOutSetVolume");
-    registerExport(module, 0x0180, "waveOutClose");
-    registerExport(module, 0x0181, "waveOutPrepareHeader");
-    registerExport(module, 0x0182, "waveOutUnprepareHeader");
-    registerExport(module, 0x0183, "waveOutWrite");
-    registerExport(module, 0x0186, "waveOutReset");
-    registerExport(module, 0x018F, "waveOutOpen");
-    registerExport(module, 0x0193, "waveInClose");
-    registerExport(module, 0x0195, "waveInUnprepareHeader");
-    registerExport(module, 0x0196, "waveInAddBuffer");
-    registerExport(module, 0x0199, "waveInReset");
-    registerExport(module, 0x019B, "waveInGetID");
-    registerExport(module, 0x019C, "waveInMessage");
-    registerExport(module, 0x019D, "waveInOpen");
+    registerCoredllAudioExports(module);
+    registerCoredllRegistryExports(module);
     registerExport(module, 0x01BE, "WNetConnectionDialog1W");
     registerExport(module, 0x01C2, "WNetGetUniversalNameW");
     registerExport(module, 0x01C3, "WNetGetUserW");
-    registerExport(module, 0x01C8, "RegCreateKeyExW");
-    registerExport(module, 0x01EC, "CreateThread");
+    registerCoredllThreadExports(module);
     registerExport(module, 0x01ED, "CreateProcessW");
-    registerExport(module, 0x01EF, "CreateEventW");
-    registerExport(module, 0x01EE, "EventModify");
-    registerExport(module, 0x01F0, "Sleep");
     registerExport(module, 0x01F1, "WaitForSingleObject");
-    registerExport(module, 0x01F2, "WaitForMultipleObjects");
-    registerExport(module, 0x01F4, "ResumeThread");
-    registerExport(module, 0x0202, "SetThreadPriority");
-    registerExport(module, 0x0203, "GetThreadPriority");
-    registerExport(module, 0x0204, "GetLastError");
-    registerExport(module, 0x0205, "SetLastError");
-    registerExport(module, 0x0208, "TlsCall");
-    registerExport(module, 0x020C, "VirtualAlloc");
-    registerExport(module, 0x020D, "VirtualFree");
     registerExport(module, 0x0210, "LoadLibraryW");
     registerExport(module, 0x0212, "GetProcAddressW");
-    registerExport(module, 0x0213, "FindResource");
-    registerExport(module, 0x0214, "FindResourceW");
-    registerExport(module, 0x0215, "LoadResource");
-    registerExport(module, 0x0216, "SizeofResource");
+    registerCoredllResExports(module);
     registerExport(module, 0x021E, "GetSystemInfo");
-    registerExport(module, 0x0217, "GetTickCount");
     registerExport(module, 0x0219, "GetModuleFileNameW");
-    registerExport(module, 0x021A, "QueryPerformanceCounter");
-    registerExport(module, 0x021B, "QueryPerformanceFrequency");
     registerExport(module, 0x021D, "OutputDebugStringW");
     registerExport(module, 0x0224, "CreateFileMappingW");
     registerExport(module, 0x0225, "MapViewOfFile");
@@ -1256,37 +1120,10 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x0227, "FlushViewOfFile");
     registerExport(module, 0x0228, "CreateFileForMapping");
     registerExport(module, 0x0229, "CloseHandle");
-    registerExport(module, 0x022B, "CreateMutexW");
-    registerExport(module, 0x022C, "ReleaseMutex");
     registerExport(module, 0x022D, "KernelIoControl");
-    registerExport(module, 0x0280, "GetProcessIndexFromID");
-    registerExport(module, 0x02AA, "SetCursor");
-    registerExport(module, 0x02AB, "LoadCursorW");
-    registerExport(module, 0x02B4, "GetDlgItem");
-    registerExport(module, 0x02B5, "GetDlgCtrlID");
+    registerCoredllSystemExports(module);
     registerExport(module, 0x02BA, "IsDialogMessageW");
-    registerExport(module, 0x02BD, "GetForegroundWindow");
     registerExport(module, 0x02CD, "GetVersionExW");
-    registerExport(module, 0x02CF, "sprintf");
-    registerExport(module, 0x02DD, "LocalAllocTrace");
-    registerExport(module, 0x02DE, "GetCursorPos");
-    registerExport(module, 0x02D8, "LoadIconW");
-    registerExport(module, 0x02D9, "_snprintf");
-    registerExport(module, 0x02DA, "LoadImageW");
-    registerExport(module, 0x02BE, "SetForegroundWindow");
-    registerExport(module, 0x02BF, "SetActiveWindow");
-    registerExport(module, 0x02C0, "SetFocus");
-    registerExport(module, 0x02C1, "GetFocus");
-    registerExport(module, 0x02C2, "GetActiveWindow");
-    registerExport(module, 0x02C3, "GetCapture");
-    registerExport(module, 0x02C4, "SetCapture");
-    registerExport(module, 0x02C5, "ReleaseCapture");
-    registerExport(module, 0x034B, "RemoveMenu");
-    registerExport(module, 0x034E, "LoadMenuW");
-    registerExport(module, 0x0350, "CheckMenuItem");
-    registerExport(module, 0x0351, "CheckMenuRadioItem");
-    registerExport(module, 0x035A, "MessageBoxW");
-    registerExport(module, 0x036A, "LoadStringW");
     registerExport(module, 0x036B, "SetTimer");
     registerExport(module, 0x036C, "KillTimer");
     registerExport(module, 0x036E, "GetClassInfoW");
@@ -1299,12 +1136,7 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x0362, "PostQuitMessage");
     registerExport(module, 0x0364, "SendMessageW");
     registerExport(module, 0x0366, "TranslateMessage");
-    registerExport(module, 0x0375, "GetSystemMetrics");
-    registerExport(module, 0x0376, "IsWindowVisible");
-    registerExport(module, 0x0377, "AdjustWindowRectEx");
-    registerExport(module, 0x0379, "GetSysColor");
     registerExport(module, 0x0394, "GetDeviceCaps");
-    registerExport(module, 0x03A9, "GetSysColorBrush");
     registerExport(module, 0x037F, "CreateFontIndirectW");
     registerExport(module, 0x0380, "ExtTextOutW");
     registerExport(module, 0x0385, "CreateBitmap");
@@ -1313,7 +1145,6 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x038E, "CreateCompatibleDC");
     registerExport(module, 0x0386, "CreateCompatibleBitmap");
     registerExport(module, 0x0389, "StretchBlt");
-    registerExport(module, 0x026D, "CeSetThreadPriority");
     registerExport(module, 0x0390, "DeleteObject");
     registerExport(module, 0x038F, "DeleteDC");
     registerExport(module, 0x0397, "GetStockObject");
@@ -1336,90 +1167,18 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x03D4, "CreateRectRgn");
     registerExport(module, 0x03C8, "CombineRgn");
     registerExport(module, 0x03CB, "GetClipBox");
-    registerExport(module, 0x037B, "RegisterWindowMessageW");
     registerExport(module, 0x037C, "RegisterTaskBar");
-    registerExport(module, 0x03E1, "atoi");
-    registerExport(module, 0x03E3, "atof");
-    registerExport(module, 0x03EC, "cos");
-    registerExport(module, 0x04A1, "GetDCEx");
-    registerExport(module, 0x0448, "_snwprintf");
-    registerExport(module, 0x0449, "swprintf");
-    registerExport(module, 0x044B, "vswprintf");
-    registerExport(module, 0x044E, "printf");
-    registerExport(module, 0x0454, "fgetc");
-    registerExport(module, 0x0455, "fgets");
-    registerExport(module, 0x0459, "fopen");
-    registerExport(module, 0x045E, "fclose");
-    registerExport(module, 0x0460, "fread");
-    registerExport(module, 0x0461, "fwrite");
-    registerExport(module, 0x0462, "fflush");
-    registerExport(module, 0x0465, "feof");
-    registerExport(module, 0x0466, "ferror");
-    registerExport(module, 0x046A, "fseek");
-    registerExport(module, 0x046B, "ftell");
-    registerExport(module, 0x046C, "_vsnwprintf");
-    registerExport(module, 0x0479, "_wfopen");
-    registerExport(module, 0x03FF, "_hypot");
-    registerExport(module, 0x01C7, "RegCloseKey");
-    registerExport(module, 0x01CD, "RegOpenKeyExW");
-    registerExport(module, 0x01CF, "RegQueryValueExW");
-    registerExport(module, 0x01C9, "RegDeleteKeyW");
-    registerExport(module, 0x01CA, "RegDeleteValueW");
-    registerExport(module, 0x01CB, "RegEnumValueW");
-    registerExport(module, 0x01CC, "RegEnumKeyExW");
-    registerExport(module, 0x01CE, "RegQueryInfoKeyW");
-    registerExport(module, 0x01D0, "RegSetValueExW");
-    registerExport(module, 0x020A, "IsBadReadPtr");
-    registerExport(module, 0x020B, "IsBadWritePtr");
-    registerExport(module, 0x0480, "RegFlushKey");
-    registerExport(module, 0x03FA, "free");
-    registerExport(module, 0x040C, "longjmp");
-    registerExport(module, 0x0411, "malloc");
-    registerExport(module, 0x0413, "memcmp");
-    registerExport(module, 0x0414, "memcpy");
-    registerExport(module, 0x0416, "memmove");
-    registerExport(module, 0x0417, "memset");
-    registerExport(module, 0x041D, "rand");
-    registerExport(module, 0x041E, "realloc");
-    registerExport(module, 0x0424, "sqrt");
-    registerExport(module, 0x0425, "srand");
-    registerExport(module, 0x0427, "strcat");
-    registerExport(module, 0x0429, "strcmp");
-    registerExport(module, 0x042A, "strcpy");
-    registerExport(module, 0x042B, "strcspn");
-    registerExport(module, 0x042C, "strlen");
-    registerExport(module, 0x0431, "strtok");
-    registerExport(module, 0x0422, "sin");
-    registerExport(module, 0x0446, "operator_delete");
-    registerExport(module, 0x0447, "operator_new");
+    registerCoredllMathExports(module);
+    registerCoredllCrtExports(module);
     registerExport(module, 0x0499, "GetModuleHandleW");
-    registerExport(module, 0x04BD, "IsProcessDying");
-    registerExport(module, 0x04CB, "GetCRTStorageEx");
-    registerExport(module, 0x04CC, "GetCRTFlags");
     registerExport(module, 0x04CE, "GetProcAddressA");
-    registerExport(module, 0x04D1, "TryEnterCriticalSection");
-    registerExport(module, 0x04D5, "GetFileAttributesExW");
-    registerExport(module, 0x057C, "strtol");
-    registerExport(module, 0x057D, "strtoul");
-    registerExport(module, 0x0582, "_stricmp");
-    registerExport(module, 0x0583, "_strnicmp");
-    registerExport(module, 0x0438, "_ultow");
-    registerExport(module, 0x043B, "wcstoul");
-    registerExport(module, 0x0443, "toupper");
-    registerExport(module, 0x05B0, "operator_vector_new");
-    registerExport(module, 0x05B1, "operator_vector_delete");
     registerExport(module, 0x05D1, "KernelLibIoControl");
-    registerExport(module, 0x05D3, "InterlockedExchangeAdd");
-    registerExport(module, 0x05D4, "InterlockedCompareExchange");
     registerExport(module, 0x05E3, "RegisterDesktop");
     registerExport(module, 0x05EF, "GlobalAddAtomW");
     registerExport(module, 0x05F0, "GlobalDeleteAtom");
     registerExport(module, 0x05F1, "GlobalFindAtomW");
     registerExport(module, 0x0576, "SetWindowRgn");
     registerExport(module, 0x0577, "GetWindowRgn");
-    registerExport(module, 0x0635, "mixerGetControlDetails");
-    registerExport(module, 0x0646, "RemoteHeapFree");
-    registerExport(module, 0x066B, "fmodf");
     registerExport(module, 0x0673, "MoveToEx");
     registerExport(module, 0x0674, "LineTo");
     registerExport(module, 0x0676, "SetTextAlign");
@@ -1427,70 +1186,35 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x0683, "StretchDIBits");
     registerExport(module, 0x06BD, "SetBitmapBits");
     registerExport(module, 0x06BE, "SetDIBitsToDevice");
-    registerExport(module, 0x07D0, "_setjmp");
-    registerExport(module, 0x07D5, "__ll_div");
-    registerExport(module, 0x07E2, "__f_to_ll");
-    registerExport(module, 0x07E6, "__fpadd");
-    registerExport(module, 0x0628, "__ehvec_ctor");
-    registerExport(module, 0x07E7, "__dpadd");
-    registerExport(module, 0x07E8, "__fpsub");
-    registerExport(module, 0x07E9, "__dpsub");
-    registerExport(module, 0x07EA, "__fpmul");
-    registerExport(module, 0x07EC, "__fpdiv");
-    registerExport(module, 0x07EB, "__dpmul");
-    registerExport(module, 0x07ED, "__dpdiv");
-    registerExport(module, 0x07EE, "__fptoli");
-    registerExport(module, 0x07EF, "__fptoul");
-    registerExport(module, 0x07F2, "__dptoli");
-    registerExport(module, 0x07F3, "__dptoul");
-    registerExport(module, 0x07F4, "__litodp");
-    registerExport(module, 0x07F5, "__ultodp");
-    registerExport(module, 0x07F6, "__fptodp");
-    registerExport(module, 0x07F7, "__dptofp");
-    registerExport(module, 0x07F0, "__litofp");
-    registerExport(module, 0x07FA, "__lts");
-    registerExport(module, 0x07FB, "__les");
-    registerExport(module, 0x07FC, "__eqs");
-    registerExport(module, 0x07FD, "__ges");
-    registerExport(module, 0x07FE, "__gts");
-    registerExport(module, 0x07FF, "__nes");
-    registerExport(module, 0x0800, "__ltd");
-    registerExport(module, 0x0801, "__led");
-    registerExport(module, 0x0802, "__eqd");
-    registerExport(module, 0x0803, "__ged");
-    registerExport(module, 0x0804, "__gtd");
-    registerExport(module, 0x0532, "operator_new");
-    registerExport(module, 0x0533, "operator_vector_new");
-    registerExport(module, 0x0535, "operator_new_nothrow");
-    registerExport(module, 0x0536, "operator_vector_new_nothrow");
-    registerExport(module, 0x0531, "operator_delete");
-    registerExport(module, 0x0534, "operator_vector_delete");
-    registerExport(module, 0x0537, "operator_delete_nothrow");
-    registerExport(module, 0x0538, "operator_vector_delete_nothrow");
 
     destroyWindowContinuationStub_ = module.imageBase + 0x0001f000;
     auto& destroyContinuation = exportsByAddress_[destroyWindowContinuationStub_];
     destroyContinuation.moduleName = module.moduleName;
+    destroyContinuation.moduleKind = SyntheticModuleKind::Coredll;
     destroyContinuation.name = "__DestroyWindowContinue";
     writeStub(destroyWindowContinuationStub_);
     createWindowContinuationStub_ = module.imageBase + 0x0001f008;
     auto& createContinuation = exportsByAddress_[createWindowContinuationStub_];
     createContinuation.moduleName = module.moduleName;
+    createContinuation.moduleKind = SyntheticModuleKind::Coredll;
     createContinuation.name = "__CreateWindowContinue";
     writeStub(createWindowContinuationStub_);
     blockingApiContinuationStub_ = module.imageBase + 0x0001f010;
     auto& blockingContinuation = exportsByAddress_[blockingApiContinuationStub_];
     blockingContinuation.moduleName = module.moduleName;
+    blockingContinuation.moduleKind = SyntheticModuleKind::Coredll;
     blockingContinuation.name = "__BlockingApiContinue";
     writeStub(blockingApiContinuationStub_);
     updateWindowContinuationStub_ = module.imageBase + 0x0001f018;
     auto& updateWindowContinuation = exportsByAddress_[updateWindowContinuationStub_];
     updateWindowContinuation.moduleName = module.moduleName;
+    updateWindowContinuation.moduleKind = SyntheticModuleKind::Coredll;
     updateWindowContinuation.name = "__UpdateWindowContinue";
     writeStub(updateWindowContinuationStub_);
     threadExitStub_ = module.imageBase + 0x0001f020;
     auto& threadExit = exportsByAddress_[threadExitStub_];
     threadExit.moduleName = module.moduleName;
+    threadExit.moduleKind = SyntheticModuleKind::Coredll;
     threadExit.name = "__ThreadExit";
     writeStub(threadExitStub_);
     spdlog::info("mapped synthetic COREDLL.dll base=0x{:08x} ordinals={}",
@@ -1512,47 +1236,7 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCommctrl() {
         registerExport(module, ordinal, {});
     }
 
-    // Names and ordinals are from the Windows CE 4.2 Standard SDK MIPSII
-    // commctrl.lib COFF import-object headers, not from /LINKERMEMBER.
-    registerExport(module, 0x0001, "InitCommonControls");
-    registerExport(module, 0x0002, "InitCommonControlsEx");
-    registerExport(module, 0x0003, "CommandBar_Create");
-    registerExport(module, 0x0004, "CommandBar_Show");
-    registerExport(module, 0x0005, "CommandBar_AddBitmap");
-    registerExport(module, 0x0006, "CommandBar_InsertComboBox");
-    registerExport(module, 0x0007, "CommandBar_InsertControl");
-    registerExport(module, 0x0008, "CommandBar_InsertMenubar");
-    registerExport(module, 0x0009, "CommandBar_GetMenu");
-    registerExport(module, 0x000A, "CommandBar_AddAdornments");
-    registerExport(module, 0x000B, "CommandBar_GetItemWindow");
-    registerExport(module, 0x000C, "CommandBar_Height");
-    registerExport(module, 0x000D, "IsCommandBarMessage");
-    registerExport(module, 0x000E, "CreateUpDownControl");
-    registerExport(module, 0x000F, "?CreateToolbar@@YAPAUHWND__@@PAU1@KIHPAUHINSTANCE__@@IPBU_TBBUTTON@@H@Z");
-    registerExport(module, 0x0010, "CreateToolbarEx");
-    registerExport(module, 0x0011, "CreateStatusWindowW");
-    registerExport(module, 0x0012, "PropertySheetW");
-    registerExport(module, 0x0013, "CreatePropertySheetPageW");
-    registerExport(module, 0x0014, "DestroyPropertySheetPage");
-    registerExport(module, 0x0015, "DrawStatusTextW");
-    registerExport(module, 0x0016, "InvertRect");
-    registerExport(module, 0x002A, "CommandBar_InsertMenubarEx");
-    registerExport(module, 0x002B, "CommandBar_DrawMenuBar");
-    registerExport(module, 0x002C, "CommandBar_AlignAdornments");
-    registerExport(module, 0x0030, "InitCapEdit");
-    registerExport(module, 0x0033, "InitDateClasses");
-    registerExport(module, 0x0034, "InitProgressClass");
-    registerExport(module, 0x0035, "InitReBarClass");
-    registerExport(module, 0x0036, "InitSBEdit");
-    registerExport(module, 0x0037, "InitStatusClass");
-    registerExport(module, 0x0038, "InitTTButton");
-    registerExport(module, 0x0039, "InitTTStatic");
-    registerExport(module, 0x003A, "InitToolTipsClass");
-    registerExport(module, 0x003B, "InitToolbarClass");
-    registerExport(module, 0x003C, "InitTrackBar");
-    registerExport(module, 0x003D, "InitUpDownClass");
-    registerExport(module, 0x0041, "ListView_SetItemSpacing");
-    registerExport(module, 0x0045, "Tab_Init");
+    registerCommctrlExports(module);
 
     spdlog::info("mapped synthetic commctrl.dll base=0x{:08x} ordinals={}",
                  module.imageBase, module.exportsByOrdinal.size());
@@ -1578,7 +1262,30 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createGenericOrdinalDll(
     return module;
 }
 
-void SyntheticDllRuntime::registerExport(SyntheticModule& module, uint16_t ordinal, const std::string& name) {
+std::optional<SyntheticModule> SyntheticDllRuntime::createGenericOrdinalDll(const SyntheticDllSpec& spec) {
+    auto module = createGenericOrdinalDll(spec.name ? spec.name : "", spec.maxOrdinal);
+    if (!module) return module;
+    registerHandlers(*module, spec.handlers);
+    return module;
+}
+
+void SyntheticDllRuntime::registerHandlers(SyntheticModule& module,
+                                           const OrdinalHandlerGroup& group) {
+    registerHandlers(module, group.handlers);
+}
+
+void SyntheticDllRuntime::registerHandlers(SyntheticModule& module,
+                                           const OrdinalHandlerMap& handlers) {
+    auto& dll = registeredDllsByName_[lowerAscii(module.moduleName)];
+    if (dll.name.empty()) dll.name = module.moduleName;
+    for (const auto& [ordinal, handler] : handlers) {
+        dll.handlers[ordinal] = handler;
+        registerExport(module, ordinal, handler.name ? handler.name : "", handler.code);
+    }
+}
+
+void SyntheticDllRuntime::registerExport(SyntheticModule& module, uint16_t ordinal, const std::string& name,
+                                         SyntheticExportCode code) {
     const uint32_t rva = 0x1000 + uint32_t(ordinal) * 8;
     module.exportsByOrdinal[ordinal] = rva;
     if (!name.empty()) {
@@ -1588,9 +1295,31 @@ void SyntheticDllRuntime::registerExport(SyntheticModule& module, uint16_t ordin
     const uint32_t address = module.imageBase + rva;
     auto& entry = exportsByAddress_[address];
     entry.moduleName = module.moduleName;
+    entry.moduleKind = moduleKindForName(module.moduleName);
+    entry.code = code;
     entry.ordinal = ordinal;
     if (!name.empty()) entry.name = name;
     writeStub(address);
+}
+
+const SyntheticDllRuntime::OrdinalHandlerSpec*
+SyntheticDllRuntime::findOrdinalHandler(const ExportEntry& entry) const {
+    const auto dllIt = registeredDllsByName_.find(lowerAscii(entry.moduleName));
+    if (dllIt == registeredDllsByName_.end()) return nullptr;
+    const auto handlerIt = dllIt->second.handlers.find(entry.ordinal);
+    if (handlerIt == dllIt->second.handlers.end()) return nullptr;
+    return &handlerIt->second;
+}
+
+SyntheticDllRuntime::SyntheticModuleKind
+SyntheticDllRuntime::moduleKindForName(const std::string& moduleName) const {
+    const std::string name = lowerAscii(moduleName);
+    if (name == "coredll.dll") return SyntheticModuleKind::Coredll;
+    if (name == "commctrl.dll") return SyntheticModuleKind::Commctrl;
+    if (name == "winsock.dll" || name == "ws2.dll") return SyntheticModuleKind::Winsock;
+    if (name == "ole32.dll") return SyntheticModuleKind::Ole32;
+    if (name == "oleaut32.dll") return SyntheticModuleKind::OleAut32;
+    return SyntheticModuleKind::Unknown;
 }
 
 void SyntheticDllRuntime::writeStub(uint32_t address) {
@@ -1835,7 +1564,8 @@ uint32_t SyntheticDllRuntime::closeGuestHandle(uint32_t guestHandle) {
     } else if (it->second.kind == GuestHandle::Kind::HostCrtFile) {
         fileHandleDebugNames_.erase(guestHandle);
         fileReadCounts_.erase(guestHandle);
-    } else if (it->second.kind == GuestHandle::Kind::HostFind) {
+    } else if (it->second.kind == GuestHandle::Kind::HostFind ||
+               it->second.kind == GuestHandle::Kind::GuestFind) {
         fileHandleDebugNames_.erase(guestHandle);
     } else if (it->second.kind == GuestHandle::Kind::HostWaveOut) {
         waveOutStates_.erase(guestHandle);
@@ -2382,29 +2112,6 @@ uint32_t SyntheticDllRuntime::makeGuestWindow(const std::string& className, cons
     return hwnd;
 }
 
-uint32_t SyntheticDllRuntime::loadMenuResourceHandle(uint32_t nameArg) {
-    const ResourceEntry* resource = findResource(4, nameArg);
-#if defined(_WIN32)
-    if (!resource || resource->data.empty()) {
-        spdlog::info("LoadMenuW miss name=0x{:08x}", nameArg);
-        lastError_ = 1814;
-        return 0;
-    }
-    HMENU menu = LoadMenuIndirectW(reinterpret_cast<const MENUTEMPLATEW*>(resource->data.data()));
-    if (!menu) {
-        spdlog::info("LoadMenuW host LoadMenuIndirectW failed name=0x{:08x} error={}", nameArg, GetLastError());
-        lastError_ = GetLastError();
-        return 0;
-    }
-    lastError_ = 0;
-    spdlog::info("LoadMenuW hit name=0x{:08x} size={}", nameArg, resource->data.size());
-    return makeGuestHandle({GuestHandle::Kind::HostMenu, reinterpret_cast<uintptr_t>(menu), 0});
-#else
-    lastError_ = resource ? 0 : 1814;
-    return 0;
-#endif
-}
-
 void SyntheticDllRuntime::ensureHostWindow(uint32_t guestHwnd, GuestWindow& window) {
 #if defined(_WIN32)
     if (window.destroyed) return;
@@ -2447,15 +2154,64 @@ void SyntheticDllRuntime::destroyHostWindow(GuestWindow& window) {
     if (window.hostHwnd) {
         HWND hwnd = reinterpret_cast<HWND>(window.hostHwnd);
         if (IsWindow(hwnd)) {
+            uint32_t replacementHwnd = 0;
+            GuestWindow* replacementWindow = nullptr;
+            for (auto it = windows_.rbegin(); it != windows_.rend(); ++it) {
+                GuestWindow& candidate = it->second;
+                if (candidate.hwnd == window.hwnd || candidate.destroyed || !candidate.visible || candidate.hostHwnd) {
+                    continue;
+                }
+                const bool coversFramebuffer =
+                    candidate.width >= framebufferWidth_ && candidate.height >= framebufferHeight_;
+                const bool ownedByDestroyedWindow = candidate.parent == window.hwnd;
+                if (!replacementWindow || coversFramebuffer || ownedByDestroyedWindow) {
+                    replacementHwnd = candidate.hwnd;
+                    replacementWindow = &candidate;
+                    if (coversFramebuffer || ownedByDestroyedWindow) break;
+                }
+            }
+            if (replacementWindow) {
+                auto* presenter = reinterpret_cast<HostPresenterWindow*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+                if (presenter) presenter->guestHwnd = replacementHwnd;
+                replacementWindow->hostHwnd = window.hostHwnd;
+                window.hostHwnd = 0;
+                hostPresenterGuestHwnd_ = replacementHwnd;
+                SetWindowTextW(hwnd, widenLossy(replacementWindow->title.empty()
+                                                    ? "FakeCE"
+                                                    : replacementWindow->title).c_str());
+                spdlog::info("transferred host presenter HWND={} from destroyed guest HWND=0x{:08x} to live guest HWND=0x{:08x}",
+                             static_cast<void*>(hwnd), window.hwnd, replacementHwnd);
+                presentHostWindows(true);
+                return;
+            }
             SetWindowTextW(hwnd, L"FakeCE presenter (guest HWND destroyed)");
             ShowWindow(hwnd, SW_SHOWNORMAL);
             presentHostWindows(true);
             retainedHostWindows_.push_back(window.hostHwnd);
+            if (hostPresenterGuestHwnd_ == window.hwnd) hostPresenterGuestHwnd_ = 0;
         }
         window.hostHwnd = 0;
     }
 #else
     (void)window;
+#endif
+}
+
+void SyntheticDllRuntime::syncHostWindowPlacement(GuestWindow& window, bool present) {
+#if defined(_WIN32)
+    if (!window.hostHwnd) return;
+    HWND hwnd = reinterpret_cast<HWND>(window.hostHwnd);
+    if (!IsWindow(hwnd)) return;
+    auto* presenter = reinterpret_cast<HostPresenterWindow*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+    const int hostWidth = presenter ? hostPresenterOuterWidth(*presenter) : std::max(1, window.width);
+    const int hostHeight = presenter ? hostPresenterOuterHeight(*presenter) : std::max(1, window.height);
+    SetWindowPos(hwnd, nullptr, window.x, window.y, hostWidth, hostHeight,
+                 SWP_NOZORDER | SWP_NOACTIVATE);
+    ShowWindow(hwnd, window.visible ? SW_SHOWNORMAL : SW_HIDE);
+    if (present) presentHostWindows(true);
+#else
+    (void)window;
+    (void)present;
 #endif
 }
 
@@ -2989,7 +2745,9 @@ uint32_t SyntheticDllRuntime::timerWaitMilliseconds() const {
 
 uint32_t SyntheticDllRuntime::windowAtPoint(uint32_t rootGuestHwnd, int32_t x, int32_t y,
                                             int32_t& clientX, int32_t& clientY) const {
-    uint32_t best = windows_.count(rootGuestHwnd) ? rootGuestHwnd : 0;
+    auto root = windows_.find(rootGuestHwnd);
+    if (root == windows_.end() || root->second.destroyed) rootGuestHwnd = 0;
+    uint32_t best = rootGuestHwnd;
     int32_t bestX = 0;
     int32_t bestY = 0;
     auto belongsToRoot = [&](uint32_t hwnd) {
@@ -3046,6 +2804,17 @@ uint32_t SyntheticDllRuntime::windowAtPoint(uint32_t rootGuestHwnd, int32_t x, i
 
 void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t message,
                                                 int32_t hostX, int32_t hostY) {
+    auto root = windows_.find(rootGuestHwnd);
+    if (root == windows_.end() || root->second.destroyed) {
+        auto presenterRoot = windows_.find(hostPresenterGuestHwnd_);
+        if (presenterRoot != windows_.end() && !presenterRoot->second.destroyed) {
+            spdlog::info("rebased host mouse root from destroyed guest HWND=0x{:08x} to presenter guest HWND=0x{:08x}",
+                         rootGuestHwnd, hostPresenterGuestHwnd_);
+            rootGuestHwnd = hostPresenterGuestHwnd_;
+        } else {
+            rootGuestHwnd = 0;
+        }
+    }
     int32_t clientX = hostX;
     int32_t clientY = hostY;
     uint32_t hwnd = 0;
@@ -3705,6 +3474,7 @@ SyntheticDllRuntime::bitmapProbeStats(const GuestBitmap& bitmap,
 void SyntheticDllRuntime::dumpGuestBitmapPpm(uint32_t bitmapHandle,
                                              const GuestBitmap& bitmap,
                                              const std::string& tag) {
+    if (!diagnosticDumpsEnabled_) return;
     const int32_t height = std::abs(bitmap.heightRaw);
     if (bitmap.width <= 0 || height <= 0 || !bitmap.bits || !bitmap.stride) return;
     const uint64_t byteCount = uint64_t(bitmap.stride) * uint64_t(height);
@@ -3731,11 +3501,12 @@ void SyntheticDllRuntime::dumpGuestBitmapPpm(uint32_t bitmapHandle,
             out.write(reinterpret_cast<const char*>(rgb), sizeof(rgb));
         }
     }
-    spdlog::info("dumped splash source bitmap handle=0x{:08x} tag={} file={}",
-                 bitmapHandle, tag, path);
+    spdlog::debug("dumped splash source bitmap handle=0x{:08x} tag={} file={}",
+                  bitmapHandle, tag, path);
 }
 
 void SyntheticDllRuntime::dumpFramebufferPpm(const std::string& tag) {
+    if (!diagnosticDumpsEnabled_) return;
     if (!framebuffer_ || framebufferWidth_ <= 0 || framebufferHeight_ <= 0) return;
     char path[160]{};
     std::snprintf(path, sizeof(path), "frame_probe_splash_%02u_%s_frame.ppm",
@@ -3755,7 +3526,7 @@ void SyntheticDllRuntime::dumpFramebufferPpm(const std::string& tag) {
             out.write(reinterpret_cast<const char*>(rgb), sizeof(rgb));
         }
     }
-    spdlog::info("dumped splash framebuffer tag={} file={}", tag, path);
+    spdlog::debug("dumped splash framebuffer tag={} file={}", tag, path);
 }
 
 bool SyntheticDllRuntime::handleCreateBitmap(const GuestCallArgs& args, uint32_t& ret) {
@@ -4758,84 +4529,6 @@ uint32_t SyntheticDllRuntime::handleWNetGetUserW(uint32_t, uint32_t userName, ui
     return 0;
 }
 
-uint32_t SyntheticDllRuntime::handleWaveInGetID(uint32_t waveInHandle, uint32_t deviceIdPtr) {
-#if defined(_WIN32)
-    auto* handle = lookupGuestHandle(waveInHandle);
-    auto& winmm = winmmBridge();
-    if (!deviceIdPtr) return MMSYSERR_INVALPARAM;
-    if (!handle || handle->kind != GuestHandle::Kind::HostWaveIn || !handle->hostValue || !winmm.waveInGetID) {
-        return MMSYSERR_INVALHANDLE;
-    }
-    UINT id = 0;
-    const MMRESULT result = winmm.waveInGetID(reinterpret_cast<HWAVEIN>(handle->hostValue), &id);
-    if (result == MMSYSERR_NOERROR) writeU32(deviceIdPtr, id);
-    return result;
-#else
-    return 2;
-#endif
-}
-
-uint32_t SyntheticDllRuntime::handleWaveInBuffer(const std::string& name, uint32_t waveInHandle, uint32_t headerPtr) {
-#if defined(_WIN32)
-    auto* handle = lookupGuestHandle(waveInHandle);
-    auto& winmm = winmmBridge();
-    if (!handle || handle->kind != GuestHandle::Kind::HostWaveIn || !handle->hostValue || !headerPtr) {
-        return MMSYSERR_INVALHANDLE;
-    }
-
-    uint32_t guestData = 0;
-    uint32_t guestLength = 0;
-    uint32_t guestBytesRecorded = 0;
-    uint32_t guestUser = 0;
-    uint32_t guestFlags = 0;
-    uint32_t guestLoops = 0;
-    uc_mem_read(uc_, headerPtr, &guestData, sizeof(guestData));
-    uc_mem_read(uc_, headerPtr + 4, &guestLength, sizeof(guestLength));
-    uc_mem_read(uc_, headerPtr + 8, &guestBytesRecorded, sizeof(guestBytesRecorded));
-    uc_mem_read(uc_, headerPtr + 12, &guestUser, sizeof(guestUser));
-    uc_mem_read(uc_, headerPtr + 16, &guestFlags, sizeof(guestFlags));
-    uc_mem_read(uc_, headerPtr + 20, &guestLoops, sizeof(guestLoops));
-
-    if (name == "waveInAddBuffer") {
-        if (!winmm.waveInAddBuffer || !guestData || !guestLength || guestLength > 0x100000) {
-            return MMSYSERR_INVALPARAM;
-        }
-        auto& stored = hostWaveBuffers_[headerPtr];
-        stored.data.assign(guestLength, 0);
-        uc_mem_read(uc_, guestData, stored.data.data(), stored.data.size());
-        auto* header = reinterpret_cast<WAVEHDR*>(stored.header.data());
-        *header = {};
-        header->lpData = reinterpret_cast<LPSTR>(stored.data.data());
-        header->dwBufferLength = guestLength;
-        header->dwBytesRecorded = guestBytesRecorded;
-        header->dwUser = guestUser;
-        header->dwFlags = guestFlags;
-        header->dwLoops = guestLoops;
-        const MMRESULT result = winmm.waveInAddBuffer(reinterpret_cast<HWAVEIN>(handle->hostValue), header, sizeof(*header));
-        writeU32(headerPtr + 8, header->dwBytesRecorded);
-        writeU32(headerPtr + 16, header->dwFlags);
-        return result;
-    }
-
-    auto it = hostWaveBuffers_.find(headerPtr);
-    if (it == hostWaveBuffers_.end() || !winmm.waveInUnprepareHeader) {
-        return MMSYSERR_INVALPARAM;
-    }
-    auto* header = reinterpret_cast<WAVEHDR*>(it->second.header.data());
-    const MMRESULT result = winmm.waveInUnprepareHeader(reinterpret_cast<HWAVEIN>(handle->hostValue), header, sizeof(*header));
-    if (guestData && header->dwBytesRecorded) {
-        uc_mem_write(uc_, guestData, it->second.data.data(),
-                     std::min<size_t>(it->second.data.size(), header->dwBytesRecorded));
-    }
-    writeU32(headerPtr + 8, header->dwBytesRecorded);
-    writeU32(headerPtr + 16, header->dwFlags);
-    hostWaveBuffers_.erase(it);
-    return result;
-#else
-    return 2;
-#endif
-}
-
 uint32_t SyntheticDllRuntime::handleSystemParametersInfoW(uint32_t action,
                                                           uint32_t uiParam,
                                                           uint32_t pvParam,
@@ -4869,119 +4562,6 @@ uint32_t SyntheticDllRuntime::handleSystemParametersInfoW(uint32_t action,
     spdlog::info("SystemParametersInfoW action=0x{:08x} uiParam={} pvParam=0x{:08x} flags=0x{:08x} -> {} lastError={} data=\"{}\"",
                  action, uiParam, pvParam, flags, result, lastError_, text);
     return result;
-}
-
-uint32_t SyntheticDllRuntime::handleLoadCursorW(uint32_t, uint32_t cursorName) {
-#if defined(_WIN32)
-    HCURSOR cursor = nullptr;
-    if (cursorName && cursorName < 0x10000) cursor = ::LoadCursorW(nullptr, MAKEINTRESOURCEW(cursorName));
-    else cursor = ::LoadCursorW(nullptr, IDC_ARROW);
-    const uint32_t result = cursor
-        ? makeGuestHandle({GuestHandle::Kind::HostCursor, reinterpret_cast<uintptr_t>(cursor), 0})
-        : 0;
-    lastError_ = result ? 0 : GetLastError();
-    return result;
-#else
-    lastError_ = 0;
-    return makeGuestHandle({GuestHandle::Kind::HostCursor, 0, 0});
-#endif
-}
-
-uint32_t SyntheticDllRuntime::handleLoadImageApi(const std::string& name, uint32_t, uint32_t imageName,
-                                                 uint32_t imageType, uint32_t desiredCx, uint32_t desiredCy,
-                                                 uint32_t loadFlags) {
-#if defined(_WIN32)
-    if (name != "LoadImageW") {
-        imageType = IMAGE_ICON;
-        desiredCx = 0;
-        desiredCy = 0;
-        loadFlags = LR_DEFAULTCOLOR;
-    }
-
-    auto createIconFromMainResource = [&](uint32_t nameArg) -> HICON {
-        const ResourceEntry* group = findResource(14, nameArg);
-        if (!group || group->data.size() < 6) return nullptr;
-        const uint16_t count = readLe16(group->data, 4);
-        const uint32_t targetCx = desiredCx ? desiredCx : uint32_t(GetSystemMetrics(SM_CXICON));
-        const uint32_t targetCy = desiredCy ? desiredCy : uint32_t(GetSystemMetrics(SM_CYICON));
-        const ResourceEntry* iconResource = nullptr;
-        int bestScore = 0x7fffffff;
-        for (uint16_t i = 0; i < count; ++i) {
-            const size_t offset = 6 + size_t(i) * 14;
-            if (offset + 14 > group->data.size()) break;
-            const uint32_t width = group->data[offset] ? group->data[offset] : 256;
-            const uint32_t height = group->data[offset + 1] ? group->data[offset + 1] : 256;
-            const uint32_t bytesInResource = readLe32(group->data, offset + 8);
-            const uint32_t iconId = readLe16(group->data, offset + 12);
-            const ResourceEntry* candidate = findResource(3, iconId);
-            if (!candidate || candidate->data.empty()) continue;
-            const int score = std::abs(int(width) - int(targetCx)) + std::abs(int(height) - int(targetCy));
-            if (!iconResource || score < bestScore ||
-                (score == bestScore && bytesInResource > iconResource->data.size())) {
-                iconResource = candidate;
-                bestScore = score;
-            }
-        }
-        if (!iconResource) return nullptr;
-        return CreateIconFromResourceEx(const_cast<BYTE*>(iconResource->data.data()),
-                                        DWORD(iconResource->data.size()), TRUE, 0x00030000,
-                                        int(desiredCx), int(desiredCy),
-                                        loadFlags & (LR_DEFAULTCOLOR | LR_MONOCHROME));
-    };
-
-    auto createBitmapFromMainResource = [&](uint32_t nameArg) -> HBITMAP {
-        const ResourceEntry* bitmap = findResource(2, nameArg);
-        if (!bitmap || bitmap->data.size() < 40) return nullptr;
-        const uint32_t headerSize = readLe32(bitmap->data, 0);
-        if (headerSize < 40 || headerSize > bitmap->data.size()) return nullptr;
-        const uint16_t bitCount = readLe16(bitmap->data, 14);
-        const uint32_t compression = readLe32(bitmap->data, 16);
-        const uint32_t clrUsed = readLe32(bitmap->data, 32);
-        uint32_t colorCount = clrUsed;
-        if (!colorCount && bitCount <= 8) colorCount = 1u << bitCount;
-        size_t bitsOffset = size_t(headerSize) + size_t(colorCount) * 4;
-        if (compression == BI_BITFIELDS && !colorCount && (bitCount == 16 || bitCount == 32)) bitsOffset += 12;
-        if (bitsOffset > bitmap->data.size()) return nullptr;
-        HDC dc = GetDC(nullptr);
-        if (!dc) return nullptr;
-        HBITMAP result = CreateDIBitmap(dc,
-                                        reinterpret_cast<const BITMAPINFOHEADER*>(bitmap->data.data()),
-                                        CBM_INIT, bitmap->data.data() + bitsOffset,
-                                        reinterpret_cast<const BITMAPINFO*>(bitmap->data.data()),
-                                        DIB_RGB_COLORS);
-        ReleaseDC(nullptr, dc);
-        if (result && (desiredCx || desiredCy)) {
-            HANDLE scaled = CopyImage(result, IMAGE_BITMAP, int(desiredCx), int(desiredCy),
-                                      loadFlags & (LR_COPYDELETEORG | LR_COPYRETURNORG | LR_MONOCHROME));
-            if (scaled && scaled != result) result = reinterpret_cast<HBITMAP>(scaled);
-        }
-        return result;
-    };
-
-    uint32_t result = 0;
-    if (imageType == IMAGE_ICON) {
-        HICON icon = createIconFromMainResource(imageName);
-        if (icon) result = makeGuestHandle({GuestHandle::Kind::HostIcon, reinterpret_cast<uintptr_t>(icon), 0});
-    } else if (imageType == IMAGE_BITMAP) {
-        HBITMAP bitmap = createBitmapFromMainResource(imageName);
-        if (bitmap) result = makeGuestHandle({GuestHandle::Kind::HostBitmap, reinterpret_cast<uintptr_t>(bitmap), 0});
-    }
-    lastError_ = result ? 0 : 1814;
-    return result;
-#else
-    const uint32_t type = name == "LoadImageW" ? imageType : IMAGE_ICON;
-    lastError_ = findResource(type == IMAGE_BITMAP ? 2 : 14, imageName) ? 120 : 1814;
-    return 0;
-#endif
-}
-
-uint32_t SyntheticDllRuntime::handleGetSysColorBrush(uint32_t colorIndex) {
-    const int index = int(colorIndex & 0xffu);
-#if defined(_WIN32)
-    return makeGuestBrush(uint32_t(GetSysColor(index)), true);
-#else
-    return makeGuestBrush(0x00ffffffu, true);
-#endif
 }
 
 uint32_t SyntheticDllRuntime::handleGetDeviceCaps(uint32_t, uint32_t index) {
@@ -5346,6 +4926,31 @@ uint32_t SyntheticDllRuntime::writeUtf16(uint32_t address, const std::string& va
     return charsToWrite;
 }
 
+void SyntheticDllRuntime::refreshGuestMainModulePath() {
+    if (hostMainModulePath_.empty()) return;
+
+    const std::string hostKey = normalizedPathKey(hostMainModulePath_);
+    for (const auto& root : fileSystemRoots_) {
+        const std::string rootKey = normalizedPathKey(root);
+        if (rootKey.empty() || !startsWithPathKey(hostKey, rootKey)) continue;
+
+        std::filesystem::path relative = hostMainModulePath_.lexically_relative(root);
+        std::string relativeText = pathWithBackslashes(relative);
+        if (relativeText.empty() || relativeText == ".") continue;
+
+        std::filesystem::path relativePath = pathFromUtf8(relativeText);
+        auto first = relativePath.begin();
+        const bool alreadyMounted = first != relativePath.end() && isStorageMountName(pathToUtf8(*first));
+        mainModulePath_ = alreadyMounted ? "\\" + relativeText : sdmmcGuestRoot_ + "\\" + relativeText;
+        spdlog::info("guest module path: {}", mainModulePath_);
+        return;
+    }
+
+    std::string fileName = pathToUtf8(hostMainModulePath_.filename());
+    if (!fileName.empty()) mainModulePath_ = "\\" + fileName;
+    spdlog::info("guest module path: {}", mainModulePath_);
+}
+
 std::filesystem::path SyntheticDllRuntime::resolveGuestPath(const std::string& guestPath) const {
     if (guestPath.empty()) return {};
 
@@ -5361,30 +4966,57 @@ std::filesystem::path SyntheticDllRuntime::resolveGuestPath(const std::string& g
         normalized.erase(normalized.begin());
     }
 
-    std::filesystem::path relative = pathFromUtf8(normalized);
-    std::filesystem::path missingLeafCandidate;
-    auto rememberMissingLeafCandidate = [&](const std::filesystem::path& candidate) {
-        if (missingLeafCandidate.empty() && parentExistsForLookup(candidate)) {
-            missingLeafCandidate = candidate;
+    const std::filesystem::path relative = pathFromUtf8(normalized);
+    auto resolveFromRoots = [&](const std::filesystem::path& guestRelative) -> std::filesystem::path {
+        std::filesystem::path missingLeafCandidate;
+        for (const auto& root : fileSystemRoots_) {
+            const std::filesystem::path candidate = root / guestRelative;
+            if (pathExistsForLookup(candidate)) return candidate;
+            if (missingLeafCandidate.empty() && parentExistsForLookup(candidate)) {
+                missingLeafCandidate = candidate;
+            }
         }
+        if (!missingLeafCandidate.empty()) return missingLeafCandidate;
+        return fileSystemRoots_.empty() ? std::filesystem::path{} : fileSystemRoots_.front() / guestRelative;
+    };
+    auto resolveFromSdmmcRoot = [&](const std::filesystem::path& guestRelative) -> std::filesystem::path {
+        if (fileSystemRoots_.empty()) return {};
+        return guestRelative.empty() ? fileSystemRoots_.front() : fileSystemRoots_.front() / guestRelative;
+    };
+    auto stripMountedStoragePrefix = [](const std::filesystem::path& guestRelative) -> std::filesystem::path {
+        auto it = guestRelative.begin();
+        if (it == guestRelative.end() || !isStorageMountName(pathToUtf8(*it))) return guestRelative;
+
+        std::filesystem::path withoutMount;
+        for (++it; it != guestRelative.end(); ++it) withoutMount /= *it;
+        return withoutMount;
     };
     if (rootRelative && !fileSystemRoots_.empty()) {
-        for (const auto& root : fileSystemRoots_) {
-            const std::filesystem::path candidate = root / relative;
-            if (pathExistsForLookup(candidate)) return candidate;
-            rememberMissingLeafCandidate(candidate);
+        const std::string relativeText = pathWithBackslashes(relative);
+        std::string sdmmcRelative = sdmmcGuestRoot_;
+        while (!sdmmcRelative.empty() && sdmmcRelative.front() == '\\') sdmmcRelative.erase(sdmmcRelative.begin());
+        if (!sdmmcRelative.empty() &&
+            startsWithPathKey(lowerAscii(relativeText), lowerAscii(sdmmcRelative))) {
+            std::string withoutRoot = relativeText.size() == sdmmcRelative.size()
+                ? std::string{}
+                : relativeText.substr(sdmmcRelative.size() + 1);
+            return resolveFromSdmmcRoot(pathFromUtf8(withoutRoot));
         }
-        if (!missingLeafCandidate.empty()) return missingLeafCandidate;
-        return fileSystemRoots_.front() / relative;
+
+        const std::filesystem::path direct = resolveFromRoots(relative);
+        if (pathExistsForLookup(direct) || parentExistsForLookup(direct)) return direct;
+
+        const std::filesystem::path withoutMount = stripMountedStoragePrefix(relative);
+        if (!withoutMount.empty() && withoutMount != relative) return resolveFromSdmmcRoot(withoutMount);
+
+        return direct;
     }
     if (!fileSystemRoots_.empty()) {
-        for (const auto& root : fileSystemRoots_) {
-            const std::filesystem::path candidate = root / relative;
-            if (pathExistsForLookup(candidate)) return candidate;
-            rememberMissingLeafCandidate(candidate);
+        const std::filesystem::path withoutMount = stripMountedStoragePrefix(relative);
+        if (!withoutMount.empty() && withoutMount != relative) {
+            return resolveFromSdmmcRoot(withoutMount);
         }
-        if (!missingLeafCandidate.empty()) return missingLeafCandidate;
-        return fileSystemRoots_.front() / relative;
+        return resolveFromRoots(relative);
     }
     if (!hostBaseDir_.empty()) {
         auto first = relative.begin();
@@ -5418,4816 +5050,6 @@ uint32_t SyntheticDllRuntime::normalizeVirtualFileMiss(const std::filesystem::pa
     return error;
 }
 
-bool SyntheticDllRuntime::dispatchGuestMemoryApi(const std::string& name,
-                                                 const GuestCallArgs& args,
-                                                 uint32_t& ret) {
-    const uint32_t a0 = args.a0;
-    const uint32_t a1 = args.a1;
-    const uint32_t a2 = args.a2;
-    const uint32_t a3 = args.a3;
-
-    if (name == "CreateBitmap") return handleCreateBitmap(args, ret);
-    if (name == "GetObjectW") return handleGetObjectW(args, ret);
-    if (name == "SetDIBColorTable") return handleSetDIBColorTable(args, ret);
-    if (name == "SetBitmapBits") return handleSetBitmapBits(args, ret);
-    if (name == "SetDIBitsToDevice") return handleSetDIBitsToDevice(args, ret);
-
-    if (name == "CharUpperW" || name == "CharLowerW") {
-        const bool makeUpper = name == "CharUpperW";
-        if (a0 <= 0xffffu) {
-            ret = uint32_t(makeUpper ? std::towupper(wint_t(a0))
-                                     : std::towlower(wint_t(a0)));
-        } else {
-            for (uint32_t offset = 0; offset < 4096; offset += 2) {
-                uint16_t ch = 0;
-                if (uc_mem_read(uc_, a0 + offset, &ch, sizeof(ch)) != UC_ERR_OK || !ch) break;
-                const uint16_t mapped = uint16_t(makeUpper ? std::towupper(wint_t(ch))
-                                                           : std::towlower(wint_t(ch)));
-                if (mapped != ch) uc_mem_write(uc_, a0 + offset, &mapped, sizeof(mapped));
-            }
-            ret = a0;
-        }
-    } else if (name == "CreatePenIndirect") {
-        if (!a0) {
-            lastError_ = 87;
-            ret = 0;
-        } else {
-            ret = makeGuestPen(readU32(a0), readU32(a0 + 4), readU32(a0 + 12));
-            lastError_ = 0;
-        }
-    } else if (name == "CreateDIBSection") {
-        if (!a1 || !a3) {
-            lastError_ = 87;
-            ret = 0;
-        } else {
-            const uint32_t headerSize = readU32(a1);
-            const int32_t width = int32_t(readU32(a1 + 4));
-            const int32_t heightRaw = int32_t(readU32(a1 + 8));
-            uint16_t bpp = 0;
-            uc_mem_read(uc_, a1 + 14, &bpp, sizeof(bpp));
-            const uint32_t compression = headerSize >= 40 ? readU32(a1 + 16) : 0;
-            const uint32_t clrUsed = headerSize >= 40 ? readU32(a1 + 32) : 0;
-            const uint32_t absHeight = uint32_t(heightRaw < 0 ? -heightRaw : heightRaw);
-            const uint32_t bitsPerPixel = bpp ? bpp : 32;
-            const uint32_t stride = ((uint32_t(std::max<int32_t>(width, 0)) * bitsPerPixel + 31) / 32) * 4;
-            const uint32_t bits = allocate(std::max<uint32_t>(stride * absHeight, 4), true);
-            writeU32(a3, bits);
-            ret = makeGuestHandle({GuestHandle::Kind::HostBitmap, 0, bits});
-            lastError_ = ret ? 0 : 8;
-            if (ret) {
-                GuestBitmap bitmap{};
-                bitmap.width = width;
-                bitmap.heightRaw = heightRaw;
-                bitmap.bpp = uint16_t(bitsPerPixel);
-                bitmap.stride = stride;
-                bitmap.bits = bits;
-                if (bitmap.bpp == 16) {
-                    ceDefault16BitMasks(bitmap.redMask, bitmap.greenMask, bitmap.blueMask);
-                    if (compression == 3) {
-                        const uint32_t maskOffset = headerSize >= 52 ? 40 : headerSize;
-                        bitmap.redMask = readU32(a1 + maskOffset);
-                        bitmap.greenMask = readU32(a1 + maskOffset + 4);
-                        bitmap.blueMask = readU32(a1 + maskOffset + 8);
-                    }
-                }
-                const uint32_t paletteEntries = bitsPerPixel <= 8 ? (clrUsed ? clrUsed : (1u << bitsPerPixel)) : 0;
-                if (headerSize >= 40 && headerSize < 0x1000 && paletteEntries && paletteEntries <= 256) {
-                    std::vector<uint8_t> rawPalette(size_t(paletteEntries) * 4);
-                    if (uc_mem_read(uc_, a1 + headerSize, rawPalette.data(), rawPalette.size()) == UC_ERR_OK) {
-                        bitmap.palette.resize(paletteEntries);
-                        for (uint32_t i = 0; i < paletteEntries; ++i) {
-                            const uint8_t b = rawPalette[size_t(i) * 4 + 0];
-                            const uint8_t g = rawPalette[size_t(i) * 4 + 1];
-                            const uint8_t r = rawPalette[size_t(i) * 4 + 2];
-                            bitmap.palette[i] = 0xff000000u | (uint32_t(r) << 16) |
-                                                (uint32_t(g) << 8) | uint32_t(b);
-                        }
-                    }
-                }
-                if (bitmap.palette.empty() && (bitsPerPixel == 1 || bitsPerPixel == 4 || bitsPerPixel == 8)) {
-                    bitmap.palette = defaultIndexedPalette(uint16_t(bitsPerPixel));
-                }
-                bitmaps_[ret] = std::move(bitmap);
-            }
-            spdlog::info("CreateDIBSection {}x{} bpp={} compression={} masks={:08x}/{:08x}/{:08x} stride={} bits=0x{:08x} bitmap=0x{:08x}",
-                         width, heightRaw, bitsPerPixel, compression,
-                         ret && bitmaps_.count(ret) ? bitmaps_[ret].redMask : 0,
-                         ret && bitmaps_.count(ret) ? bitmaps_[ret].greenMask : 0,
-                         ret && bitmaps_.count(ret) ? bitmaps_[ret].blueMask : 0,
-                         stride, bits, ret);
-        }
-    } else if (name == "CreateCompatibleBitmap") {
-        const uint32_t width = std::max<uint32_t>(a1, 1);
-        const uint32_t height = std::max<uint32_t>(a2, 1);
-        const uint32_t bpp = 32;
-        const uint32_t stride = ((width * bpp + 31) / 32) * 4;
-        const uint32_t bits = allocate(std::max<uint32_t>(stride * height, 4), true);
-        ret = makeGuestHandle({GuestHandle::Kind::HostBitmap, 0, bits});
-        if (ret) {
-            bitmaps_[ret] = GuestBitmap{int32_t(width), -int32_t(height), uint16_t(bpp), stride, bits,
-                                        0, 0, 0, {}};
-        }
-        lastError_ = ret ? 0 : 8;
-        spdlog::info("CreateCompatibleBitmap {}x{} bits=0x{:08x} bitmap=0x{:08x}",
-                     width, height, bits, ret);
-    } else if (name == "Polygon") {
-        GuestDc* dc = lookupGuestDc(a0);
-        auto brush = dc ? brushes_.find(dc->selectedBrush) : brushes_.end();
-        auto pen = dc ? pens_.find(dc->selectedPen) : pens_.end();
-        const bool hasBrush = brush != brushes_.end() && brush->second.colorRef != 0xffffffffu;
-        const bool hasPen = pen != pens_.end() && pen->second.style != 5 && pen->second.colorRef != 0xffffffffu;
-        if (!dc || !a1 || a2 < 2 || (brush == brushes_.end() && pen == pens_.end())) {
-            lastError_ = dc ? 87 : 6;
-            ret = 0;
-        } else {
-            std::vector<std::pair<int32_t, int32_t>> points;
-            points.reserve(std::min<uint32_t>(a2, 0x10000));
-            for (uint32_t index = 0; index < a2 && index < 0x10000; ++index) {
-                const uint32_t point = a1 + index * 8;
-                points.emplace_back(int32_t(readU32(point)), int32_t(readU32(point + 4)));
-            }
-            if (hasBrush) {
-                fillDcPolygon(*dc, points, colorRefToPixel(brush->second.colorRef));
-            }
-            if (hasPen) {
-                const uint32_t pixel = colorRefToPixel(pen->second.colorRef);
-                for (size_t index = 0; index < points.size(); ++index) {
-                    const auto& from = points[index];
-                    const auto& to = points[(index + 1) % points.size()];
-                    drawDcLine(*dc, from.first, from.second, to.first, to.second, pixel);
-                }
-            }
-            if (!points.empty()) {
-                dc->x = points.back().first;
-                dc->y = points.back().second;
-            }
-            lastError_ = 0;
-            ret = 1;
-        }
-    } else if (name == "Polyline") {
-        GuestDc* dc = lookupGuestDc(a0);
-        auto pen = dc ? pens_.find(dc->selectedPen) : pens_.end();
-        if (!dc || !a1 || a2 < 2 || pen == pens_.end()) {
-            lastError_ = dc ? 87 : 6;
-            ret = 0;
-        } else {
-            const uint32_t pixel = colorRefToPixel(pen->second.colorRef);
-            int32_t prevX = int32_t(readU32(a1));
-            int32_t prevY = int32_t(readU32(a1 + 4));
-            for (uint32_t index = 1; index < a2 && index < 0x10000; ++index) {
-                const uint32_t point = a1 + index * 8;
-                const int32_t x = int32_t(readU32(point));
-                const int32_t y = int32_t(readU32(point + 4));
-                drawDcLine(*dc, prevX, prevY, x, y, pixel);
-                prevX = x;
-                prevY = y;
-            }
-            dc->x = prevX;
-            dc->y = prevY;
-            lastError_ = 0;
-            ret = 1;
-        }
-    } else if (name == "fopen" || name == "_wfopen") {
-        const std::string guestPath = name == "_wfopen" ? readUtf16(a0, 2048) : readAscii(a0, 2048);
-        const std::string mode = name == "_wfopen" ? readUtf16(a1, 64) : readAscii(a1, 64);
-        const std::filesystem::path hostPath = resolveGuestPath(guestPath);
-        FILE* host = nullptr;
-        if (!hostPath.empty()) {
-#if defined(_WIN32)
-            _wfopen_s(&host, hostPath.wstring().c_str(), widenLossy(mode).c_str());
-#else
-            host = std::fopen(hostPath.string().c_str(), mode.c_str());
-#endif
-        }
-        if (!host) {
-            ret = 0;
-            spdlog::warn("{} miss guest=\"{}\" host=\"{}\" mode=\"{}\"",
-                         name, guestPath, pathToUtf8(hostPath), mode);
-        } else {
-            ret = makeGuestHandle({GuestHandle::Kind::HostCrtFile, reinterpret_cast<uintptr_t>(host), 0});
-            fileHandleDebugNames_[ret] = pathToUtf8(hostPath);
-            spdlog::info("{} hit guest=\"{}\" host=\"{}\" mode=\"{}\" guestHandle=0x{:08x}",
-                         name, guestPath, pathToUtf8(hostPath), mode, ret);
-        }
-    } else if (name == "fclose") {
-        auto it = guestHandles_.find(a0);
-        if (it == guestHandles_.end() || it->second.kind != GuestHandle::Kind::HostCrtFile || !it->second.hostValue) {
-            ret = 0xffffffffu;
-        } else {
-            FILE* host = reinterpret_cast<FILE*>(it->second.hostValue);
-            ret = uint32_t(std::fclose(host));
-            fileHandleDebugNames_.erase(a0);
-            fileReadCounts_.erase(a0);
-            guestHandles_.erase(it);
-        }
-    } else if (name == "fread") {
-        auto* handle = lookupGuestHandle(a3);
-        if (!handle || handle->kind != GuestHandle::Kind::HostCrtFile || !handle->hostValue || !a0 || !a1) {
-            ret = 0;
-        } else {
-            const uint64_t total = uint64_t(a1) * uint64_t(a2);
-            std::vector<uint8_t> bytes(size_t(std::min<uint64_t>(total, 0x1000000u)));
-            const size_t readBytes = bytes.empty()
-                ? 0
-                : std::fread(bytes.data(), 1, bytes.size(), reinterpret_cast<FILE*>(handle->hostValue));
-            if (readBytes) uc_mem_write(uc_, a0, bytes.data(), readBytes);
-            ret = uint32_t(readBytes / a1);
-            const uint32_t readCount = ++fileReadCounts_[a3];
-            if (readCount <= 32 || readBytes != bytes.size()) {
-                auto debugName = fileHandleDebugNames_.find(a3);
-                const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
-                spdlog::info("fread handle=0x{:08x} path=\"{}\" size={} count={} bytes={} elements={} read#={}",
-                             a3, debugPath, a1, a2, readBytes, ret, readCount);
-            }
-        }
-    } else if (name == "fwrite") {
-        auto* handle = lookupGuestHandle(a3);
-        if (!handle || handle->kind != GuestHandle::Kind::HostCrtFile || !handle->hostValue || !a0 || !a1) {
-            ret = 0;
-        } else {
-            const uint64_t total = uint64_t(a1) * uint64_t(a2);
-            std::vector<uint8_t> bytes(size_t(std::min<uint64_t>(total, 0x1000000u)));
-            if (!bytes.empty()) uc_mem_read(uc_, a0, bytes.data(), bytes.size());
-            const size_t writtenBytes = bytes.empty()
-                ? 0
-                : std::fwrite(bytes.data(), 1, bytes.size(), reinterpret_cast<FILE*>(handle->hostValue));
-            ret = uint32_t(writtenBytes / a1);
-        }
-    } else if (name == "fseek") {
-        auto* handle = lookupGuestHandle(a0);
-        ret = handle && handle->kind == GuestHandle::Kind::HostCrtFile && handle->hostValue
-            ? uint32_t(std::fseek(reinterpret_cast<FILE*>(handle->hostValue), int32_t(a1), int(a2)))
-            : 0xffffffffu;
-    } else if (name == "ftell") {
-        auto* handle = lookupGuestHandle(a0);
-        ret = handle && handle->kind == GuestHandle::Kind::HostCrtFile && handle->hostValue
-            ? uint32_t(std::ftell(reinterpret_cast<FILE*>(handle->hostValue)))
-            : 0xffffffffu;
-    } else if (name == "fflush") {
-        auto* handle = lookupGuestHandle(a0);
-        ret = (!a0 || (handle && handle->kind == GuestHandle::Kind::HostCrtFile && handle->hostValue))
-            ? uint32_t(std::fflush(a0 ? reinterpret_cast<FILE*>(handle->hostValue) : nullptr))
-            : 0xffffffffu;
-    } else if (name == "feof" || name == "ferror") {
-        auto* handle = lookupGuestHandle(a0);
-        if (!handle || handle->kind != GuestHandle::Kind::HostCrtFile || !handle->hostValue) {
-            ret = 0;
-        } else if (name == "feof") {
-            ret = uint32_t(std::feof(reinterpret_cast<FILE*>(handle->hostValue)));
-        } else {
-            ret = uint32_t(std::ferror(reinterpret_cast<FILE*>(handle->hostValue)));
-        }
-    } else if (name == "fgetc") {
-        auto* handle = lookupGuestHandle(a0);
-        ret = handle && handle->kind == GuestHandle::Kind::HostCrtFile && handle->hostValue
-            ? uint32_t(std::fgetc(reinterpret_cast<FILE*>(handle->hostValue)))
-            : 0xffffffffu;
-    } else if (name == "fgets") {
-        auto* handle = lookupGuestHandle(a2);
-        if (!handle || handle->kind != GuestHandle::Kind::HostCrtFile || !handle->hostValue || !a0 || !a1) {
-            ret = 0;
-        } else {
-            std::vector<char> bytes(a1);
-            char* result = std::fgets(bytes.data(), int(a1), reinterpret_cast<FILE*>(handle->hostValue));
-            if (result) uc_mem_write(uc_, a0, bytes.data(), std::strlen(bytes.data()) + 1);
-            ret = result ? a0 : 0;
-        }
-    } else if (name == "FindNextFileW") {
-#if defined(_WIN32)
-        auto* handle = lookupGuestHandle(a0);
-        if (!handle || handle->kind != GuestHandle::Kind::HostFind || !handle->hostValue) {
-            lastError_ = 6;
-            ret = 0;
-        } else {
-            WIN32_FIND_DATAW data{};
-            const BOOL ok = FindNextFileW(reinterpret_cast<HANDLE>(handle->hostValue), &data);
-            ret = ok ? 1 : 0;
-            lastError_ = ok ? 0 : GetLastError();
-            if (ok) {
-                data = translateGuestFindData(data, handle->filePointer != 0);
-                writeGuestFindData(uc_, a1, data);
-                auto debugName = fileHandleDebugNames_.find(a0);
-                const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
-                spdlog::info("FindNextFileW hit handle=0x{:08x} path=\"{}\" file=\"{}\" attr=0x{:08x} size={}",
-                             a0, debugPath,
-                             wideZToUtf8(data.cFileName, 260),
-                             data.dwFileAttributes,
-                             (uint64_t(data.nFileSizeHigh) << 32) | data.nFileSizeLow);
-            } else {
-                spdlog::info("FindNextFileW miss handle=0x{:08x} lastError={}", a0, lastError_);
-            }
-        }
-#else
-        lastError_ = 6;
-        ret = 0;
-#endif
-    } else if (name == "memcpy" || name == "memmove") {
-        copyGuest(a0, a1, a2);
-        ret = a0;
-    } else if (name == "memset") {
-        fillGuest(a0, uint8_t(a1 & 0xffu), a2);
-        ret = a0;
-    } else if (name == "swprintf" || name == "wsprintfW" || name == "vswprintf" ||
-               name == "_snwprintf" || name == "_vsnwprintf") {
-        std::vector<uint32_t> values;
-        if (name == "vswprintf") {
-            values.reserve(16);
-            for (uint32_t i = 0; i < 16; ++i) values.push_back(readU32(a2 + i * 4));
-        } else if (name == "_vsnwprintf") {
-            values.reserve(16);
-            for (uint32_t i = 0; i < 16; ++i) values.push_back(readU32(a3 + i * 4));
-        } else if (name == "_snwprintf") {
-            values = {a3};
-            for (uint32_t i = 4; i < 16; ++i) values.push_back(stackArg(i));
-        } else {
-            values = {a2, a3};
-            for (uint32_t i = 4; i < 16; ++i) values.push_back(stackArg(i));
-        }
-        size_t argIndex = 0;
-        auto nextArg = [&]() -> uint32_t {
-            return argIndex < values.size() ? values[argIndex++] : 0;
-        };
-        const std::string format = readUtf16((name == "_snwprintf" || name == "_vsnwprintf") ? a2 : a1, 2048);
-        std::string out;
-        for (size_t i = 0; i < format.size(); ++i) {
-            if (format[i] != '%' || i + 1 >= format.size()) {
-                out.push_back(format[i]);
-                continue;
-            }
-            if (format[i + 1] == '%') {
-                out.push_back('%');
-                ++i;
-                continue;
-            }
-            ++i;
-            bool zeroPad = false;
-            if (format[i] == '0') {
-                zeroPad = true;
-                ++i;
-            }
-            int width = 0;
-            while (i < format.size() && std::isdigit(static_cast<unsigned char>(format[i]))) {
-                width = width * 10 + (format[i++] - '0');
-            }
-            char lengthModifier = 0;
-            if (i < format.size() && (format[i] == 'l' || format[i] == 'h')) {
-                lengthModifier = format[i++];
-            }
-            if (i >= format.size()) break;
-            const char spec = format[i];
-            const uint32_t value = spec == 'c' || spec == 'C' || spec == 'd' ||
-                                   spec == 'i' || spec == 'u' || spec == 'x' ||
-                                   spec == 'X' || spec == 's' || spec == 'S'
-                ? nextArg()
-                : 0;
-            char buffer[64]{};
-            switch (spec) {
-            case 's':
-            case 'S':
-                if (spec == 'S' || lengthModifier == 'h') {
-                    out += readAscii(value, 2048);
-                } else {
-                    std::string text = readUtf16(value, 2048);
-                    if (text.empty()) text = readAscii(value, 2048);
-                    out += text;
-                }
-                break;
-            case 'c':
-            case 'C':
-                out.push_back(char(value & 0xffu));
-                break;
-            case 'd':
-            case 'i':
-                if (width) std::snprintf(buffer, sizeof(buffer), zeroPad ? "%0*d" : "%*d", width, int32_t(value));
-                else std::snprintf(buffer, sizeof(buffer), "%d", int32_t(value));
-                out += buffer;
-                break;
-            case 'u':
-                if (width) std::snprintf(buffer, sizeof(buffer), zeroPad ? "%0*u" : "%*u", width, value);
-                else std::snprintf(buffer, sizeof(buffer), "%u", value);
-                out += buffer;
-                break;
-            case 'x':
-            case 'X':
-                if (width) std::snprintf(buffer, sizeof(buffer), zeroPad ? "%0*x" : "%*x", width, value);
-                else std::snprintf(buffer, sizeof(buffer), "%x", value);
-                out += buffer;
-                break;
-            default:
-                out.push_back('%');
-                out.push_back(spec);
-                break;
-            }
-        }
-        ret = writeUtf16(a0, out, (name == "_snwprintf" || name == "_vsnwprintf") ? a1 : uint32_t(out.size() + 1));
-        if (out.find(".db") != std::string::npos || out.find(".bin") != std::string::npos ||
-            out.find("\\") != std::string::npos || out.find("/") != std::string::npos) {
-            spdlog::info("synthetic coredll.dll!{} formatted \"{}\" -> 0x{:08x}",
-                         name, out, a0);
-        } else if (out.empty() && (name == "wsprintfW" || name == "swprintf")) {
-            spdlog::info("synthetic coredll.dll!{} formatted empty format=\"{}\" a2w=\"{}\" a2a=\"{}\" a3=0x{:08x}",
-                         name, format, readUtf16(a2, 128), readAscii(a2, 128), a3);
-        }
-    } else if (name == "printf" || name == "sprintf" || name == "_snprintf") {
-        std::vector<uint32_t> values = name == "sprintf"
-            ? std::vector<uint32_t>{a2, a3}
-            : (name == "_snprintf" ? std::vector<uint32_t>{a3} : std::vector<uint32_t>{a1, a2, a3});
-        for (uint32_t i = 4; i < 16; ++i) values.push_back(stackArg(i));
-        size_t argIndex = 0;
-        auto nextArg = [&]() -> uint32_t {
-            return argIndex < values.size() ? values[argIndex++] : 0;
-        };
-        const std::string format = readAscii(name == "sprintf" ? a1 : (name == "_snprintf" ? a2 : a0), 2048);
-        std::string out;
-        for (size_t i = 0; i < format.size(); ++i) {
-            if (format[i] != '%' || i + 1 >= format.size()) {
-                out.push_back(format[i]);
-                continue;
-            }
-            if (format[i + 1] == '%') {
-                out.push_back('%');
-                ++i;
-                continue;
-            }
-            ++i;
-            bool zeroPad = false;
-            if (format[i] == '0') {
-                zeroPad = true;
-                ++i;
-            }
-            int width = 0;
-            while (i < format.size() && std::isdigit(static_cast<unsigned char>(format[i]))) {
-                width = width * 10 + (format[i++] - '0');
-            }
-            if (i < format.size() && (format[i] == 'l' || format[i] == 'h')) ++i;
-            if (i >= format.size()) break;
-            const char spec = format[i];
-            const uint32_t value = spec == 'c' || spec == 'C' || spec == 'd' ||
-                                   spec == 'i' || spec == 'u' || spec == 'x' ||
-                                   spec == 'X' || spec == 'p' || spec == 's' ||
-                                   spec == 'S'
-                ? nextArg()
-                : 0;
-            char buffer[64]{};
-            switch (spec) {
-            case 's':
-                out += readAscii(value, 2048);
-                break;
-            case 'S':
-                out += readUtf16(value, 2048);
-                break;
-            case 'c':
-            case 'C':
-                out.push_back(char(value & 0xffu));
-                break;
-            case 'd':
-            case 'i':
-                if (width) std::snprintf(buffer, sizeof(buffer), zeroPad ? "%0*d" : "%*d", width, int32_t(value));
-                else std::snprintf(buffer, sizeof(buffer), "%d", int32_t(value));
-                out += buffer;
-                break;
-            case 'u':
-                if (width) std::snprintf(buffer, sizeof(buffer), zeroPad ? "%0*u" : "%*u", width, value);
-                else std::snprintf(buffer, sizeof(buffer), "%u", value);
-                out += buffer;
-                break;
-            case 'p':
-                std::snprintf(buffer, sizeof(buffer), "0x%08x", value);
-                out += buffer;
-                break;
-            case 'x':
-            case 'X':
-                if (width) std::snprintf(buffer, sizeof(buffer), zeroPad ? "%0*x" : "%*x", width, value);
-                else std::snprintf(buffer, sizeof(buffer), "%x", value);
-                out += buffer;
-                break;
-            default:
-                out.push_back('%');
-                out.push_back(spec);
-                break;
-            }
-        }
-        if (name == "sprintf" || name == "_snprintf") {
-            if (name == "_snprintf") {
-                const uint32_t capacity = a1;
-                if (a0 && capacity) {
-                    const uint32_t copy = std::min<uint32_t>(capacity - 1, uint32_t(out.size()));
-                    if (copy) uc_mem_write(uc_, a0, out.data(), copy);
-                    const char nul = 0;
-                    uc_mem_write(uc_, a0 + copy, &nul, sizeof(nul));
-                }
-            } else {
-                writeAscii(a0, out);
-            }
-            if (out.find(".db") != std::string::npos || out.find(".bin") != std::string::npos ||
-                out.find("\\") != std::string::npos || out.find("/") != std::string::npos) {
-                spdlog::info("synthetic coredll.dll!{} formatted \"{}\" -> 0x{:08x}",
-                             name, out, a0);
-            }
-        } else if (!out.empty()) {
-            spdlog::info("printf: {}", out);
-        }
-        ret = uint32_t(out.size());
-    } else if (name == "_wtol") {
-        const std::string value = readUtf16(a0, 128);
-        char* end = nullptr;
-        ret = uint32_t(std::strtol(value.c_str(), &end, 10));
-    } else if (name == "_ultow") {
-        const uint32_t radix = (a2 >= 2 && a2 <= 36) ? a2 : 10;
-        uint32_t value = a0;
-        std::string digits;
-        do {
-            const uint32_t digit = value % radix;
-            digits.push_back(char(digit < 10 ? ('0' + digit) : ('a' + digit - 10)));
-            value /= radix;
-        } while (value);
-        std::reverse(digits.begin(), digits.end());
-        writeUtf16(a1, digits, uint32_t(digits.size() + 1));
-        ret = a1;
-    } else if (name == "InitializeCriticalSection") {
-        if (a0) {
-            criticalSectionDepth_[a0] = 0;
-            lastError_ = 0;
-        } else {
-            lastError_ = 87;
-        }
-        ret = 0;
-    } else if (name == "DeleteCriticalSection") {
-        criticalSectionDepth_.erase(a0);
-        lastError_ = 0;
-        ret = 0;
-    } else if (name == "EnterCriticalSection") {
-        if (a0) {
-            ++criticalSectionDepth_[a0];
-            lastError_ = 0;
-        } else {
-            lastError_ = 87;
-        }
-        ret = 0;
-    } else if (name == "LeaveCriticalSection") {
-        auto it = criticalSectionDepth_.find(a0);
-        if (it != criticalSectionDepth_.end() && it->second) --it->second;
-        lastError_ = 0;
-        ret = 0;
-    } else if (name == "TryEnterCriticalSection") {
-        if (a0) {
-            ++criticalSectionDepth_[a0];
-            lastError_ = 0;
-            ret = 1;
-        } else {
-            lastError_ = 87;
-            ret = 0;
-        }
-    } else if (name == "TlsGetValue") {
-        ret = tlsValues_[a0];
-    } else if (name == "TlsSetValue") {
-        tlsValues_[a0] = a1;
-        ret = 1;
-    } else if (name == "TlsCall") {
-        ret = 0;
-    } else if (name == "InterlockedIncrement" || name == "InterlockedDecrement") {
-        int32_t value = 0;
-        uc_mem_read(uc_, a0, &value, sizeof(value));
-        value += name == "InterlockedIncrement" ? 1 : -1;
-        uc_mem_write(uc_, a0, &value, sizeof(value));
-        ret = uint32_t(value);
-    } else if (name == "InterlockedExchange") {
-        uint32_t old = 0;
-        uc_mem_read(uc_, a0, &old, sizeof(old));
-        uc_mem_write(uc_, a0, &a1, sizeof(a1));
-        ret = old;
-    } else if (name == "InterlockedExchangeAdd") {
-        uint32_t old = 0;
-        uc_mem_read(uc_, a0, &old, sizeof(old));
-        const uint32_t next = old + a1;
-        uc_mem_write(uc_, a0, &next, sizeof(next));
-        ret = old;
-    } else if (name == "InterlockedTestExchange") {
-        uint32_t old = 0;
-        uc_mem_read(uc_, a0, &old, sizeof(old));
-        if (old == a1) uc_mem_write(uc_, a0, &a2, sizeof(a2));
-        ret = old;
-    } else if (name == "InterlockedCompareExchange") {
-        uint32_t old = 0;
-        uc_mem_read(uc_, a0, &old, sizeof(old));
-        if (old == a2) uc_mem_write(uc_, a0, &a1, sizeof(a1));
-        ret = old;
-    } else if (name == "LocalAlloc") {
-        ret = allocate(a1, (a0 & 0x0040u) != 0);
-    } else if (name == "malloc") {
-        ret = allocate(a0, false);
-    } else if (name == "LocalAllocTrace") {
-        if (a2 == 0x38 && a1) {
-            uint32_t firstWord = 0;
-            ret = uc_mem_read(uc_, a1, &firstWord, sizeof(firstWord)) == UC_ERR_OK ? firstWord : 0;
-        } else {
-            ret = allocate(a1 ? a1 : 1, false);
-        }
-    } else if (name == "LocalFree" || name == "free") {
-        releaseAllocation(a0);
-        ret = 0;
-    } else if (name == "LocalSize" || name == "HeapSize") {
-        ret = allocationSize(name == "HeapSize" ? a2 : a0);
-    } else if (name == "LocalReAlloc" || name == "RemoteLocalReAlloc" || name == "realloc") {
-        if (!a1) {
-            releaseAllocation(a0);
-            ret = 0;
-        } else {
-            const uint32_t oldSize = allocationSize(a0);
-            ret = allocate(a1, name == "realloc" ? false : (a2 & 0x0040u) != 0);
-            if (a0 && ret && oldSize) {
-                std::vector<uint8_t> bytes(std::min(oldSize, a1));
-                uc_mem_read(uc_, a0, bytes.data(), bytes.size());
-                uc_mem_write(uc_, ret, bytes.data(), bytes.size());
-                releaseAllocation(a0);
-            }
-        }
-    } else if (name == "HeapCreate") {
-        ret = makeGuestHandle({GuestHandle::Kind::GuestHeap, 0, 0});
-    } else if (name == "HeapDestroy") {
-        auto it = guestHandles_.find(a0);
-        if (it == guestHandles_.end() || it->second.kind != GuestHandle::Kind::GuestHeap ||
-            a0 == processHeapHandle_) {
-            lastError_ = 6;
-            ret = 0;
-        } else {
-            guestHandles_.erase(it);
-            lastError_ = 0;
-            ret = 1;
-        }
-    } else if (name == "GetProcessHeap") {
-        if (!processHeapHandle_) {
-            processHeapHandle_ = makeGuestHandle({GuestHandle::Kind::GuestHeap, 0, 0});
-        }
-        ret = processHeapHandle_;
-    } else if (name == "HeapAlloc") {
-        auto* heap = lookupGuestHandle(a0);
-        if (!heap || heap->kind != GuestHandle::Kind::GuestHeap) {
-            lastError_ = 6;
-            ret = 0;
-        } else {
-            ret = allocate(a2, (a1 & 0x00000008u) != 0);
-            lastError_ = ret ? 0 : 8;
-        }
-    } else if (name == "HeapReAlloc") {
-        auto* heap = lookupGuestHandle(a0);
-        if (!heap || heap->kind != GuestHandle::Kind::GuestHeap || !a2) {
-            lastError_ = 6;
-            ret = 0;
-        } else {
-            const uint32_t oldSize = allocationSize(a2);
-            ret = allocate(a3, (a1 & 0x00000008u) != 0);
-            if (ret && oldSize) {
-                std::vector<uint8_t> bytes(std::min(oldSize, a3));
-                uc_mem_read(uc_, a2, bytes.data(), bytes.size());
-                uc_mem_write(uc_, ret, bytes.data(), bytes.size());
-                releaseAllocation(a2);
-            }
-            lastError_ = ret ? 0 : 8;
-        }
-    } else if (name == "HeapFree") {
-        auto* heap = lookupGuestHandle(a0);
-        if (!heap || heap->kind != GuestHandle::Kind::GuestHeap || !a2) {
-            lastError_ = 6;
-            ret = 0;
-        } else {
-            releaseAllocation(a2);
-            lastError_ = 0;
-            ret = 1;
-        }
-    } else if (name == "RemoteHeapFree") {
-        ret = copyGuest(a0, a2, 0x38) ? a0 : 1;
-    } else if (name == "VirtualAlloc") {
-        ret = allocate(a1, true);
-    } else if (name == "VirtualFree") {
-        releaseAllocation(a0);
-        ret = 1;
-    } else if (name == "GetVersionExW") {
-        if (a0) {
-            writeU32(a0 + 4, 4);
-            writeU32(a0 + 8, 20);
-            writeU32(a0 + 12, 0);
-            writeU32(a0 + 16, 3);
-        }
-        ret = a0 ? 1 : 0;
-    } else if (name == "operator_new" || name == "operator_new_nothrow" ||
-               name == "operator_vector_new" || name == "operator_vector_new_nothrow") {
-        ret = allocate(a0, false);
-    } else if (name == "operator_delete" || name == "operator_delete_nothrow" ||
-               name == "operator_vector_delete" || name == "operator_vector_delete_nothrow") {
-        releaseAllocation(a0);
-        ret = 0;
-    } else if (name == "wcschr" || name == "wcsrchr") {
-        const uint16_t target = uint16_t(a1 & 0xffffu);
-        uint32_t found = 0;
-        for (uint32_t offset = 0; a0; offset += 2) {
-            uint16_t ch = 0;
-            if (uc_mem_read(uc_, a0 + offset, &ch, sizeof(ch)) != UC_ERR_OK) break;
-            if (ch == target) {
-                found = a0 + offset;
-                if (name == "wcschr") break;
-            }
-            if (!ch) break;
-        }
-        ret = found;
-    } else if (name == "wcsstr") {
-        ret = 0;
-        uint16_t needleFirst = 0;
-        if (a0 && a1 && uc_mem_read(uc_, a1, &needleFirst, sizeof(needleFirst)) == UC_ERR_OK) {
-            if (!needleFirst) {
-                ret = a0;
-            } else {
-                for (uint32_t hayOffset = 0; hayOffset < 0x200000; hayOffset += 2) {
-                    uint16_t hay = 0;
-                    if (uc_mem_read(uc_, a0 + hayOffset, &hay, sizeof(hay)) != UC_ERR_OK || !hay) break;
-                    if (hay != needleFirst) continue;
-                    bool match = true;
-                    for (uint32_t needleOffset = 2; needleOffset < 0x200000; needleOffset += 2) {
-                        uint16_t needle = 0;
-                        uint16_t candidate = 0;
-                        if (uc_mem_read(uc_, a1 + needleOffset, &needle, sizeof(needle)) != UC_ERR_OK) {
-                            match = false;
-                            break;
-                        }
-                        if (!needle) break;
-                        if (uc_mem_read(uc_, a0 + hayOffset + needleOffset, &candidate, sizeof(candidate)) != UC_ERR_OK ||
-                            candidate != needle) {
-                            match = false;
-                            break;
-                        }
-                    }
-                    if (match) {
-                        ret = a0 + hayOffset;
-                        break;
-                    }
-                }
-            }
-        }
-    } else if (name == "wcslen") {
-        uint32_t count = 0;
-        for (;; ++count) {
-            uint16_t ch = 0;
-            if (uc_mem_read(uc_, a0 + count * 2, &ch, sizeof(ch)) != UC_ERR_OK || !ch) break;
-        }
-        ret = count;
-    } else if (name == "wcscpy") {
-        uint32_t offset = 0;
-        for (;; offset += 2) {
-            uint16_t ch = 0;
-            uc_mem_read(uc_, a1 + offset, &ch, sizeof(ch));
-            uc_mem_write(uc_, a0 + offset, &ch, sizeof(ch));
-            if (!ch) break;
-        }
-        ret = a0;
-    } else if (name == "wcscspn") {
-        uint32_t count = 0;
-        for (;; ++count) {
-            uint16_t ch = 0;
-            if (uc_mem_read(uc_, a0 + count * 2, &ch, sizeof(ch)) != UC_ERR_OK || !ch) break;
-            bool rejected = false;
-            for (uint32_t offset = 0; a1; offset += 2) {
-                uint16_t reject = 0;
-                if (uc_mem_read(uc_, a1 + offset, &reject, sizeof(reject)) != UC_ERR_OK || !reject) break;
-                if (ch == reject) {
-                    rejected = true;
-                    break;
-                }
-            }
-            if (rejected) break;
-        }
-        ret = count;
-    } else if (name == "wcsncmp" || name == "_wcsnicmp") {
-        ret = 0;
-        for (uint32_t i = 0; i < a2; ++i) {
-            uint16_t left = 0;
-            uint16_t right = 0;
-            uc_mem_read(uc_, a0 + i * 2, &left, sizeof(left));
-            uc_mem_read(uc_, a1 + i * 2, &right, sizeof(right));
-            if (name == "_wcsnicmp") {
-                if (left >= 'A' && left <= 'Z') left = uint16_t(left - 'A' + 'a');
-                if (right >= 'A' && right <= 'Z') right = uint16_t(right - 'A' + 'a');
-            }
-            if (left != right || !left || !right) {
-                ret = uint32_t(int(left) - int(right));
-                break;
-            }
-        }
-    } else if (name == "_wcsicmp") {
-        ret = 0;
-        for (uint32_t i = 0; i < 0x100000; ++i) {
-            uint16_t left = 0;
-            uint16_t right = 0;
-            uc_mem_read(uc_, a0 + i * 2, &left, sizeof(left));
-            uc_mem_read(uc_, a1 + i * 2, &right, sizeof(right));
-            if (left >= 'A' && left <= 'Z') left = uint16_t(left - 'A' + 'a');
-            if (right >= 'A' && right <= 'Z') right = uint16_t(right - 'A' + 'a');
-            if (left != right || !left || !right) {
-                ret = uint32_t(int(left) - int(right));
-                break;
-            }
-        }
-    } else if (name == "_wcsdup") {
-        const std::string value = readUtf16(a0);
-        ret = allocate(uint32_t((value.size() + 1) * 2), false);
-        writeUtf16(ret, value, uint32_t(value.size() + 1));
-    } else if (name == "strlen") {
-        ret = uint32_t(readAscii(a0).size());
-    } else if (name == "strcpy") {
-        uint32_t offset = 0;
-        for (;; ++offset) {
-            char ch = 0;
-            uc_mem_read(uc_, a1 + offset, &ch, sizeof(ch));
-            uc_mem_write(uc_, a0 + offset, &ch, sizeof(ch));
-            if (!ch) break;
-        }
-        ret = a0;
-    } else if (name == "strcat") {
-        uint32_t dstLen = 0;
-        for (; dstLen < 0x100000; ++dstLen) {
-            char ch = 0;
-            if (uc_mem_read(uc_, a0 + dstLen, &ch, sizeof(ch)) != UC_ERR_OK || !ch) break;
-        }
-        uint32_t offset = 0;
-        for (;; ++offset) {
-            char ch = 0;
-            uc_mem_read(uc_, a1 + offset, &ch, sizeof(ch));
-            uc_mem_write(uc_, a0 + dstLen + offset, &ch, sizeof(ch));
-            if (!ch) break;
-        }
-        ret = a0;
-    } else if (name == "strtok") {
-        const std::string delimiters = readAscii(a1, 256);
-        uint32_t cursor = a0 ? a0 : strtokNext_;
-        auto isDelimiter = [&](char ch) {
-            return delimiters.find(ch) != std::string::npos;
-        };
-        char ch = 0;
-        while (cursor && uc_mem_read(uc_, cursor, &ch, sizeof(ch)) == UC_ERR_OK && ch && isDelimiter(ch)) {
-            ++cursor;
-        }
-        if (!cursor || uc_mem_read(uc_, cursor, &ch, sizeof(ch)) != UC_ERR_OK || !ch) {
-            strtokNext_ = 0;
-            ret = 0;
-        } else {
-            ret = cursor;
-            for (;; ++cursor) {
-                if (uc_mem_read(uc_, cursor, &ch, sizeof(ch)) != UC_ERR_OK || !ch) {
-                    strtokNext_ = 0;
-                    break;
-                }
-                if (isDelimiter(ch)) {
-                    const char nul = 0;
-                    uc_mem_write(uc_, cursor, &nul, sizeof(nul));
-                    strtokNext_ = cursor + 1;
-                    break;
-                }
-            }
-        }
-    } else if (name == "memcmp") {
-        ret = 0;
-        for (uint32_t offset = 0; offset < a2; ++offset) {
-            unsigned char left = 0;
-            unsigned char right = 0;
-            if (uc_mem_read(uc_, a0 + offset, &left, sizeof(left)) != UC_ERR_OK ||
-                uc_mem_read(uc_, a1 + offset, &right, sizeof(right)) != UC_ERR_OK) {
-                ret = 0xffffffffu;
-                break;
-            }
-            if (left != right) {
-                ret = uint32_t(int(left) - int(right));
-                break;
-            }
-        }
-    } else if (name == "rand") {
-        ret = uint32_t(std::rand());
-    } else if (name == "srand") {
-        std::srand(a0);
-        ret = 0;
-    } else if (name == "strcmp") {
-        uint32_t offset = 0;
-        for (;; ++offset) {
-            unsigned char left = 0;
-            unsigned char right = 0;
-            uc_mem_read(uc_, a0 + offset, &left, sizeof(left));
-            uc_mem_read(uc_, a1 + offset, &right, sizeof(right));
-            if (left != right || !left || !right) {
-                ret = uint32_t(int(left) - int(right));
-                break;
-            }
-        }
-    } else if (name == "strcspn") {
-        const std::string source = readAscii(a0);
-        const std::string reject = readAscii(a1);
-        size_t count = 0;
-        while (count < source.size() && reject.find(source[count]) == std::string::npos) ++count;
-        ret = uint32_t(count);
-    } else if (name == "_stricmp" || name == "_strnicmp") {
-        std::string left = lowerAscii(readAscii(a0));
-        std::string right = lowerAscii(readAscii(a1));
-        if (name == "_strnicmp") {
-            left = left.substr(0, a2);
-            right = right.substr(0, a2);
-        }
-        ret = uint32_t(left.compare(right));
-    } else if (name == "strtol") {
-        const std::string source = readAscii(a0);
-        char* end = nullptr;
-        const long value = std::strtol(source.c_str(), &end, int(a2 ? a2 : 10));
-        if (a1) writeU32(a1, a0 + uint32_t(end ? end - source.c_str() : 0));
-        ret = uint32_t(value);
-    } else if (name == "strtoul") {
-        const std::string source = readAscii(a0);
-        char* end = nullptr;
-        const unsigned long value = std::strtoul(source.c_str(), &end, int(a2));
-        if (a1) writeU32(a1, a0 + uint32_t(end ? end - source.c_str() : 0));
-        ret = uint32_t(value);
-        spdlog::info("strtoul source=\"{}\" base={} -> 0x{:08x}", source, a2, ret);
-    } else if (name == "wcstoul") {
-        const std::string source = readUtf16(a0);
-        char* end = nullptr;
-        const unsigned long value = std::strtoul(source.c_str(), &end, int(a2 ? a2 : 10));
-        if (a1) writeU32(a1, a0 + uint32_t(end ? (end - source.c_str()) * 2 : 0));
-        ret = uint32_t(value);
-        spdlog::info("wcstoul source=\"{}\" base={} -> 0x{:08x}", source, a2, ret);
-    } else if (name == "atoi") {
-        ret = uint32_t(std::atoi(readAscii(a0, 256).c_str()));
-    } else if (name == "atof") {
-        const std::string source = readAscii(a0, 256);
-        char* end = nullptr;
-        const double value = std::strtod(source.c_str(), &end);
-        setGuestDoubleReturn(uc_, value, ret);
-    } else if (name == "CopyRect") {
-        ret = copyGuest(a0, a1, 16) ? 1 : 0;
-    } else if (name == "EqualRect") {
-        int32_t left[4]{};
-        int32_t right[4]{};
-        ret = a0 && a1 &&
-              uc_mem_read(uc_, a0, left, sizeof(left)) == UC_ERR_OK &&
-              uc_mem_read(uc_, a1, right, sizeof(right)) == UC_ERR_OK &&
-              std::memcmp(left, right, sizeof(left)) == 0 ? 1 : 0;
-    } else if (name == "InflateRect") {
-        int32_t rect[4]{};
-        if (a0 && uc_mem_read(uc_, a0, rect, sizeof(rect)) == UC_ERR_OK) {
-            rect[0] -= int32_t(a1);
-            rect[1] -= int32_t(a2);
-            rect[2] += int32_t(a1);
-            rect[3] += int32_t(a2);
-            uc_mem_write(uc_, a0, rect, sizeof(rect));
-            ret = 1;
-        } else {
-            ret = 0;
-        }
-    } else if (name == "IsRectEmpty") {
-        int32_t rect[4]{};
-        ret = a0 && uc_mem_read(uc_, a0, rect, sizeof(rect)) == UC_ERR_OK &&
-              (rect[2] <= rect[0] || rect[3] <= rect[1]) ? 1 : 0;
-    } else if (name == "SetRectEmpty") {
-        const int32_t rect[4]{};
-        ret = a0 && uc_mem_write(uc_, a0, rect, sizeof(rect)) == UC_ERR_OK ? 1 : 0;
-    } else if (name == "PtInRect") {
-        int32_t rect[4]{};
-        ret = a0 && uc_mem_read(uc_, a0, rect, sizeof(rect)) == UC_ERR_OK &&
-              int32_t(a1) >= rect[0] && int32_t(a1) < rect[2] &&
-              int32_t(a2) >= rect[1] && int32_t(a2) < rect[3] ? 1 : 0;
-    } else if (name == "SetRect") {
-        if (a0) {
-            writeGuestRect(a0, int32_t(a1), int32_t(a2), int32_t(a3), int32_t(stackArg(4)));
-            ret = 1;
-        } else {
-            lastError_ = 87;
-            ret = 0;
-        }
-    } else if (name == "GetAPIAddress") {
-        if (!a0 && !a1 && !a2 && a3 == 0x1c) {
-            ret = allocate(0x38, true);
-        } else {
-            ret = 0;
-        }
-    } else if (name == "InterlockedTestExchange") {
-        uint32_t old = 0;
-        uc_mem_read(uc_, a0, &old, sizeof(old));
-        if (old == a1) uc_mem_write(uc_, a0, &a2, sizeof(a2));
-        ret = old;
-    } else if (name == "IsDBCSLeadByteEx") {
-        const uint32_t codePage = guestAnsiCodePage(a0);
-        const uint8_t ch = uint8_t(a1);
-        ret = (codePage == 949 && ch >= 0x81 && ch <= 0xfe) ? 1 : 0;
-    } else if (name == "iswctype") {
-        ret = 0;
-    } else if (name == "MultiByteToWideChar") {
-        const uint32_t wideOut = stackArg(4);
-        const uint32_t wideCapacity = stackArg(5);
-        const int32_t byteCount = int32_t(a3);
-        if (!a2) {
-            lastError_ = 87;
-            ret = 0;
-        } else {
-            std::vector<char> bytes;
-            if (byteCount < 0) {
-                for (uint32_t i = 0; i < 1024 * 1024; ++i) {
-                    char ch = 0;
-                    if (uc_mem_read(uc_, a2 + i, &ch, sizeof(ch)) != UC_ERR_OK) break;
-                    bytes.push_back(ch);
-                    if (!ch) break;
-                }
-            } else {
-                bytes.resize(uint32_t(byteCount));
-                if (!bytes.empty() && uc_mem_read(uc_, a2, bytes.data(), bytes.size()) != UC_ERR_OK) bytes.clear();
-            }
-#if defined(_WIN32)
-            const uint32_t codePage = guestAnsiCodePage(a0);
-            const int inputChars = byteCount < 0 ? -1 : int(bytes.size());
-            const int needed = bytes.empty()
-                ? 0
-                : ::MultiByteToWideChar(codePage, a1, bytes.data(), inputChars, nullptr, 0);
-            if (!needed) {
-                lastError_ = GetLastError();
-                ret = 0;
-            } else if (!wideOut || !wideCapacity) {
-                lastError_ = 0;
-                ret = uint32_t(needed);
-            } else {
-                std::vector<wchar_t> wide(static_cast<size_t>(wideCapacity));
-                wchar_t* wideData = wide.data();
-                const int wideLength = int(wide.size());
-                const int written = ::MultiByteToWideChar(codePage, a1, bytes.data(), inputChars, wideData, wideLength);
-                if (!written) {
-                    lastError_ = GetLastError();
-                    ret = 0;
-                } else {
-                    uc_mem_write(uc_, wideOut, wideData, size_t(written) * sizeof(wchar_t));
-                    lastError_ = 0;
-                    ret = uint32_t(written);
-                }
-            }
-#else
-            const uint32_t needed = uint32_t(bytes.size());
-            if (wideOut && wideCapacity) {
-                const uint32_t count = std::min(needed, wideCapacity);
-                for (uint32_t i = 0; i < count; ++i) {
-                    const uint16_t ch = uint8_t(bytes[i]);
-                    uc_mem_write(uc_, wideOut + i * 2, &ch, sizeof(ch));
-                }
-            }
-            ret = wideOut && wideCapacity ? std::min(needed, wideCapacity) : needed;
-#endif
-        }
-    } else if (name == "__ll_div") {
-        const int64_t dividend = (int64_t(uint64_t(a1)) << 32) | uint64_t(a0);
-        const int64_t divisor = (int64_t(uint64_t(a3)) << 32) | uint64_t(a2);
-        const int64_t quotient = divisor ? (dividend / divisor) : 0;
-        ret = uint32_t(uint64_t(quotient));
-        setReg(UC_MIPS_REG_V1, uint32_t(uint64_t(quotient) >> 32));
-    } else if (name == "__f_to_ll") {
-        float value = 0.0f;
-        std::memcpy(&value, &a0, sizeof(value));
-        const int64_t converted = std::isfinite(value) ? static_cast<int64_t>(value) : 0;
-        ret = uint32_t(uint64_t(converted));
-        setReg(UC_MIPS_REG_V1, uint32_t(uint64_t(converted) >> 32));
-    } else if (name == "__litodp") {
-        setGuestDoubleReturn(uc_, static_cast<double>(int32_t(a0)), ret);
-    } else if (name == "__ultodp") {
-        setGuestDoubleReturn(uc_, static_cast<double>(a0), ret);
-    } else if (name == "__fpadd" || name == "__fpsub") {
-        float left = 0.0f;
-        float right = 0.0f;
-        std::memcpy(&left, &a0, sizeof(left));
-        std::memcpy(&right, &a1, sizeof(right));
-        const float value = name == "__fpadd" ? left + right : left - right;
-        std::memcpy(&ret, &value, sizeof(ret));
-    } else if (name == "__dpadd" || name == "__dpsub" || name == "__dpmul" || name == "__dpdiv") {
-        const double left = doubleFromGuestPair(a0, a1);
-        const double right = doubleFromGuestPair(a2, a3);
-        const double result = name == "__dpadd"
-            ? left + right
-            : (name == "__dpsub" ? left - right : (name == "__dpmul" ? left * right : (right == 0.0 ? 0.0 : left / right)));
-        setGuestDoubleReturn(uc_, result, ret);
-    } else if (name == "__dptoli") {
-        ret = uint32_t(int32_t(doubleFromGuestPair(a0, a1)));
-    } else if (name == "__dptoul") {
-        ret = uint32_t(doubleFromGuestPair(a0, a1));
-    } else if (name == "__dptofp") {
-        const float value = static_cast<float>(doubleFromGuestPair(a0, a1));
-        std::memcpy(&ret, &value, sizeof(ret));
-    } else if (name == "__fptoli") {
-        float value = 0.0f;
-        std::memcpy(&value, &a0, sizeof(value));
-        ret = uint32_t(int32_t(value));
-    } else if (name == "__fptoul") {
-        float value = 0.0f;
-        std::memcpy(&value, &a0, sizeof(value));
-        ret = uint32_t(value);
-    } else if (name == "__fptodp") {
-        float value = 0.0f;
-        std::memcpy(&value, &a0, sizeof(value));
-        setGuestDoubleReturn(uc_, static_cast<double>(value), ret);
-    } else if (name == "__fpmul" || name == "__fpdiv") {
-        float left = 0.0f;
-        float right = 0.0f;
-        std::memcpy(&left, &a0, sizeof(left));
-        std::memcpy(&right, &a1, sizeof(right));
-        const float value = name == "__fpmul" ? left * right : (right == 0.0f ? 0.0f : left / right);
-        std::memcpy(&ret, &value, sizeof(ret));
-    } else if (name == "fmodf") {
-        float left = 0.0f;
-        float right = 0.0f;
-        std::memcpy(&left, &a0, sizeof(left));
-        std::memcpy(&right, &a1, sizeof(right));
-        const float value = right == 0.0f ? 0.0f : std::fmod(left, right);
-        std::memcpy(&ret, &value, sizeof(ret));
-    } else if (name == "__litofp") {
-        const float value = static_cast<float>(int32_t(a0));
-        std::memcpy(&ret, &value, sizeof(ret));
-    } else if (name == "__eqs" || name == "__nes" || name == "__lts" || name == "__les" ||
-               name == "__ges" || name == "__gts") {
-        float left = 0.0f;
-        float right = 0.0f;
-        std::memcpy(&left, &a0, sizeof(left));
-        std::memcpy(&right, &a1, sizeof(right));
-        const bool equal = left == right;
-        if (name == "__lts") ret = left < right ? 1 : 0;
-        else if (name == "__les") ret = left <= right ? 1 : 0;
-        else if (name == "__ges") ret = left >= right ? 1 : 0;
-        else if (name == "__gts") ret = left > right ? 1 : 0;
-        else ret = (name == "__eqs" ? equal : !equal) ? 1 : 0;
-    } else if (name == "_hypot") {
-        setGuestDoubleReturn(uc_, std::hypot(doubleFromGuestPair(a0, a1), doubleFromGuestPair(a2, a3)), ret);
-    } else if (name == "sqrt") {
-        setGuestDoubleReturn(uc_, std::sqrt(doubleFromGuestPair(a0, a1)), ret);
-    } else if (name == "sin" || name == "cos") {
-        const double value = doubleFromGuestPair(a0, a1);
-        setGuestDoubleReturn(uc_, name == "sin" ? std::sin(value) : std::cos(value), ret);
-    } else if (name == "toupper") {
-        ret = uint32_t(std::toupper(int(a0)));
-    } else if (name == "__ltd" || name == "__led" || name == "__eqd" || name == "__ged" || name == "__gtd") {
-        const double left = doubleFromGuestPair(a0, a1);
-        const double right = doubleFromGuestPair(a2, a3);
-        if (name == "__ltd") ret = left < right ? 1 : 0;
-        else if (name == "__led") ret = left <= right ? 1 : 0;
-        else if (name == "__eqd") ret = left == right ? 1 : 0;
-        else if (name == "__gtd") ret = left > right ? 1 : 0;
-        else ret = left >= right ? 1 : 0;
-    } else if (name == "__ehvec_ctor") {
-        // Full vector construction needs repeated guest callback transfers. The
-        // current callers survive a fail-closed no-construction result.
-        ret = 0;
-    } else if (name == "GetCRTFlags") {
-        ret = 0;
-    } else if (name == "GetCRTStorageEx") {
-        ret = a1 && a2 == 0x38 ? 0 : allocate(0x100, true);
-    } else if (name == "_setjmp") {
-        constexpr uint32_t kJmpBufMagic = 0x4a4d5032u; // "JMP2"
-        ret = 0;
-        if (a0 && isGuestRangeReadable(a0, 56)) {
-            writeU32(a0 + 0, kJmpBufMagic);
-            writeU32(a0 + 4, args.ra);
-            writeU32(a0 + 8, reg(UC_MIPS_REG_SP));
-            writeU32(a0 + 12, reg(UC_MIPS_REG_GP));
-            writeU32(a0 + 16, reg(UC_MIPS_REG_S0));
-            writeU32(a0 + 20, reg(UC_MIPS_REG_S1));
-            writeU32(a0 + 24, reg(UC_MIPS_REG_S2));
-            writeU32(a0 + 28, reg(UC_MIPS_REG_S3));
-            writeU32(a0 + 32, reg(UC_MIPS_REG_S4));
-            writeU32(a0 + 36, reg(UC_MIPS_REG_S5));
-            writeU32(a0 + 40, reg(UC_MIPS_REG_S6));
-            writeU32(a0 + 44, reg(UC_MIPS_REG_S7));
-            writeU32(a0 + 48, reg(UC_MIPS_REG_FP));
-            writeU32(a0 + 52, 0);
-        }
-    } else if (name == "longjmp") {
-        constexpr uint32_t kJmpBufMagic = 0x4a4d5032u; // "JMP2"
-        ret = a1 ? a1 : 1;
-        if (a0 && isGuestRangeReadable(a0, 56) && readU32(a0) == kJmpBufMagic) {
-            const uint32_t savedRa = readU32(a0 + 4);
-            setReg(UC_MIPS_REG_RA, savedRa);
-            setReg(UC_MIPS_REG_SP, readU32(a0 + 8));
-            setReg(UC_MIPS_REG_GP, readU32(a0 + 12));
-            setReg(UC_MIPS_REG_S0, readU32(a0 + 16));
-            setReg(UC_MIPS_REG_S1, readU32(a0 + 20));
-            setReg(UC_MIPS_REG_S2, readU32(a0 + 24));
-            setReg(UC_MIPS_REG_S3, readU32(a0 + 28));
-            setReg(UC_MIPS_REG_S4, readU32(a0 + 32));
-            setReg(UC_MIPS_REG_S5, readU32(a0 + 36));
-            setReg(UC_MIPS_REG_S6, readU32(a0 + 40));
-            setReg(UC_MIPS_REG_S7, readU32(a0 + 44));
-            setReg(UC_MIPS_REG_FP, readU32(a0 + 48));
-            setReg(UC_MIPS_REG_PC, savedRa);
-            spdlog::info("longjmp restored guest context jmpbuf=0x{:08x} pc=0x{:08x} value={}",
-                         a0, savedRa, ret);
-        } else {
-            spdlog::warn("longjmp received invalid or uninitialized jmp_buf=0x{:08x}", a0);
-        }
-    } else {
-        return false;
-    }
-
-    return true;
-}
-
-bool SyntheticDllRuntime::dispatchRegistryApi(const std::string& name,
-                                              const GuestCallArgs& args,
-                                              uint32_t& ret) {
-    const uint32_t a0 = args.a0;
-    const uint32_t a1 = args.a1;
-    const uint32_t a2 = args.a2;
-    const uint32_t a3 = args.a3;
-
-    if (name == "RegCreateKeyExW") {
-        const std::string subKey = readUtf16(a1, 1024);
-        const auto path = registryPathFromHandle(a0, subKey);
-        const uint32_t resultPtr = stackArg(7);
-        const uint32_t dispositionPtr = stackArg(8);
-        if (!path || !resultPtr) {
-            ret = 87;
-            spdlog::info("RegCreateKeyExW invalid hkey=0x{:08x} subkey=\"{}\" resultPtr=0x{:08x}", a0, subKey, resultPtr);
-        } else {
-            const bool existed = registryKeyExists(*path);
-            registryEnsureKey(*path);
-            writeU32(resultPtr, makeRegistryHandle(*path));
-            if (dispositionPtr) writeU32(dispositionPtr, existed ? 2 : 1);
-            ret = 0;
-            spdlog::info("RegCreateKeyExW path=\"{}\" existed={} -> {}", *path, existed, ret);
-        }
-    } else if (name == "RegOpenKeyExW") {
-        const std::string subKey = readUtf16(a1, 1024);
-        const auto path = registryPathFromHandle(a0, subKey);
-        const uint32_t resultPtr = stackArg(4);
-        if (!path || !resultPtr) {
-            ret = 87;
-            spdlog::info("RegOpenKeyExW invalid hkey=0x{:08x} subkey=\"{}\" resultPtr=0x{:08x}", a0, subKey, resultPtr);
-        } else if (!registryKeyExists(*path)) {
-            writeU32(resultPtr, 0);
-            ret = 2;
-            spdlog::info("RegOpenKeyExW miss path=\"{}\" -> {}", *path, ret);
-        } else {
-            const uint32_t handle = makeRegistryHandle(*path);
-            writeU32(resultPtr, handle);
-            ret = 0;
-            spdlog::info("RegOpenKeyExW hit path=\"{}\" handle=0x{:08x}", *path, handle);
-        }
-    } else if (name == "RegQueryValueExW") {
-        const auto path = registryPathFromHandle(a0, {});
-        const std::string valueName = readUtf16(a1, 1024);
-        const nlohmann::json* value = path ? registryValue(*path, valueName) : nullptr;
-        const uint32_t typePtr = a3;
-        const uint32_t dataPtr = stackArg(4);
-        const uint32_t sizePtr = stackArg(5);
-        if (!path || !sizePtr) {
-            ret = 87;
-            spdlog::info("RegQueryValueExW invalid hkey=0x{:08x} value=\"{}\" sizePtr=0x{:08x}", a0, valueName, sizePtr);
-        } else if (!value) {
-            const uint32_t capacity = readU32(sizePtr);
-            ret = 2;
-            spdlog::info("RegQueryValueExW miss path=\"{}\" value=\"{}\" typePtr=0x{:08x} dataPtr=0x{:08x} sizePtr=0x{:08x} capacity={} -> {}",
-                         *path, valueName, typePtr, dataPtr, sizePtr, capacity, ret);
-        } else {
-            const uint32_t type = registryTypeId(*value);
-            const std::vector<uint8_t> bytes = registryValueBytes(*value);
-            const uint32_t capacity = readU32(sizePtr);
-            if (typePtr) writeU32(typePtr, type);
-            writeU32(sizePtr, uint32_t(bytes.size()));
-            if (!dataPtr) ret = 0;
-            else if (capacity < bytes.size()) ret = 234;
-            else {
-                if (!bytes.empty()) uc_mem_write(uc_, dataPtr, bytes.data(), bytes.size());
-                ret = 0;
-            }
-            spdlog::info("RegQueryValueExW hit path=\"{}\" value=\"{}\" type={} bytes={} capacity={} dataPtr=0x{:08x} -> {} data=\"{}\"",
-                         *path, valueName, registryTypeName(type), bytes.size(), capacity, dataPtr, ret,
-                         registryValuePreview(*value));
-        }
-    } else if (name == "RegSetValueExW") {
-        const auto path = registryPathFromHandle(a0, {});
-        if (!path || !registryKeyExists(*path)) {
-            ret = 6;
-            spdlog::info("RegSetValueExW invalid hkey=0x{:08x} value=\"{}\" -> {}", a0, readUtf16(a1, 1024), ret);
-        } else {
-            const std::string valueName = normalizeRegistryValueName(readUtf16(a1, 1024));
-            registry_["keys"][*path]["values"][valueName] = registryJsonFromBytes(a3, stackArg(4), stackArg(5));
-            registryDirty_ = true;
-            flushRegistry();
-            ret = 0;
-            spdlog::info("RegSetValueExW path=\"{}\" value=\"{}\" type={} size={} -> {}",
-                         *path, valueName, registryTypeName(a3), stackArg(5), ret);
-        }
-    } else if (name == "RegDeleteValueW") {
-        const auto path = registryPathFromHandle(a0, {});
-        if (!path || !registryKeyExists(*path)) {
-            ret = 6;
-        } else {
-            const std::string valueName = normalizeRegistryValueName(readUtf16(a1, 1024));
-            auto& values = registry_["keys"][*path]["values"];
-            ret = values.erase(valueName) ? 0 : 2;
-            if (!ret) {
-                registryDirty_ = true;
-                flushRegistry();
-            }
-        }
-    } else if (name == "RegDeleteKeyW") {
-        const auto path = registryPathFromHandle(a0, readUtf16(a1, 1024));
-        if (!path || !registryKeyExists(*path)) {
-            ret = 2;
-        } else {
-            std::vector<std::string> doomed;
-            for (auto it = registry_["keys"].begin(); it != registry_["keys"].end(); ++it) {
-                if (it.key() == *path || it.key().rfind(*path + "\\", 0) == 0) doomed.push_back(it.key());
-            }
-            for (const auto& key : doomed) registry_["keys"].erase(key);
-            registryDirty_ = true;
-            flushRegistry();
-            ret = 0;
-        }
-    } else if (name == "RegEnumKeyExW") {
-        const auto path = registryPathFromHandle(a0, {});
-        const std::vector<std::string> children = path ? registryChildNames(*path) : std::vector<std::string>{};
-        if (!path || !a2 || !a3) ret = 87;
-        else if (a1 >= children.size()) ret = 259;
-        else {
-            const uint32_t capacity = readU32(a3);
-            const std::string& child = children[a1];
-            if (capacity <= child.size()) {
-                writeU32(a3, uint32_t(child.size() + 1));
-                ret = 234;
-            } else {
-                writeUtf16(a2, child, capacity);
-                writeU32(a3, uint32_t(child.size()));
-                ret = 0;
-            }
-        }
-    } else if (name == "RegEnumValueW") {
-        ret = handleRegEnumValueW(a0, a1, a2, a3);
-    } else if (name == "RegQueryInfoKeyW") {
-        const auto path = registryPathFromHandle(a0, {});
-        if (!path || !registryKeyExists(*path)) ret = 6;
-        else {
-            const auto children = registryChildNames(*path);
-            const auto& values = registry_["keys"][*path]["values"];
-            if (stackArg(4)) writeU32(stackArg(4), uint32_t(children.size()));
-            if (stackArg(6)) writeU32(stackArg(6), uint32_t(values.size()));
-            ret = 0;
-        }
-    } else if (name == "RegFlushKey") {
-        flushRegistry();
-        ret = 0;
-    } else if (name == "RegCloseKey") {
-        if (registryRootName(a0).empty()) {
-            registryHandles_.erase(a0);
-            guestHandles_.erase(a0);
-        }
-        ret = 0;
-    } else {
-        return false;
-    }
-
-    return true;
-}
-
-bool SyntheticDllRuntime::dispatchSimpleHostWin32(const std::string& name,
-                                                  const GuestCallArgs& args,
-                                                  uint32_t& ret) {
-    const uint32_t a0 = args.a0;
-    const uint32_t a1 = args.a1;
-    const uint32_t a2 = args.a2;
-
-    if (name == "ResumeThread") {
-        ret = resumeGuestThread(a0);
-    } else if (name == "GetCommState" || name == "SetCommState" || name == "SetCommTimeouts" ||
-               name == "SetCommMask" || name == "SetupComm" || name == "PurgeComm" ||
-               name == "ClearCommError") {
-        auto* handle = lookupGuestHandle(a0);
-        if (!handle || (handle->kind != GuestHandle::Kind::GuestSerialDevice &&
-                        handle->kind != GuestHandle::Kind::HostSerialDevice)) {
-            lastError_ = 6;
-            ret = 0;
-        } else if (handle->kind == GuestHandle::Kind::GuestSerialDevice) {
-            auto debugName = fileHandleDebugNames_.find(a0);
-            const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
-            lastError_ = 120;
-            ret = 0;
-            spdlog::info("{} guest device handle=0x{:08x} name=\"{}\" has no host serial bridge yet -> 0",
-                         name, a0, debugPath);
-        } else {
-#if defined(_WIN32)
-            HANDLE host = reinterpret_cast<HANDLE>(handle->hostValue);
-            BOOL ok = FALSE;
-            if (name == "GetCommState") {
-                DCB dcb{};
-                dcb.DCBlength = sizeof(dcb);
-                ok = GetCommState(host, &dcb);
-                if (ok && a1) {
-                    uint32_t guestLength = readU32(a1);
-                    if (!guestLength || guestLength > sizeof(dcb)) guestLength = sizeof(dcb);
-                    uc_mem_write(uc_, a1, &dcb, guestLength);
-                    writeU32(a1, guestLength);
-                }
-            } else if (name == "SetCommState") {
-                DCB dcb{};
-                dcb.DCBlength = sizeof(dcb);
-                GetCommState(host, &dcb);
-                if (a1) {
-                    uint32_t guestLength = readU32(a1);
-                    if (!guestLength || guestLength > sizeof(dcb)) guestLength = sizeof(dcb);
-                    uc_mem_read(uc_, a1, &dcb, guestLength);
-                    dcb.DCBlength = sizeof(dcb);
-                    ok = SetCommState(host, &dcb);
-                }
-            } else if (name == "SetCommTimeouts") {
-                COMMTIMEOUTS timeouts{};
-                if (a1 && uc_mem_read(uc_, a1, &timeouts, sizeof(timeouts)) == UC_ERR_OK) {
-                    ok = SetCommTimeouts(host, &timeouts);
-                }
-            } else if (name == "SetCommMask") {
-                ok = SetCommMask(host, a1);
-            } else if (name == "SetupComm") {
-                ok = SetupComm(host, a1, a2);
-            } else if (name == "PurgeComm") {
-                ok = PurgeComm(host, a1);
-            } else if (name == "ClearCommError") {
-                DWORD errors = 0;
-                COMSTAT stat{};
-                ok = ClearCommError(host, &errors, &stat);
-                if (ok && a1) writeU32(a1, errors);
-                if (ok && a2) uc_mem_write(uc_, a2, &stat, sizeof(stat));
-            }
-            ret = ok ? 1 : 0;
-            lastError_ = ok ? 0 : GetLastError();
-#else
-            ret = 0;
-            lastError_ = 6;
-#endif
-        }
-    } else if (name == "SetTimer") {
-        if (a0 && !windows_.count(a0)) {
-            lastError_ = 1400;
-            ret = 0;
-        } else {
-            const uint32_t timerId = a1 ? a1 : uint32_t(++tick_);
-            const uint32_t interval = std::max<uint32_t>(1, a2);
-            timers_[guestTimerKey(a0, timerId)] = GuestTimer{
-                a0, timerId, interval, args.a3, hostTickMilliseconds() + interval,
-            };
-            lastError_ = 0;
-            ret = timerId;
-        }
-    } else if (name == "GetWindowTextLengthW") {
-        auto it = windows_.find(a0);
-        ret = it == windows_.end() ? 0 : uint32_t(it->second.title.size());
-        lastError_ = it == windows_.end() ? 1400 : 0;
-    } else if (name == "GetWindowTextW") {
-        auto it = windows_.find(a0);
-        if (it == windows_.end()) {
-            lastError_ = 1400;
-            ret = 0;
-        } else if (!a1 || !a2) {
-            lastError_ = 0;
-            ret = 0;
-        } else {
-            ret = writeUtf16(a1, it->second.title, a2);
-            lastError_ = 0;
-        }
-    } else if (name == "SetFocus") {
-        auto target = windows_.find(a0);
-        if (!a0 || (target != windows_.end() && !target->second.destroyed)) {
-            ret = focusedWindow_;
-            focusedWindow_ = a0;
-            if (a0) guestMessages_.push_back({a0, 0x0007, 0, 0, uint32_t(++tick_ * 16), 0, 0});
-            lastError_ = 0;
-        } else {
-            lastError_ = 1400;
-            ret = 0;
-        }
-    } else if (name == "GetFocus") {
-        ret = focusedWindow_;
-        lastError_ = 0;
-    } else if (name == "SetCapture") {
-        auto target = windows_.find(a0);
-        if (!a0 || (target != windows_.end() && !target->second.destroyed)) {
-            ret = capturedWindow_;
-            capturedWindow_ = a0;
-            lastError_ = 0;
-        } else {
-            lastError_ = 1400;
-            ret = 0;
-        }
-    } else if (name == "GetCapture") {
-        ret = capturedWindow_;
-        lastError_ = 0;
-    } else if (name == "ReleaseCapture") {
-        ret = capturedWindow_ ? 1 : 0;
-        capturedWindow_ = 0;
-        lastError_ = 0;
-    } else if (name == "EnableWindow") {
-        if (windows_.count(a0)) {
-            lastError_ = 0;
-            ret = 1;
-        } else {
-            lastError_ = 1400;
-            ret = 0;
-        }
-    } else {
-        return false;
-    }
-    return true;
-}
-
-bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
-                                            const GuestCallArgs& args,
-                                            uint32_t& ret) {
-    if (dispatchSimpleHostWin32(name, args, ret)) return true;
-
-    const uint32_t a0 = args.a0;
-    const uint32_t a1 = args.a1;
-    const uint32_t a2 = args.a2;
-    const uint32_t a3 = args.a3;
-    const uint32_t ra = args.ra;
-    if (name == "SystemParametersInfoW") {
-        ret = handleSystemParametersInfoW(a0, a1, a2, a3);
-        return true;
-    }
-    if (name == "LoadCursorW") {
-        ret = handleLoadCursorW(a0, a1);
-        return true;
-    }
-    if (name == "GetSysColorBrush") {
-        ret = handleGetSysColorBrush(a0);
-        return true;
-    }
-    if (name == "GetDeviceCaps") {
-        ret = handleGetDeviceCaps(a0, a1);
-        return true;
-    }
-    if (name == "DeviceIoControl") {
-        ret = dispatchDeviceIoControl(a0, a1, a2, a3);
-        return true;
-    }
-    if (name == "FlushFileBuffers") {
-        auto* handle = lookupGuestHandle(a0);
-        if (!handle || (handle->kind != GuestHandle::Kind::HostFile &&
-                        handle->kind != GuestHandle::Kind::HostSerialDevice) ||
-            !handle->hostValue) {
-            lastError_ = 6;
-            ret = 0;
-        } else {
-#if defined(_WIN32)
-            const BOOL ok = FlushFileBuffers(reinterpret_cast<HANDLE>(handle->hostValue));
-            ret = ok ? 1 : 0;
-            lastError_ = ret ? 0 : GetLastError();
-            auto debugName = fileHandleDebugNames_.find(a0);
-            spdlog::info("FlushFileBuffers handle=0x{:08x} path=\"{}\" -> {} lastError={}",
-                         a0, debugName == fileHandleDebugNames_.end() ? "" : debugName->second,
-                         ret, lastError_);
-#else
-            lastError_ = 6;
-            ret = 0;
-#endif
-        }
-        return true;
-    }
-    if (name == "WideCharToMultiByte") {
-        ret = handleWideCharToMultiByte(a0, a1, a2, a3);
-        return true;
-    }
-    if (name == "CreateFileMappingW") {
-        ret = handleCreateFileMappingW(a0, a1, a2, a3);
-        return true;
-    }
-    if (name == "MapViewOfFile") {
-        ret = handleMapViewOfFile(a0, a1, a2, a3);
-        return true;
-    }
-    if (name == "UnmapViewOfFile") {
-        ret = handleUnmapViewOfFile(a0);
-        return true;
-    }
-    if (name == "FlushViewOfFile") {
-        ret = handleFlushViewOfFile(a0, a1);
-        return true;
-    }
-    if (name == "GetProcessIndexFromID") {
-        // Windows CE process IDs are process handles; runtime evidence and CE
-        // docs show the low six bits identify the process slot.
-        ret = a0 & 0x3fu;
-        return true;
-    }
-    auto getWindowLongValue = [](const GuestWindow& window, int32_t index) -> uint32_t {
-        switch (index) {
-        case -4: return window.wndProc;  // GWL_WNDPROC
-        case -6: return window.instance; // GWL_HINSTANCE
-        case -8: return window.parent;   // GWL_HWNDPARENT
-        case -12: return window.menu;    // GWL_ID
-        case -16: return window.style;   // GWL_STYLE
-        case -20: return window.exStyle; // GWL_EXSTYLE
-        case -21: return window.userData; // GWL_USERDATA
-        default: {
-            auto it = window.extraLongs.find(index);
-            return it == window.extraLongs.end() ? 0 : it->second;
-        }
-        }
-    };
-    auto setWindowLongValue = [&](GuestWindow& window, int32_t index, uint32_t value) -> uint32_t {
-        const uint32_t previous = getWindowLongValue(window, index);
-        switch (index) {
-        case -4: window.wndProc = value; break;
-        case -6: window.instance = value; break;
-        case -8: window.parent = value; break;
-        case -12: window.menu = value; break;
-        case -16: window.style = value; break;
-        case -20: window.exStyle = value; break;
-        case -21: window.userData = value; break;
-        default: window.extraLongs[index] = value; break;
-        }
-        return previous;
-    };
-    auto windowOrigin = [&](uint32_t hwnd) {
-        int32_t x = 0;
-        int32_t y = 0;
-        for (uint32_t current = hwnd; current;) {
-            auto it = windows_.find(current);
-            if (it == windows_.end()) break;
-            x += it->second.x;
-            y += it->second.y;
-            current = (it->second.style & kWindowStyleChild) ? it->second.parent : 0;
-        }
-        return std::pair<int32_t, int32_t>{x, y};
-    };
-    auto firstWindow = [&]() -> uint32_t {
-        for (const auto& [hwnd, window] : windows_) {
-            if (!window.destroyed && !window.parent) return hwnd;
-        }
-        for (const auto& [hwnd, window] : windows_) {
-            if (!window.destroyed) return hwnd;
-        }
-        return 0;
-    };
-
-    if (name == "IsDialogMessageW") {
-        // CE/MFC uses this in PreTranslateMessage. The emulator queues and
-        // dispatches messages itself, so only report that the message was not
-        // consumed by dialog navigation.
-        ret = 0;
-        lastError_ = windows_.count(a0) || !a0 ? 0 : 1400;
-        return true;
-    }
-    if (name == "GetForegroundWindow") {
-        ret = focusedWindow_ ? focusedWindow_ : firstWindow();
-        lastError_ = ret ? 0 : 1400;
-        return true;
-    }
-    if (name == "SetActiveWindow") {
-        const uint32_t previous = focusedWindow_;
-        auto target = windows_.find(a0);
-        if (!a0 || (target != windows_.end() && !target->second.destroyed)) {
-            focusedWindow_ = a0;
-            ret = previous;
-            lastError_ = 0;
-        } else {
-            ret = 0;
-            lastError_ = 1400;
-        }
-        return true;
-    }
-
-    if (name == "IsProcessDying") {
-        ret = 0;
-    } else if (name == "GetLastError") {
-        ret = lastError_;
-    } else if (name == "SetLastError") {
-        lastError_ = a0;
-        ret = 0;
-    } else if (name == "IsBadReadPtr" || name == "IsBadWritePtr") {
-        ret = isGuestRangeReadable(a0, a1) ? 0 : 1;
-        lastError_ = 0;
-    } else if (name == "KernelIoControl") {
-        const uint32_t outPtr = a3;
-        const uint32_t outSize = stackArg(4);
-        const uint32_t bytesReturnedPtr = stackArg(5);
-        const uint32_t function = (a0 >> 2) & 0x0fffu;
-        const uint32_t method = a0 & 0x3u;
-        const uint32_t device = (a0 >> 16) & 0xffffu;
-        const uint32_t access = (a0 >> 14) & 0x3u;
-        auto registryData = [](const nlohmann::json* value) -> const nlohmann::json* {
-            if (!value) return nullptr;
-            const auto data = value->find("data");
-            return data != value->end() ? &*data : nullptr;
-        };
-        auto parseIoctlCmd = [&](const nlohmann::json* value, uint32_t& command) -> bool {
-            const nlohmann::json* data = registryData(value);
-            if (!data) return false;
-            if (data->is_number_unsigned()) {
-                const uint64_t raw = data->get<uint64_t>();
-                if (raw > 0xffffffffull) return false;
-                command = uint32_t(raw);
-                return true;
-            }
-            if (data->is_number_integer()) {
-                const int64_t raw = data->get<int64_t>();
-                if (raw < 0 || raw > 0xffffffffll) return false;
-                command = uint32_t(raw);
-                return true;
-            }
-            if (!data->is_string()) return false;
-            std::string text = lowerAscii(data->get<std::string>());
-            if (text.rfind("0x", 0) == 0) text.erase(0, 2);
-            if (text.empty()) return false;
-            char* end = nullptr;
-            const unsigned long raw = std::strtoul(text.c_str(), &end, 16);
-            if (!end || *end || raw > 0xfffffffful) return false;
-            command = uint32_t(raw);
-            return true;
-        };
-        auto configuredIoctlReturn = [&]() -> const nlohmann::json* {
-            const std::string base = "hklm\\system\\emulator\\kernelioctl";
-            std::vector<std::string> paths{base};
-            for (const std::string& child : registryChildNames(base)) {
-                paths.push_back(base + "\\" + child);
-            }
-            for (const std::string& path : paths) {
-                uint32_t command = 0;
-                if (!parseIoctlCmd(registryValue(path, "ioctlcmd"), command) || command != a0) continue;
-                if (const nlohmann::json* value = registryValue(path, "return")) return value;
-            }
-            return nullptr;
-        };
-        auto writeConfiguredIoctlReturn = [&](const nlohmann::json& configured) -> bool {
-            const nlohmann::json* data = registryData(&configured);
-            if (!data || !outPtr) return false;
-            if ((data->is_number_unsigned() || data->is_number_integer()) && outSize >= 4) {
-                uint32_t value = 0;
-                if (data->is_number_unsigned()) {
-                    const uint64_t raw = data->get<uint64_t>();
-                    if (raw > 0xffffffffull) return false;
-                    value = uint32_t(raw);
-                } else {
-                    const int64_t raw = data->get<int64_t>();
-                    if (raw < 0 || raw > 0xffffffffll) return false;
-                    value = uint32_t(raw);
-                }
-                writeU32(outPtr, value);
-                if (bytesReturnedPtr) writeU32(bytesReturnedPtr, 4);
-                spdlog::info("KernelIoControl registry return cmd=0x{:08x} dword=0x{:08x}", a0, value);
-                return true;
-            }
-            if (data->is_string()) {
-                const std::string value = data->get<std::string>();
-                const uint32_t capacityBytes = outSize ? outSize : uint32_t(value.size() + 1);
-                if (!capacityBytes) return false;
-                const uint32_t bytesToWrite = std::min<uint32_t>(uint32_t(value.size()), capacityBytes - 1);
-                if (bytesToWrite) uc_mem_write(uc_, outPtr, value.data(), bytesToWrite);
-                const char nul = 0;
-                uc_mem_write(uc_, outPtr + bytesToWrite, &nul, sizeof(nul));
-                if (bytesReturnedPtr) writeU32(bytesReturnedPtr, bytesToWrite + 1);
-                spdlog::info("KernelIoControl registry return cmd=0x{:08x} string=\"{}\" bytes={} capacityBytes={}",
-                             a0, value, bytesToWrite, capacityBytes);
-                return true;
-            }
-            return false;
-        };
-        ret = 0;
-        lastError_ = 120;
-        if (const nlohmann::json* configured = configuredIoctlReturn()) {
-            if (writeConfiguredIoctlReturn(*configured)) {
-                lastError_ = 0;
-                ret = 1;
-            }
-        }
-        spdlog::info("KernelIoControl code=0x{:08x} device=0x{:04x} function=0x{:03x} method={} access={} out=0x{:08x} outSize={} bytesReturned=0x{:08x} -> {} lastError={}",
-                     a0, device, function, method, access, outPtr, outSize, bytesReturnedPtr, ret, lastError_);
-    } else if (name == "KernelLibIoControl") {
-        lastError_ = 120;
-        ret = 0;
-    } else if (name == "GetTickCount") {
-#if defined(_WIN32)
-        ret = GetTickCount();
-#else
-        ret = uint32_t(++tick_ * 16);
-#endif
-    } else if (name == "GlobalMemoryStatus") {
-        if (!a0) {
-            lastError_ = 87;
-            ret = 0;
-        } else {
-#if defined(_WIN32)
-            MEMORYSTATUS status{};
-            status.dwLength = sizeof(status);
-            GlobalMemoryStatus(&status);
-            writeU32(a0, 32);
-            writeU32(a0 + 4, status.dwMemoryLoad);
-            writeU32(a0 + 8, uint32_t(status.dwTotalPhys));
-            writeU32(a0 + 12, uint32_t(status.dwAvailPhys));
-            writeU32(a0 + 16, uint32_t(status.dwTotalPageFile));
-            writeU32(a0 + 20, uint32_t(status.dwAvailPageFile));
-            writeU32(a0 + 24, uint32_t(status.dwTotalVirtual));
-            writeU32(a0 + 28, uint32_t(status.dwAvailVirtual));
-#else
-            writeU32(a0, 32);
-            writeU32(a0 + 4, 50);
-            writeU32(a0 + 8, 64u * 1024u * 1024u);
-            writeU32(a0 + 12, 32u * 1024u * 1024u);
-            writeU32(a0 + 16, 64u * 1024u * 1024u);
-            writeU32(a0 + 20, 32u * 1024u * 1024u);
-            writeU32(a0 + 24, heapLimit_ - heapBase_);
-            writeU32(a0 + 28, heapLimit_ - nextHeap_);
-#endif
-            ret = 0;
-            lastError_ = 0;
-        }
-    } else if (name == "Sleep") {
-#if defined(_WIN32)
-        Sleep(a0);
-#endif
-        ret = 0;
-    } else if (name == "QueryPerformanceFrequency") {
-#if defined(_WIN32)
-        LARGE_INTEGER value{};
-        const BOOL ok = QueryPerformanceFrequency(&value);
-        writeU32(a0, uint32_t(value.QuadPart));
-        writeU32(a0 + 4, uint32_t(uint64_t(value.QuadPart) >> 32));
-        ret = ok ? 1 : 0;
-        if (!ret) lastError_ = GetLastError();
-#else
-        writeU32(a0, 10000000u);
-        writeU32(a0 + 4, 0);
-        ret = 1;
-#endif
-    } else if (name == "QueryPerformanceCounter") {
-#if defined(_WIN32)
-        LARGE_INTEGER value{};
-        const BOOL ok = QueryPerformanceCounter(&value);
-        writeU32(a0, uint32_t(value.QuadPart));
-        writeU32(a0 + 4, uint32_t(uint64_t(value.QuadPart) >> 32));
-        ret = ok ? 1 : 0;
-        if (!ret) lastError_ = GetLastError();
-#else
-        const uint64_t value = ++tick_ * 160000;
-        writeU32(a0, uint32_t(value));
-        writeU32(a0 + 4, uint32_t(value >> 32));
-        ret = 1;
-#endif
-    } else if (name == "GetTimeZoneInformation") {
-#if defined(_WIN32)
-        TIME_ZONE_INFORMATION tz{};
-        ret = ::GetTimeZoneInformation(&tz);
-        if (a0) uc_mem_write(uc_, a0, &tz, sizeof(tz));
-#else
-        if (a0) fillGuest(a0, 0, 172);
-        ret = 0xffffffffu;
-#endif
-    } else if (name == "SystemTimeToFileTime") {
-#if defined(_WIN32)
-        SYSTEMTIME st{};
-        FILETIME ft{};
-        if (a0) uc_mem_read(uc_, a0, &st, sizeof(st));
-        const BOOL ok = a0 && a1 && ::SystemTimeToFileTime(&st, &ft);
-        if (ok) uc_mem_write(uc_, a1, &ft, sizeof(ft));
-        ret = ok ? 1 : 0;
-        if (!ret) lastError_ = GetLastError();
-#else
-        if (a1) {
-            writeU32(a1, 0);
-            writeU32(a1 + 4, 0);
-        }
-        ret = a0 && a1 ? 1 : 0;
-#endif
-    } else if (name == "FileTimeToSystemTime") {
-#if defined(_WIN32)
-        FILETIME ft{};
-        SYSTEMTIME st{};
-        if (a0) uc_mem_read(uc_, a0, &ft, sizeof(ft));
-        const BOOL ok = a0 && a1 && ::FileTimeToSystemTime(&ft, &st);
-        if (ok) uc_mem_write(uc_, a1, &st, sizeof(st));
-        ret = ok ? 1 : 0;
-        if (!ret) lastError_ = GetLastError();
-#else
-        if (a1) fillGuest(a1, 0, 16);
-        ret = a0 && a1 ? 1 : 0;
-#endif
-    } else if (name == "GetLocalTime" || name == "GetSystemTime") {
-#if defined(_WIN32)
-        SYSTEMTIME st{};
-        if (name == "GetSystemTime") ::GetSystemTime(&st);
-        else ::GetLocalTime(&st);
-        if (a0) uc_mem_write(uc_, a0, &st, sizeof(st));
-        ret = 0;
-#else
-        std::time_t now = std::time(nullptr);
-        std::tm tm{};
-        if (name == "GetSystemTime") tm = *std::gmtime(&now);
-        else tm = *std::localtime(&now);
-        const std::array<uint16_t, 8> st = {
-            uint16_t(tm.tm_year + 1900), uint16_t(tm.tm_mon + 1),
-            uint16_t(tm.tm_wday), uint16_t(tm.tm_mday), uint16_t(tm.tm_hour),
-            uint16_t(tm.tm_min), uint16_t(tm.tm_sec), 0,
-        };
-        if (a0) uc_mem_write(uc_, a0, st.data(), st.size() * sizeof(uint16_t));
-        ret = 0;
-#endif
-    } else if (name == "CloseHandle") {
-        auto debugName = fileHandleDebugNames_.find(a0);
-        const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
-        const std::string lowerPath = lowerAscii(debugPath);
-        if (ra == 0x0006bea4u && lowerPath.find("values.dat") != std::string::npos) {
-            uint16_t recordCount = 0;
-            const uint32_t sp = reg(UC_MIPS_REG_SP);
-            uc_mem_read(uc_, sp + 0x20, &recordCount, sizeof(recordCount));
-            const uint32_t requestedId = reg(UC_MIPS_REG_S3);
-            const uint32_t scannedRecords = reg(UC_MIPS_REG_S5);
-            spdlog::warn("values.dat lookup miss handle=0x{:08x} path=\"{}\" requestedId={} (0x{:04x}) scanned={} recordCount={} ra=0x{:08x}",
-                         a0, debugPath, int16_t(requestedId & 0xffffu), requestedId & 0xffffu,
-                         scannedRecords, recordCount, ra);
-        }
-        ret = closeGuestHandle(a0);
-    } else if (name == "FindClose") {
-        ret = closeGuestHandle(a0);
-    } else if (name == "ReleaseMutex") {
-        auto* handle = lookupGuestHandle(a0);
-#if defined(_WIN32)
-        if (handle && handle->kind == GuestHandle::Kind::HostMutex && handle->hostValue) {
-            ret = ReleaseMutex(reinterpret_cast<HANDLE>(handle->hostValue)) ? 1 : 0;
-            if (!ret) lastError_ = GetLastError();
-        } else
-#endif
-        {
-            ret = handle ? 1 : 0;
-            if (!ret) lastError_ = 6;
-        }
-    } else if (name == "CreateEventW") {
-#if defined(_WIN32)
-        HANDLE host = CreateEventW(nullptr, a1 != 0, a2 != 0, nullptr);
-        if (host) ret = makeGuestHandle({GuestHandle::Kind::HostEvent, reinterpret_cast<uintptr_t>(host), 0});
-        else {
-            ret = 0;
-            lastError_ = GetLastError();
-        }
-#else
-        ret = makeGuestHandle({GuestHandle::Kind::HostEvent, 0, 0});
-#endif
-    } else if (name == "CreateMutexW") {
-#if defined(_WIN32)
-        HANDLE host = CreateMutexW(nullptr, a1 != 0, nullptr);
-        if (host) ret = makeGuestHandle({GuestHandle::Kind::HostMutex, reinterpret_cast<uintptr_t>(host), 0});
-        else {
-            ret = 0;
-            lastError_ = GetLastError();
-        }
-#else
-        ret = makeGuestHandle({GuestHandle::Kind::HostMutex, 0, 0});
-#endif
-    } else if (name == "WaitForSingleObject") {
-        auto* handle = lookupGuestHandle(a0);
-        if (handle && handle->kind == GuestHandle::Kind::GuestThread) {
-            auto thread = guestThreads_.find(a0);
-            if (thread == guestThreads_.end() || thread->second.state == GuestThreadRunState::Terminated) {
-                ret = 0;
-            } else {
-                ret = a1 == 0 ? 0x00000102u : 0x00000102u; // WAIT_TIMEOUT until cooperative scheduling runs it.
-            }
-            lastError_ = 0;
-        } else
-#if defined(_WIN32)
-        if (handle && handle->hostValue) {
-            ret = WaitForSingleObject(reinterpret_cast<HANDLE>(handle->hostValue), a1);
-            if (ret == 0xffffffffu) lastError_ = GetLastError();
-        } else
-#endif
-        {
-            ret = handle ? 0 : 0xffffffffu;
-            if (!handle) lastError_ = 6;
-        }
-    } else if (name == "EventModify") {
-        auto* handle = lookupGuestHandle(a0);
-        if (!handle || handle->kind != GuestHandle::Kind::HostEvent) {
-            lastError_ = 6;
-            ret = 0;
-        } else {
-#if defined(_WIN32)
-            HANDLE host = reinterpret_cast<HANDLE>(handle->hostValue);
-            BOOL ok = FALSE;
-            if (host) {
-                if (a1 == 1) ok = PulseEvent(host);
-                else if (a1 == 2) ok = ResetEvent(host);
-                else if (a1 == 3) ok = SetEvent(host);
-            }
-            ret = ok ? 1 : 0;
-            if (!ret) lastError_ = GetLastError();
-#else
-            ret = 1;
-#endif
-            if (ret && (a1 == 1 || a1 == 3)) {
-                for (auto& [threadHandle, thread] : guestThreads_) {
-                    (void)threadHandle;
-                    if (thread.state == GuestThreadRunState::Waiting && thread.waitHandle == a0) {
-                        thread.state = GuestThreadRunState::Runnable;
-                        thread.waitHandle = 0;
-                        thread.context.registers[UC_MIPS_REG_V0] = 0; // WAIT_OBJECT_0
-                    }
-                }
-            }
-        }
-    } else if (name == "CreateThread") {
-        const uint32_t startAddress = a2;
-        const uint32_t parameter = a3;
-        const uint32_t flags = stackArg(4);
-        const uint32_t threadIdPtr = stackArg(5);
-        ret = createGuestThread(startAddress, parameter, flags);
-        if (threadIdPtr) {
-            auto thread = guestThreads_.find(ret);
-            writeU32(threadIdPtr, thread == guestThreads_.end() ? ret : thread->second.threadId);
-        }
-        spdlog::info("CreateThread guestHandle=0x{:08x} start=0x{:08x} param=0x{:08x} flags=0x{:08x} idPtr=0x{:08x}",
-                     ret, startAddress, parameter, flags, threadIdPtr);
-    } else if (name == "SetThreadPriority" || name == "CeSetThreadPriority") {
-        auto* handle = lookupGuestHandle(a0);
-        ret = handle && handle->kind == GuestHandle::Kind::GuestThread ? 1 : 0;
-        lastError_ = ret ? 0 : 6;
-    } else if (name == "GetThreadPriority") {
-        auto* handle = lookupGuestHandle(a0);
-        ret = handle && handle->kind == GuestHandle::Kind::GuestThread ? 251 : 0xffffffffu;
-        lastError_ = ret == 0xffffffffu ? 6 : 0;
-    } else if (name == "CreateFileW") {
-#if defined(_WIN32)
-        const std::string guestPath = readUtf16(a0);
-        if (isGuestDevicePath(guestPath)) {
-            ret = openGuestSerialDevice(guestPath, a1, a2);
-        } else {
-            const std::filesystem::path hostPath = resolveGuestPath(guestPath);
-            HANDLE host = INVALID_HANDLE_VALUE;
-            if (!hostPath.empty()) {
-                host = CreateFileW(hostPath.wstring().c_str(), a1, a2, nullptr, stackArg(4), stackArg(5), nullptr);
-            }
-            if (host == INVALID_HANDLE_VALUE) {
-                lastError_ = normalizeVirtualFileMiss(hostPath, GetLastError());
-                ret = 0xffffffffu;
-                spdlog::warn("CreateFileW miss guest=\"{}\" host=\"{}\" access=0x{:08x} share=0x{:08x} creation=0x{:08x} flags=0x{:08x} lastError={}",
-                             guestPath, pathToUtf8(hostPath), a1, a2, stackArg(4), stackArg(5), lastError_);
-            } else {
-                ret = makeGuestHandle({GuestHandle::Kind::HostFile, reinterpret_cast<uintptr_t>(host), 0});
-                fileHandleDebugNames_[ret] = pathToUtf8(hostPath);
-                lastError_ = 0;
-                spdlog::info("CreateFileW hit guest=\"{}\" host=\"{}\" guestHandle=0x{:08x} access=0x{:08x} share=0x{:08x} creation=0x{:08x} flags=0x{:08x}",
-                             guestPath, pathToUtf8(hostPath), ret, a1, a2, stackArg(4), stackArg(5));
-            }
-        }
-#else
-        lastError_ = 2;
-        ret = 0xffffffffu;
-#endif
-    } else if (name == "CreateDirectoryW") {
-#if defined(_WIN32)
-        const std::string guestPath = readUtf16(a0);
-        const std::filesystem::path hostPath = resolveGuestPath(guestPath);
-        const BOOL ok = !hostPath.empty() && CreateDirectoryW(hostPath.wstring().c_str(), nullptr);
-        if (ok) {
-            ret = 1;
-            lastError_ = 0;
-        } else {
-            const DWORD err = hostPath.empty() ? ERROR_PATH_NOT_FOUND : GetLastError();
-            lastError_ = err;
-            ret = (err == ERROR_ALREADY_EXISTS && std::filesystem::is_directory(hostPath)) ? 1 : 0;
-            if (ret) lastError_ = 0;
-        }
-        spdlog::info("CreateDirectoryW guest=\"{}\" host=\"{}\" -> {} lastError={}",
-                     guestPath, pathToUtf8(hostPath), ret, lastError_);
-#else
-        lastError_ = 2;
-        ret = 0;
-#endif
-    } else if (name == "GetFileAttributesW") {
-#if defined(_WIN32)
-        const std::string guestPath = readUtf16(a0);
-        const std::filesystem::path hostPath = resolveGuestPath(guestPath);
-        ret = hostPath.empty() ? INVALID_FILE_ATTRIBUTES : GetFileAttributesW(hostPath.wstring().c_str());
-        lastError_ = ret == INVALID_FILE_ATTRIBUTES
-            ? normalizeVirtualFileMiss(hostPath, hostPath.empty() ? ERROR_PATH_NOT_FOUND : GetLastError())
-            : 0;
-        spdlog::info("GetFileAttributesW guest=\"{}\" host=\"{}\" -> 0x{:08x} lastError={}",
-                     guestPath, pathToUtf8(hostPath), ret, lastError_);
-#else
-        lastError_ = 2;
-        ret = 0xffffffffu;
-#endif
-    } else if (name == "GetFileAttributesExW") {
-#if defined(_WIN32)
-        const std::string guestPath = readUtf16(a0);
-        const std::filesystem::path hostPath = resolveGuestPath(guestPath);
-        WIN32_FILE_ATTRIBUTE_DATA data{};
-        const BOOL ok = !hostPath.empty() && a1 == GetFileExInfoStandard &&
-                        GetFileAttributesExW(hostPath.wstring().c_str(), GetFileExInfoStandard, &data);
-        if (ok) {
-            writeGuestFileAttributeData(uc_, a2, data);
-            ret = 1;
-            lastError_ = 0;
-        } else {
-            ret = 0;
-            const uint32_t error = hostPath.empty()
-                ? ERROR_PATH_NOT_FOUND
-                : (a1 == GetFileExInfoStandard ? GetLastError() : ERROR_INVALID_PARAMETER);
-            lastError_ = normalizeVirtualFileMiss(hostPath, error);
-        }
-        spdlog::info("GetFileAttributesExW guest=\"{}\" host=\"{}\" level={} out=0x{:08x} -> {} lastError={}",
-                     guestPath, pathToUtf8(hostPath), a1, a2, ret, lastError_);
-#else
-        lastError_ = 2;
-        ret = 0;
-#endif
-    } else if (name == "CreateProcessW") {
-        const std::string application = readUtf16(a0, 2048);
-        const std::string commandLine = readUtf16(a1, 4096);
-        const uint32_t processInfo = stackArg(9);
-        const std::filesystem::path hostApplication = application.empty()
-            ? std::filesystem::path{}
-            : resolveGuestPath(application);
-        if (!application.empty() && (hostApplication.empty() || !std::filesystem::exists(hostApplication))) {
-            lastError_ = 2;
-            ret = 0;
-        } else {
-            const uint32_t processHandle = makeGuestHandle({GuestHandle::Kind::GuestProcess, 0, 0});
-            const uint32_t threadHandle = makeGuestHandle({GuestHandle::Kind::GuestThread, 0, 0});
-            if (processInfo) {
-                writeU32(processInfo, processHandle);
-                writeU32(processInfo + 4, threadHandle);
-                writeU32(processInfo + 8, processHandle);
-                writeU32(processInfo + 12, threadHandle);
-            }
-            lastError_ = 0;
-            ret = 1;
-        }
-        spdlog::info("CreateProcessW app=\"{}\" host=\"{}\" cmd=\"{}\" pi=0x{:08x} -> {} lastError={}",
-                     application, pathToUtf8(hostApplication), commandLine, processInfo, ret, lastError_);
-    } else if (name == "DeleteFileW") {
-#if defined(_WIN32)
-        const std::filesystem::path hostPath = resolveGuestPath(readUtf16(a0));
-        const BOOL ok = !hostPath.empty() && DeleteFileW(hostPath.wstring().c_str());
-        ret = ok ? 1 : 0;
-        lastError_ = ret ? 0 : GetLastError();
-#else
-        lastError_ = 2;
-        ret = 0;
-#endif
-    } else if (name == "FindFirstFileW") {
-#if defined(_WIN32)
-        const std::string guestPath = readUtf16(a0);
-        const std::filesystem::path hostPath = resolveGuestPath(guestPath);
-        WIN32_FIND_DATAW data{};
-        HANDLE host = INVALID_HANDLE_VALUE;
-        if (!hostPath.empty()) {
-            host = FindFirstFileW(hostPath.wstring().c_str(), &data);
-        }
-        if (host == INVALID_HANDLE_VALUE) {
-            lastError_ = normalizeVirtualFileMiss(hostPath, GetLastError());
-            ret = 0xffffffffu;
-            spdlog::warn("FindFirstFileW miss guest=\"{}\" host=\"{}\" lastError={}",
-                         guestPath, pathToUtf8(hostPath), lastError_);
-        } else {
-            data = translateGuestFindData(data, isRootWildcardPattern(guestPath));
-            writeGuestFindData(uc_, a1, data);
-            ret = makeGuestHandle({GuestHandle::Kind::HostFind, reinterpret_cast<uintptr_t>(host),
-                                   isRootWildcardPattern(guestPath) ? 1u : 0u});
-            fileHandleDebugNames_[ret] = pathToUtf8(hostPath);
-            lastError_ = 0;
-            spdlog::info("FindFirstFileW hit guest=\"{}\" host=\"{}\" guestHandle=0x{:08x} file=\"{}\" attr=0x{:08x} size={}",
-                         guestPath, pathToUtf8(hostPath), ret,
-                         wideZToUtf8(data.cFileName, 260),
-                         data.dwFileAttributes,
-                         (uint64_t(data.nFileSizeHigh) << 32) | data.nFileSizeLow);
-        }
-#else
-        lastError_ = 2;
-        ret = 0xffffffffu;
-#endif
-    } else if (name == "ReadFile" || name == "WriteFile") {
-        auto* handle = lookupGuestHandle(a0);
-        writeU32(a3, 0);
-        if (handle && handle->kind == GuestHandle::Kind::GuestSerialDevice) {
-            ret = 1;
-            lastError_ = 0;
-            auto debugName = fileHandleDebugNames_.find(a0);
-            const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
-            spdlog::info("{} guest device handle=0x{:08x} name=\"{}\" requested={} transferred=0",
-                         name, a0, debugPath, a2);
-        } else if (!handle || (handle->kind != GuestHandle::Kind::HostFile &&
-                               handle->kind != GuestHandle::Kind::HostSerialDevice) ||
-                   !handle->hostValue) {
-            lastError_ = 6;
-            ret = 0;
-        } else if (!a1 && a2) {
-            lastError_ = 87;
-            ret = 0;
-        } else {
-#if defined(_WIN32)
-            DWORD transferred = 0;
-            if (name == "ReadFile") {
-                std::vector<uint8_t> bytes(a2);
-                const BOOL ok = ReadFile(reinterpret_cast<HANDLE>(handle->hostValue), bytes.data(), a2, &transferred, nullptr);
-                if (ok && transferred) uc_mem_write(uc_, a1, bytes.data(), transferred);
-                ret = ok ? 1 : 0;
-                const uint32_t readCount = ++fileReadCounts_[a0];
-                auto debugName = fileHandleDebugNames_.find(a0);
-                const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
-                if (readCount <= 32 || !ok || transferred != a2 || transferred == 0) {
-                    spdlog::info("ReadFile handle=0x{:08x} path=\"{}\" requested={} transferred={} ok={} read#={}",
-                                 a0, debugPath,
-                                 a2, transferred, ok ? 1 : 0, readCount);
-                }
-            } else {
-                std::vector<uint8_t> bytes(a2);
-                if (a2) uc_mem_read(uc_, a1, bytes.data(), bytes.size());
-                const BOOL ok = WriteFile(reinterpret_cast<HANDLE>(handle->hostValue), bytes.data(), a2, &transferred, nullptr);
-                ret = ok ? 1 : 0;
-            }
-            writeU32(a3, transferred);
-            lastError_ = ret ? 0 : GetLastError();
-#else
-            lastError_ = 6;
-            ret = 0;
-#endif
-        }
-    } else if (name == "GetFileSize") {
-        auto* handle = lookupGuestHandle(a0);
-        if (!handle || handle->kind != GuestHandle::Kind::HostFile || !handle->hostValue) {
-            lastError_ = 6;
-            ret = 0xffffffffu;
-        } else {
-#if defined(_WIN32)
-            DWORD high = 0;
-            ret = GetFileSize(reinterpret_cast<HANDLE>(handle->hostValue), a1 ? &high : nullptr);
-            if (a1) writeU32(a1, high);
-            lastError_ = ret == 0xffffffffu ? GetLastError() : 0;
-            auto debugName = fileHandleDebugNames_.find(a0);
-            spdlog::info("GetFileSize handle=0x{:08x} path=\"{}\" size={} high={} lastError={}",
-                         a0, debugName == fileHandleDebugNames_.end() ? "" : debugName->second,
-                         ret, high, lastError_);
-#else
-            lastError_ = 6;
-            ret = 0xffffffffu;
-#endif
-        }
-    } else if (name == "SetFilePointer") {
-        auto* handle = lookupGuestHandle(a0);
-        if (!handle || handle->kind != GuestHandle::Kind::HostFile || !handle->hostValue) {
-            lastError_ = 6;
-            ret = 0xffffffffu;
-        } else {
-#if defined(_WIN32)
-            LONG high = 0;
-            if (a2) uc_mem_read(uc_, a2, &high, sizeof(high));
-            ret = SetFilePointer(reinterpret_cast<HANDLE>(handle->hostValue), LONG(a1), a2 ? &high : nullptr, a3);
-            if (a2) writeU32(a2, uint32_t(high));
-            lastError_ = ret == 0xffffffffu ? GetLastError() : 0;
-            const uint32_t seekCount = ++fileSeekCounts_[a0];
-            if (seekCount <= 32 || ret == 0xffffffffu) {
-                auto debugName = fileHandleDebugNames_.find(a0);
-                spdlog::info("SetFilePointer handle=0x{:08x} path=\"{}\" distance={} method={} -> low={} high={} lastError={} seek#={}",
-                             a0, debugName == fileHandleDebugNames_.end() ? "" : debugName->second,
-                             int32_t(a1), a3, ret, uint32_t(high), lastError_, seekCount);
-            }
-#else
-            lastError_ = 6;
-            ret = 0xffffffffu;
-#endif
-        }
-    } else if (name == "SetFileTime") {
-        auto* handle = lookupGuestHandle(a0);
-        if (!handle || handle->kind != GuestHandle::Kind::HostFile || !handle->hostValue) {
-            lastError_ = 6;
-            ret = 0;
-        } else {
-#if defined(_WIN32)
-            FILETIME creation{}, access{}, write{};
-            FILETIME* creationPtr = nullptr;
-            FILETIME* accessPtr = nullptr;
-            FILETIME* writePtr = nullptr;
-            if (a1 && uc_mem_read(uc_, a1, &creation, sizeof(creation)) == UC_ERR_OK) creationPtr = &creation;
-            if (a2 && uc_mem_read(uc_, a2, &access, sizeof(access)) == UC_ERR_OK) accessPtr = &access;
-            if (a3 && uc_mem_read(uc_, a3, &write, sizeof(write)) == UC_ERR_OK) writePtr = &write;
-            ret = SetFileTime(reinterpret_cast<HANDLE>(handle->hostValue), creationPtr, accessPtr, writePtr) ? 1 : 0;
-            lastError_ = ret ? 0 : GetLastError();
-#else
-            ret = 0;
-            lastError_ = 6;
-#endif
-        }
-    } else if (name == "GetModuleFileNameW") {
-        ret = writeUtf16(a1, mainModulePath_, a2);
-        lastError_ = ret ? 0 : 122;
-    } else if (name == "OutputDebugStringW") {
-        spdlog::info("OutputDebugStringW: {}", readUtf16(a0));
-        ret = 0;
-    } else if (name == "FormatMessageW") {
-        const uint32_t bufferPtr = stackArg(4);
-        const uint32_t capacity = stackArg(5);
-        std::string message = "Error " + std::to_string(a2);
-#if defined(_WIN32)
-        wchar_t hostBuffer[512]{};
-        const DWORD flags = a0 & ~0x00000100u;
-        const DWORD written = ::FormatMessageW(flags, nullptr, a2, a3, hostBuffer,
-                                               DWORD(std::size(hostBuffer)), nullptr);
-        if (written) {
-            message.clear();
-            for (const wchar_t* p = hostBuffer; *p; ++p) message.push_back(*p < 0x80 ? char(*p) : '?');
-        }
-#endif
-        if (a0 & 0x00000100u) {
-            const uint32_t guestText = allocate(uint32_t((message.size() + 1) * 2), true);
-            writeUtf16(guestText, message, uint32_t(message.size() + 1));
-            if (bufferPtr) writeU32(bufferPtr, guestText);
-            ret = uint32_t(message.size());
-        } else {
-            ret = bufferPtr && capacity ? writeUtf16(bufferPtr, message, capacity) : 0;
-        }
-        lastError_ = ret ? 0 : 122;
-    } else if (name == "LoadLibraryW" || name == "GetModuleHandleW") {
-        const std::string requested = readUtf16(a0);
-        const std::string pathKey = lowerAscii(requested);
-        const std::string nameKey = lowerAscii(pathToUtf8(pathFromUtf8(requested).filename()));
-        if (requested.empty()) {
-            ret = mainModuleBase_;
-        } else if (auto it = loadedModulesByPath_.find(pathKey); it != loadedModulesByPath_.end()) {
-            ret = it->second.base;
-        } else if (auto it = loadedModulesByName_.find(nameKey); it != loadedModulesByName_.end()) {
-            ret = it->second.base;
-        } else if (name == "LoadLibraryW") {
-            if (auto syntheticModule = createModule(nameKey)) {
-                registerLoadedModule(syntheticModule->moduleName,
-                                     std::filesystem::path("[synthetic]") / syntheticModule->moduleName,
-                                     syntheticModule->imageBase,
-                                     syntheticModule->exportsByName,
-                                     syntheticModule->exportsByOrdinal);
-                ret = syntheticModule->imageBase;
-            } else {
-                ret = 0;
-            }
-        } else {
-            ret = 0;
-        }
-        spdlog::info("{} requested=\"{}\" -> 0x{:08x}", name, requested, ret);
-        lastError_ = ret ? 0 : 126;
-    } else if (name == "GetProcAddressA" || name == "GetProcAddressW") {
-        ret = 0;
-        auto module = loadedModulesByBase_.find(a0);
-        if (module != loadedModulesByBase_.end()) {
-            if (a1 < 0x10000) {
-                auto ordinal = module->second.exportsByOrdinal.find(uint16_t(a1));
-                if (ordinal != module->second.exportsByOrdinal.end()) ret = module->second.base + ordinal->second;
-                spdlog::info("{} module=0x{:08x} ordinal={} -> 0x{:08x}",
-                             name, a0, a1, ret);
-            } else {
-                const std::string proc = name == "GetProcAddressW" ? readUtf16(a1) : readAscii(a1, 256);
-                auto exported = module->second.exportsByName.find(lowerAscii(proc));
-                if (exported != module->second.exportsByName.end()) ret = module->second.base + exported->second;
-                spdlog::info("{} module=0x{:08x} proc=\"{}\" -> 0x{:08x}",
-                             name, a0, proc, ret);
-            }
-        }
-        lastError_ = ret ? 0 : 127;
-    } else if (name == "GetCursorPos") {
-        if (!a0) {
-            lastError_ = 87;
-            ret = 0;
-        } else {
-#if defined(_WIN32)
-            POINT point{};
-            ret = GetCursorPos(&point) ? 1 : 0;
-            writeU32(a0, uint32_t(point.x));
-            writeU32(a0 + 4, uint32_t(point.y));
-            if (!ret) lastError_ = GetLastError();
-#else
-            writeU32(a0, 0);
-            writeU32(a0 + 4, 0);
-            ret = 1;
-#endif
-        }
-    } else if (name == "SetCursor") {
-        ret = currentCursor_;
-        currentCursor_ = a0;
-#if defined(_WIN32)
-        auto handle = guestHandles_.find(a0);
-        HCURSOR hostCursor = nullptr;
-        if (handle != guestHandles_.end() && handle->second.hostValue) {
-            hostCursor = reinterpret_cast<HCURSOR>(handle->second.hostValue);
-        }
-        ::SetCursor(hostCursor);
-#endif
-        lastError_ = 0;
-    } else if (name == "GetSystemMetrics") {
-#if defined(_WIN32)
-        if (a0 == 0 && framebufferWidth_ > 0) ret = uint32_t(framebufferWidth_);
-        else if (a0 == 1 && framebufferHeight_ > 0) ret = uint32_t(framebufferHeight_);
-        else ret = uint32_t(GetSystemMetrics(int(a0)));
-#else
-        if (a0 == 0) ret = uint32_t(framebufferWidth_ > 0 ? framebufferWidth_ : 800);
-        else if (a0 == 1) ret = uint32_t(framebufferHeight_ > 0 ? framebufferHeight_ : 480);
-        else ret = 0;
-#endif
-    } else if (name == "GetSysColor") {
-        const int colorIndex = int(a0 & 0xffu);
-#if defined(_WIN32)
-        ret = uint32_t(GetSysColor(colorIndex));
-#else
-        ret = 0x00ffffffu;
-#endif
-    } else if (name == "RegisterWindowMessageW") {
-#if defined(_WIN32)
-        const std::string value = readUtf16(a0);
-        std::wstring wide(value.begin(), value.end());
-        ret = RegisterWindowMessageW(wide.c_str());
-        if (!ret) lastError_ = GetLastError();
-#else
-        ret = 0xc000u;
-#endif
-    } else if (name == "RegisterClassW") {
-        std::array<uint8_t, 40> bytes{};
-        if (!a0 || uc_mem_read(uc_, a0, bytes.data(), bytes.size()) != UC_ERR_OK) {
-            lastError_ = 87;
-            ret = 0;
-        } else {
-            uint32_t classNamePtr = 0;
-            std::memcpy(&classNamePtr, bytes.data() + 36, sizeof(classNamePtr));
-            std::string className = classNamePtr < 0x10000
-                ? ("#" + std::to_string(classNamePtr))
-                : lowerAscii(readUtf16(classNamePtr));
-            if (className.empty()) className = "#anonymous";
-            auto existing = windowClassesByName_.find(className);
-            if (existing == windowClassesByName_.end()) {
-                GuestWindowClass wndClass{};
-                wndClass.bytes = bytes;
-                wndClass.name = className;
-                wndClass.atom = nextAtom_++;
-                existing = windowClassesByName_.emplace(className, wndClass).first;
-                windowClassNamesByAtom_[existing->second.atom] = className;
-            } else {
-                existing->second.bytes = bytes;
-            }
-            ret = existing->second.atom;
-            spdlog::info("RegisterClassW class=\"{}\" atom=0x{:04x}", className, ret);
-            lastError_ = 0;
-        }
-    } else if (name == "GetClassInfoW") {
-        std::string className;
-        if (a1 < 0x10000) {
-            auto it = windowClassNamesByAtom_.find(uint16_t(a1));
-            if (it != windowClassNamesByAtom_.end()) className = it->second;
-        } else {
-            className = lowerAscii(readUtf16(a1));
-        }
-        auto it = windowClassesByName_.find(className);
-        if (it != windowClassesByName_.end() && a2) {
-            uc_mem_write(uc_, a2, it->second.bytes.data(), it->second.bytes.size());
-            ret = 1;
-            lastError_ = 0;
-        } else {
-            lastError_ = 1411;
-            ret = 0;
-        }
-    } else if (name == "FindWindowW") {
-        ret = 0;
-        const std::string className = a0 < 0x10000
-            ? (windowClassNamesByAtom_.count(uint16_t(a0)) ? windowClassNamesByAtom_[uint16_t(a0)] : std::string{})
-            : lowerAscii(readUtf16(a0));
-        const std::string title = readUtf16(a1);
-        for (const auto& [hwnd, window] : windows_) {
-            if (!window.destroyed && (!a0 || window.className == className) && (!a1 || window.title == title)) {
-                ret = hwnd;
-                break;
-            }
-        }
-        lastError_ = ret ? 0 : 1400;
-    } else if (name == "CreateWindowExW") {
-        std::string className;
-        if (a1 < 0x10000) {
-            auto it = windowClassNamesByAtom_.find(uint16_t(a1));
-            if (it != windowClassNamesByAtom_.end()) className = it->second;
-        } else {
-            className = lowerAscii(readUtf16(a1));
-        }
-        const uint32_t parent = stackArg(8);
-        const uint32_t menu = stackArg(9);
-        const uint32_t instance = stackArg(10);
-        const uint32_t param = stackArg(11);
-        auto normalizePos = [](uint32_t value) -> int32_t {
-            return value == 0x80000000u ? 0 : int32_t(value);
-        };
-        auto normalizeSize = [](uint32_t value, int32_t fallback, bool topLevel) -> int32_t {
-            const int32_t signedValue = int32_t(value);
-            if (topLevel && (value == 0x80000000u || signedValue <= 0)) return fallback;
-            if (value == 0x80000000u) return 0;
-            return std::max<int32_t>(0, signedValue);
-        };
-        const bool topLevel = parent == 0;
-        const uint32_t rawX = stackArg(4);
-        const uint32_t rawY = stackArg(5);
-        const uint32_t rawWidth = stackArg(6);
-        const uint32_t rawHeight = stackArg(7);
-        uint32_t wndProc = 0;
-        auto cls = windowClassesByName_.find(className);
-        if (cls != windowClassesByName_.end()) {
-            std::memcpy(&wndProc, cls->second.bytes.data() + 4, sizeof(wndProc));
-        }
-        ret = makeGuestHandle({GuestHandle::Kind::GuestWindow, 0, 0});
-        GuestWindow window{};
-        window.hwnd = ret;
-        window.className = className;
-        window.title = readUtf16(a2);
-        window.style = a3;
-        window.exStyle = a0;
-        window.parent = parent;
-        window.menu = menu;
-        window.instance = instance;
-        window.param = param;
-        window.wndProc = wndProc;
-        window.x = normalizePos(rawX);
-        window.y = normalizePos(rawY);
-        window.width = normalizeSize(rawWidth, framebufferWidth_ > 0 ? framebufferWidth_ : 800, topLevel);
-        window.height = normalizeSize(rawHeight, framebufferHeight_ > 0 ? framebufferHeight_ : 480, topLevel);
-        window.visible = (a3 & 0x10000000u) != 0; // WS_VISIBLE
-        spdlog::info("CreateWindowExW guest=0x{:08x} class=\"{}\" title=\"{}\" parent=0x{:08x} id/menu=0x{:08x} "
-                     "style=0x{:08x} ex=0x{:08x} wndproc=0x{:08x} param=0x{:08x} rect={},{} {}x{} raw=0x{:08x},0x{:08x} 0x{:08x}x0x{:08x}",
-                     ret, className, window.title, parent, menu, window.style, window.exStyle,
-                     wndProc, param, window.x, window.y, window.width, window.height,
-                     rawX, rawY, rawWidth, rawHeight);
-        const uint32_t createStruct = allocate(48, true);
-        if (createStruct) {
-            writeU32(createStruct, param);
-            writeU32(createStruct + 4, instance);
-            writeU32(createStruct + 8, menu);
-            writeU32(createStruct + 12, parent);
-            writeU32(createStruct + 16, uint32_t(window.height));
-            writeU32(createStruct + 20, uint32_t(window.width));
-            writeU32(createStruct + 24, uint32_t(window.y));
-            writeU32(createStruct + 28, uint32_t(window.x));
-            writeU32(createStruct + 32, window.style);
-            writeU32(createStruct + 36, a2);
-            writeU32(createStruct + 40, a1);
-            writeU32(createStruct + 44, window.exStyle);
-            window.createStruct = createStruct;
-        }
-        windows_[ret] = window;
-        ensureHostWindow(ret, windows_[ret]);
-        GuestMessage size{};
-        size.hwnd = ret;
-        size.message = 0x0005; // WM_SIZE
-        size.lParam = (uint32_t(uint16_t(window.height)) << 16) | uint16_t(window.width);
-        size.time = uint32_t(++tick_ * 16);
-        guestMessages_.push_back(size);
-        lastError_ = 0;
-    } else if (name == "GetWindowRect") {
-        auto it = windows_.find(a0);
-        if (!a1 || it == windows_.end()) {
-            lastError_ = it == windows_.end() ? 1400 : 87;
-            ret = 0;
-        } else {
-            const auto [x, y] = windowOrigin(a0);
-            writeGuestRect(a1, x, y, x + it->second.width, y + it->second.height);
-            lastError_ = 0;
-            ret = 1;
-        }
-    } else if (name == "GetClientRect") {
-        auto it = windows_.find(a0);
-        if (!a1 || it == windows_.end()) {
-            lastError_ = it == windows_.end() ? 1400 : 87;
-            ret = 0;
-        } else {
-            writeGuestRect(a1, 0, 0, it->second.width, it->second.height);
-            lastError_ = 0;
-            ret = 1;
-        }
-    } else if (name == "AdjustWindowRectEx") {
-        int32_t rect[4]{};
-        if (!a0 || uc_mem_read(uc_, a0, rect, sizeof(rect)) != UC_ERR_OK) {
-            lastError_ = 87;
-            ret = 0;
-        } else {
-#if defined(_WIN32)
-            RECT hostRect{rect[0], rect[1], rect[2], rect[3]};
-            ret = ::AdjustWindowRectEx(&hostRect, a1, a2 != 0, a3) ? 1 : 0;
-            if (ret) {
-                writeGuestRect(a0, hostRect.left, hostRect.top, hostRect.right, hostRect.bottom);
-                lastError_ = 0;
-            } else {
-                lastError_ = ::GetLastError();
-            }
-#else
-            lastError_ = 0;
-            ret = 1;
-#endif
-        }
-    } else if (name == "GetDlgItem") {
-        auto parent = windows_.find(a0);
-        if (parent == windows_.end()) {
-            lastError_ = 1400;
-            ret = 0;
-        } else {
-            ret = 0;
-            for (const auto& [hwnd, window] : windows_) {
-                if (window.parent == a0 && window.menu == a1) {
-                    ret = hwnd;
-                    break;
-                }
-            }
-            lastError_ = ret ? 0 : 1421;
-        }
-    } else if (name == "GetDlgCtrlID") {
-        auto it = windows_.find(a0);
-        if (it == windows_.end()) {
-            lastError_ = 1400;
-            ret = 0xffffffffu;
-        } else {
-            lastError_ = 0;
-            ret = it->second.menu;
-        }
-    } else if (name == "InvalidateRect") {
-        const uint32_t target = a0 ? a0 : firstWindow();
-        if (!target || !windows_.count(target)) {
-            lastError_ = 1400;
-            ret = 0;
-        } else {
-            queueGuestPaint(target, a2 != 0);
-            lastError_ = 0;
-            ret = 1;
-        }
-    } else if (name == "ValidateRect") {
-        ret = windows_.count(a0) ? 1 : 0;
-        lastError_ = ret ? 0 : 1400;
-    } else if (name == "ScreenToClient") {
-        auto it = windows_.find(a0);
-        if (!a1 || it == windows_.end()) {
-            lastError_ = it == windows_.end() ? 1400 : 87;
-            ret = 0;
-        } else {
-            int32_t x = int32_t(readU32(a1));
-            int32_t y = int32_t(readU32(a1 + 4));
-            const auto [originX, originY] = windowOrigin(a0);
-            writeU32(a1, uint32_t(x - originX));
-            writeU32(a1 + 4, uint32_t(y - originY));
-            lastError_ = 0;
-            ret = 1;
-        }
-    } else if (name == "KillTimer") {
-        if (a0 && !windows_.count(a0)) {
-            lastError_ = 1400;
-            ret = 0;
-        } else {
-            timers_.erase(guestTimerKey(a0, a1));
-            lastError_ = 0;
-            ret = 1;
-        }
-    } else if (name == "BeginPaint") {
-        auto it = windows_.find(a0);
-        if (it == windows_.end()) {
-            lastError_ = 1400;
-            ret = 0;
-        } else {
-            ret = makeGuestDc(a0);
-            if (a1) {
-                std::array<uint8_t, 64> paint{};
-                uc_mem_write(uc_, a1, paint.data(), paint.size());
-                writeU32(a1, ret);
-                writeU32(a1 + 4, 1);
-                writeGuestRect(a1 + 8, 0, 0, it->second.width, it->second.height);
-            }
-            lastError_ = 0;
-        }
-    } else if (name == "EndPaint") {
-        uint32_t hdc = 0;
-        if (a1) uc_mem_read(uc_, a1, &hdc, sizeof(hdc));
-        if (hdc) {
-            dcs_.erase(hdc);
-            guestHandles_.erase(hdc);
-        }
-        ret = windows_.count(a0) ? 1 : 0;
-        lastError_ = ret ? 0 : 1400;
-    } else if (name == "GetDC" || name == "GetDCEx") {
-        if (a0 && !windows_.count(a0)) {
-            lastError_ = 1400;
-            ret = 0;
-        } else {
-            ret = makeGuestDc(a0);
-            lastError_ = 0;
-        }
-    } else if (name == "ReleaseDC") {
-        auto handle = guestHandles_.find(a1);
-        if (handle == guestHandles_.end() || handle->second.kind != GuestHandle::Kind::GuestDc) {
-            lastError_ = 6;
-            ret = 0;
-        } else {
-            dcs_.erase(a1);
-            guestHandles_.erase(handle);
-            lastError_ = 0;
-            ret = 1;
-        }
-    } else if (name == "CreatePen") {
-        ret = makeGuestPen(a0, a1, a2);
-        lastError_ = 0;
-    } else if (name == "CreateSolidBrush") {
-        ret = makeGuestBrush(a0);
-        lastError_ = 0;
-    } else if (name == "CreateRectRgn") {
-#if defined(_WIN32)
-        HRGN region = CreateRectRgn(int(a0), int(a1), int(a2), int(a3));
-        ret = region ? makeGuestHandle({GuestHandle::Kind::HostRegion, reinterpret_cast<uintptr_t>(region), 0}) : 0;
-        lastError_ = ret ? 0 : GetLastError();
-#else
-        ret = makeGuestHandle({GuestHandle::Kind::HostRegion, 0, 0});
-        lastError_ = ret ? 0 : 8;
-#endif
-    } else if (name == "CombineRgn") {
-#if defined(_WIN32)
-        auto dest = guestHandles_.find(a0);
-        auto src1 = guestHandles_.find(a1);
-        auto src2 = guestHandles_.find(a2);
-        const bool needSrc2 = a3 != RGN_COPY;
-        if (dest == guestHandles_.end() || src1 == guestHandles_.end() ||
-            dest->second.kind != GuestHandle::Kind::HostRegion ||
-            src1->second.kind != GuestHandle::Kind::HostRegion ||
-            !dest->second.hostValue || !src1->second.hostValue ||
-            (needSrc2 && (src2 == guestHandles_.end() ||
-                          src2->second.kind != GuestHandle::Kind::HostRegion ||
-                          !src2->second.hostValue))) {
-            lastError_ = 6;
-            ret = 0;
-        } else {
-            HRGN hostSrc2 = needSrc2 ? reinterpret_cast<HRGN>(src2->second.hostValue) : nullptr;
-            ret = uint32_t(CombineRgn(reinterpret_cast<HRGN>(dest->second.hostValue),
-                                      reinterpret_cast<HRGN>(src1->second.hostValue),
-                                      hostSrc2,
-                                      int(a3)));
-            lastError_ = ret ? 0 : GetLastError();
-        }
-#else
-        ret = 0;
-        lastError_ = 120;
-#endif
-    } else if (name == "CreateFontIndirectW") {
-        std::array<uint8_t, 92> font{};
-        if (!a0 || uc_mem_read(uc_, a0, font.data(), font.size()) != UC_ERR_OK) {
-            lastError_ = 87;
-            ret = 0;
-        } else {
-            ret = makeGuestFont(font);
-            lastError_ = 0;
-        }
-    } else if (name == "GetStockObject") {
-        ret = makeStockObject(int32_t(a0));
-        lastError_ = ret ? 0 : 87;
-    } else if (name == "SelectObject") {
-        GuestDc* dc = lookupGuestDc(a0);
-        auto object = guestHandles_.find(a1);
-        if (!dc || object == guestHandles_.end()) {
-            lastError_ = 6;
-            ret = 0;
-        } else if (object->second.kind == GuestHandle::Kind::GuestBrush) {
-            ret = dc->selectedBrush;
-            dc->selectedBrush = a1;
-            lastError_ = 0;
-        } else if (object->second.kind == GuestHandle::Kind::GuestPen) {
-            ret = dc->selectedPen;
-            dc->selectedPen = a1;
-            lastError_ = 0;
-        } else if (object->second.kind == GuestHandle::Kind::GuestFont) {
-            ret = dc->selectedFont;
-            dc->selectedFont = a1;
-            lastError_ = 0;
-        } else if (object->second.kind == GuestHandle::Kind::HostBitmap && bitmaps_.count(a1)) {
-            ret = dc->selectedBitmap;
-            dc->selectedBitmap = a1;
-            lastError_ = 0;
-        } else {
-            lastError_ = 6;
-            ret = 0;
-        }
-    } else if (name == "DeleteObject") {
-        auto object = guestHandles_.find(a0);
-        if (object == guestHandles_.end()) {
-            lastError_ = 6;
-            ret = 0;
-        } else if (object->second.filePointer && object->second.kind != GuestHandle::Kind::HostBitmap) {
-            ret = 0;
-            lastError_ = 6;
-        } else if (object->second.kind == GuestHandle::Kind::GuestBrush) {
-            auto brush = brushes_.find(a0);
-            if (brush != brushes_.end() && brush->second.stock) {
-                ret = 1;
-                lastError_ = 0;
-                return true;
-            }
-            brushes_.erase(a0);
-            guestHandles_.erase(object);
-            ret = 1;
-            lastError_ = 0;
-        } else if (object->second.kind == GuestHandle::Kind::GuestPen) {
-            auto pen = pens_.find(a0);
-            if (pen != pens_.end() && pen->second.stock) {
-                ret = 1;
-                lastError_ = 0;
-                return true;
-            }
-            pens_.erase(a0);
-            guestHandles_.erase(object);
-            ret = 1;
-            lastError_ = 0;
-        } else if (object->second.kind == GuestHandle::Kind::GuestFont) {
-            auto font = fonts_.find(a0);
-            if (font != fonts_.end() && font->second.stock) {
-                ret = 1;
-                lastError_ = 0;
-                return true;
-            }
-            fonts_.erase(a0);
-            guestHandles_.erase(object);
-            ret = 1;
-            lastError_ = 0;
-        } else if (object->second.kind == GuestHandle::Kind::HostBitmap) {
-            auto bitmap = bitmaps_.find(a0);
-            if (bitmap != bitmaps_.end() && bitmap->second.stock) {
-                ret = 1;
-                lastError_ = 0;
-                return true;
-            }
-#if defined(_WIN32)
-            if (object->second.hostValue) DeleteObject(reinterpret_cast<HGDIOBJ>(object->second.hostValue));
-#endif
-            bitmaps_.erase(a0);
-            if (object->second.filePointer) releaseAllocation(object->second.filePointer);
-            guestHandles_.erase(object);
-            ret = 1;
-            lastError_ = 0;
-        } else if (object->second.kind == GuestHandle::Kind::HostRegion) {
-#if defined(_WIN32)
-            if (object->second.hostValue) DeleteObject(reinterpret_cast<HRGN>(object->second.hostValue));
-#endif
-            guestHandles_.erase(object);
-            ret = 1;
-            lastError_ = 0;
-        } else {
-            lastError_ = 6;
-            ret = 0;
-        }
-    } else if (name == "SetBkColor" || name == "SetTextColor" || name == "SetBkMode" || name == "SetTextAlign") {
-        GuestDc* dc = lookupGuestDc(a0);
-        if (!dc) {
-            lastError_ = 6;
-            ret = 0xffffffffu;
-        } else if (name == "SetBkColor") {
-            ret = dc->bkColor;
-            dc->bkColor = a1;
-            lastError_ = 0;
-        } else if (name == "SetTextColor") {
-            ret = dc->textColor;
-            dc->textColor = a1;
-            lastError_ = 0;
-        } else if (name == "SetBkMode") {
-            ret = dc->bkMode;
-            dc->bkMode = a1;
-            lastError_ = 0;
-        } else {
-            ret = dc->textAlign;
-            dc->textAlign = a1;
-            lastError_ = 0;
-        }
-    } else if (name == "FillRect") {
-        GuestDc* dc = lookupGuestDc(a0);
-        int32_t left = 0, top = 0, right = 0, bottom = 0;
-        auto brush = brushes_.find(a2);
-        if (!dc || !readGuestRect(a1, left, top, right, bottom) || brush == brushes_.end()) {
-            lastError_ = 87;
-            ret = 0;
-        } else {
-            if (brush->second.colorRef != 0xffffffffu) {
-                fillDcRect(*dc, left, top, right, bottom, colorRefToPixel(brush->second.colorRef));
-            }
-            lastError_ = 0;
-            ret = 1;
-        }
-    } else if (name == "PatBlt") {
-        GuestDc* dc = lookupGuestDc(a0);
-        auto brush = dc ? brushes_.find(dc->selectedBrush) : brushes_.end();
-        const uint32_t rop = stackArg(5);
-        if (!dc || brush == brushes_.end() || rop != 0x00f00021u) {
-            lastError_ = dc ? 120 : 6;
-            ret = 0;
-        } else {
-            if (brush->second.colorRef != 0xffffffffu) {
-                fillDcRect(*dc, int32_t(a1), int32_t(a2),
-                           int32_t(a1) + int32_t(a3),
-                           int32_t(a2) + int32_t(stackArg(4)),
-                           colorRefToPixel(brush->second.colorRef));
-            }
-            lastError_ = 0;
-            ret = 1;
-        }
-    } else if (name == "Rectangle") {
-        GuestDc* dc = lookupGuestDc(a0);
-        auto brush = dc ? brushes_.find(dc->selectedBrush) : brushes_.end();
-        auto pen = dc ? pens_.find(dc->selectedPen) : pens_.end();
-        if (!dc || (brush == brushes_.end() && pen == pens_.end())) {
-            lastError_ = dc ? 87 : 6;
-            ret = 0;
-        } else {
-            const int32_t left = int32_t(a1);
-            const int32_t top = int32_t(a2);
-            const int32_t right = int32_t(a3);
-            const int32_t bottom = int32_t(stackArg(4));
-            if (brush != brushes_.end() && brush->second.colorRef != 0xffffffffu) {
-                fillDcRect(*dc, left, top, right, bottom, colorRefToPixel(brush->second.colorRef));
-            }
-            if (pen != pens_.end() && pen->second.style != 5 && pen->second.colorRef != 0xffffffffu) {
-                const uint32_t pixel = colorRefToPixel(pen->second.colorRef);
-                drawDcLine(*dc, left, top, right - 1, top, pixel);
-                drawDcLine(*dc, left, bottom - 1, right - 1, bottom - 1, pixel);
-                drawDcLine(*dc, left, top, left, bottom - 1, pixel);
-                drawDcLine(*dc, right - 1, top, right - 1, bottom - 1, pixel);
-            }
-            lastError_ = 0;
-            ret = 1;
-        }
-    } else if (name == "MoveToEx") {
-        GuestDc* dc = lookupGuestDc(a0);
-        if (!dc) {
-            lastError_ = 6;
-            ret = 0;
-        } else {
-            if (a3) {
-                writeU32(a3, uint32_t(dc->x));
-                writeU32(a3 + 4, uint32_t(dc->y));
-            }
-            dc->x = int32_t(a1);
-            dc->y = int32_t(a2);
-            lastError_ = 0;
-            ret = 1;
-        }
-    } else if (name == "LineTo") {
-        GuestDc* dc = lookupGuestDc(a0);
-        auto pen = dc ? pens_.find(dc->selectedPen) : pens_.end();
-        if (!dc || pen == pens_.end()) {
-            lastError_ = dc ? 87 : 6;
-            ret = 0;
-        } else {
-            if (pen->second.style != 5 && pen->second.colorRef != 0xffffffffu) {
-                drawDcLine(*dc, dc->x, dc->y, int32_t(a1), int32_t(a2),
-                           colorRefToPixel(pen->second.colorRef));
-            }
-            dc->x = int32_t(a1);
-            dc->y = int32_t(a2);
-            lastError_ = 0;
-            ret = 1;
-        }
-    } else if (name == "StretchDIBits") {
-        GuestDc* dc = lookupGuestDc(a0);
-        if (!dc) {
-            lastError_ = 6;
-            ret = 0xffffffffu;
-        } else {
-            const bool supported = stackArg(11) == 0 && stackArg(12) == 0x00cc0020u;
-            auto dstBitmap = bitmaps_.find(dc->selectedBitmap);
-            const bool ok = supported && (dstBitmap != bitmaps_.end()
-                ? stretchDibToBitmap(dstBitmap->second, int32_t(a1), int32_t(a2), int32_t(a3),
-                                     int32_t(stackArg(4)), int32_t(stackArg(5)),
-                                     int32_t(stackArg(6)), int32_t(stackArg(7)),
-                                     int32_t(stackArg(8)), stackArg(9), stackArg(10))
-                : stretchDibToFramebuffer(*dc, int32_t(a1), int32_t(a2), int32_t(a3),
-                                          int32_t(stackArg(4)), int32_t(stackArg(5)),
-                                          int32_t(stackArg(6)), int32_t(stackArg(7)),
-                                          int32_t(stackArg(8)), stackArg(9), stackArg(10)));
-            if (ok) {
-                ret = uint32_t(std::abs(int32_t(stackArg(8))));
-                lastError_ = 0;
-            } else {
-                spdlog::info("StretchDIBits failed dst=0x{:08x} dstBitmap=0x{:08x} "
-                             "dst={}x{} src={}x{} srcOrigin={},{} bits=0x{:08x} info=0x{:08x} "
-                             "usage={} rop=0x{:08x}",
-                             a0, dc->selectedBitmap, int32_t(a3), int32_t(stackArg(4)),
-                             int32_t(stackArg(7)), int32_t(stackArg(8)), int32_t(stackArg(5)),
-                             int32_t(stackArg(6)), stackArg(9), stackArg(10), stackArg(11), stackArg(12));
-                lastError_ = 120;
-                ret = 0xffffffffu;
-            }
-        }
-    } else if (name == "TransparentImage") {
-        GuestDc* dstDc = lookupGuestDc(a0);
-        GuestDc* srcDc = lookupGuestDc(stackArg(5));
-        auto srcBitmap = srcDc ? bitmaps_.find(srcDc->selectedBitmap) : bitmaps_.end();
-        auto dstBitmap = dstDc ? bitmaps_.find(dstDc->selectedBitmap) : bitmaps_.end();
-        const int32_t dstH = int32_t(stackArg(4));
-        const int32_t srcX = int32_t(stackArg(6));
-        const int32_t srcY = int32_t(stackArg(7));
-        const int32_t srcW = int32_t(stackArg(8));
-        const int32_t srcH = int32_t(stackArg(9));
-        const uint32_t transparentColor = stackArg(10);
-        if (!dstDc || !srcDc || srcBitmap == bitmaps_.end()) {
-            spdlog::info("TransparentImage unsupported dst=0x{:08x} dstBitmap=0x{:08x} src=0x{:08x} "
-                         "srcBitmap=0x{:08x} dst={}x{} src={}x{} srcOrigin={},{} color=0x{:08x}",
-                         a0, dstDc ? dstDc->selectedBitmap : 0, stackArg(5),
-                         srcDc ? srcDc->selectedBitmap : 0, int32_t(a3), dstH,
-                         srcW, srcH, srcX, srcY, transparentColor);
-            lastError_ = dstDc && srcDc ? 120 : 6;
-            ret = 0;
-        } else if (dstBitmap != bitmaps_.end()) {
-            const bool ok = transparentImageToBitmap(dstBitmap->second, srcBitmap->second,
-                                                     int32_t(a1), int32_t(a2), int32_t(a3), dstH,
-                                                     srcX, srcY, srcW, srcH, transparentColor);
-            const int32_t srcBitmapHeight = std::abs(srcBitmap->second.heightRaw);
-            const int32_t dstBitmapHeight = std::abs(dstBitmap->second.heightRaw);
-            const bool interesting =
-                srcBitmap->second.width >= 100 || srcBitmapHeight >= 40 ||
-                dstBitmap->second.width >= 100 || dstBitmapHeight >= 40 ||
-                dstDc->hwnd || srcDc->hwnd;
-            if (ok && interesting && blitProbeLogCounter_ < 320) {
-                ++blitProbeLogCounter_;
-                const BitmapProbeStats srcStats =
-                    bitmapProbeStats(srcBitmap->second, srcX, srcY, srcW, srcH);
-                const BitmapProbeStats dstStats =
-                    bitmapProbeStats(dstBitmap->second, int32_t(a1), int32_t(a2), int32_t(a3), dstH);
-                spdlog::info("TransparentImage probe#{} memory dstDc=0x{:08x} dstHwnd=0x{:08x} "
-                             "dstBitmap=0x{:08x} dstSize={}x{} dstRect={},{} {}x{} "
-                             "dstStats sampled={} nonBlack={} unique~{} first=0x{:08x} last=0x{:08x} "
-                             "srcDc=0x{:08x} srcHwnd=0x{:08x} srcBitmap=0x{:08x} srcSize={}x{} "
-                             "srcRect={},{} {}x{} srcStats sampled={} nonBlack={} unique~{} "
-                             "first=0x{:08x} last=0x{:08x} color=0x{:08x}",
-                             blitProbeLogCounter_, a0, dstDc->hwnd, dstDc->selectedBitmap,
-                             dstBitmap->second.width, dstBitmap->second.heightRaw,
-                             int32_t(a1), int32_t(a2), int32_t(a3), dstH,
-                             dstStats.sampled, dstStats.nonBlack, dstStats.uniqueApprox,
-                             dstStats.firstPixel, dstStats.lastPixel, stackArg(5), srcDc->hwnd,
-                             srcDc->selectedBitmap, srcBitmap->second.width, srcBitmap->second.heightRaw,
-                             srcX, srcY, srcW, srcH, srcStats.sampled, srcStats.nonBlack,
-                             srcStats.uniqueApprox, srcStats.firstPixel, srcStats.lastPixel,
-                             transparentColor);
-            }
-            if (!ok) {
-                spdlog::info("TransparentImage bitmap blit failed dst=0x{:08x} dstBitmap=0x{:08x} "
-                             "dstBits=0x{:08x} dstSize={}x{} dstBpp={} src=0x{:08x} srcBitmap=0x{:08x} "
-                             "srcBits=0x{:08x} srcSize={}x{} srcBpp={} dst={}x{} src={}x{} "
-                             "srcOrigin={},{} color=0x{:08x}",
-                             a0, dstDc->selectedBitmap, dstBitmap->second.bits, dstBitmap->second.width,
-                             dstBitmap->second.heightRaw, dstBitmap->second.bpp, stackArg(5),
-                             srcDc->selectedBitmap, srcBitmap->second.bits, srcBitmap->second.width,
-                             srcBitmap->second.heightRaw, srcBitmap->second.bpp, int32_t(a3), dstH,
-                             srcW, srcH, srcX, srcY, transparentColor);
-            }
-            lastError_ = ok ? 0 : 120;
-            ret = ok ? 1 : 0;
-        } else {
-            const bool ok = transparentImageToFramebuffer(*dstDc, srcBitmap->second,
-                                                          int32_t(a1), int32_t(a2), int32_t(a3), dstH,
-                                                          srcX, srcY, srcW, srcH, transparentColor);
-            const int32_t srcBitmapHeight = std::abs(srcBitmap->second.heightRaw);
-            const bool interesting =
-                srcBitmap->second.width >= 100 || srcBitmapHeight >= 40 ||
-                std::abs(int32_t(a3)) >= 100 || std::abs(dstH) >= 40 || dstDc->hwnd;
-            if (ok && interesting && blitProbeLogCounter_ < 320) {
-                ++blitProbeLogCounter_;
-                const BitmapProbeStats srcStats =
-                    bitmapProbeStats(srcBitmap->second, srcX, srcY, srcW, srcH);
-                spdlog::info("TransparentImage probe#{} framebuffer dstDc=0x{:08x} dstHwnd=0x{:08x} "
-                             "dstRect={},{} {}x{} srcDc=0x{:08x} srcHwnd=0x{:08x} "
-                             "srcBitmap=0x{:08x} srcSize={}x{} srcRect={},{} {}x{} "
-                             "srcStats sampled={} nonBlack={} unique~{} first=0x{:08x} "
-                             "last=0x{:08x} color=0x{:08x}",
-                             blitProbeLogCounter_, a0, dstDc->hwnd, int32_t(a1), int32_t(a2),
-                             int32_t(a3), dstH, stackArg(5), srcDc->hwnd, srcDc->selectedBitmap,
-                             srcBitmap->second.width, srcBitmap->second.heightRaw, srcX, srcY,
-                             srcW, srcH, srcStats.sampled, srcStats.nonBlack, srcStats.uniqueApprox,
-                             srcStats.firstPixel, srcStats.lastPixel, transparentColor);
-                if (blitProbeDumpCounter_ < 12 && std::abs(int32_t(a3)) >= 100 && std::abs(dstH) >= 40) {
-                    ++blitProbeDumpCounter_;
-                    char tag[80]{};
-                    std::snprintf(tag, sizeof(tag), "transparent_present_%02u", blitProbeDumpCounter_);
-                    dumpGuestBitmapPpm(srcDc->selectedBitmap, srcBitmap->second, std::string(tag) + "_source");
-                    dumpFramebufferPpm(tag);
-                }
-            }
-            if (!ok) {
-                spdlog::info("TransparentImage framebuffer blit failed dst=0x{:08x} src=0x{:08x} "
-                             "srcBitmap=0x{:08x} srcBits=0x{:08x} srcSize={}x{} srcBpp={} "
-                             "dst={}x{} src={}x{} srcOrigin={},{} color=0x{:08x}",
-                             a0, stackArg(5), srcDc->selectedBitmap, srcBitmap->second.bits,
-                             srcBitmap->second.width, srcBitmap->second.heightRaw, srcBitmap->second.bpp,
-                             int32_t(a3), dstH, srcW, srcH, srcX, srcY, transparentColor);
-            }
-            lastError_ = ok ? 0 : 120;
-            ret = ok ? 1 : 0;
-        }
-    } else if (name == "ExtTextOutW" || name == "DrawTextW") {
-        GuestDc* dc = lookupGuestDc(a0);
-        if (!dc) {
-            lastError_ = 6;
-            ret = 0;
-        } else {
-            const bool drawTextCall = name == "DrawTextW";
-            const bool ok = drawTextCall
-                ? drawHostTextToDc(*dc, 0, 0, 0, a2, a1, int32_t(a3), stackArg(4), true)
-                : drawHostTextToDc(*dc, int32_t(a1), int32_t(a2), a3, stackArg(4),
-                                   stackArg(5), int32_t(stackArg(6)), 0, false);
-            lastError_ = ok ? 0 : 120;
-            ret = ok ? 1 : 0;
-        }
-    } else if (name == "CreateCompatibleDC") {
-        ret = makeGuestDc(0);
-        if (GuestDc* dc = lookupGuestDc(ret)) {
-            dc->selectedBitmap = makeStockObject(21); // DEFAULT_BITMAP
-        }
-        lastError_ = ret ? 0 : 8;
-    } else if (name == "DeleteDC") {
-        auto handle = guestHandles_.find(a0);
-        if (handle == guestHandles_.end() || handle->second.kind != GuestHandle::Kind::GuestDc) {
-            lastError_ = 6;
-            ret = 0;
-        } else {
-            dcs_.erase(a0);
-            guestHandles_.erase(handle);
-            lastError_ = 0;
-            ret = 1;
-        }
-    } else if (name == "BitBlt" || name == "StretchBlt") {
-        GuestDc* dstDc = lookupGuestDc(a0);
-        GuestDc* srcDc = lookupGuestDc(stackArg(5));
-        const bool stretch = name == "StretchBlt";
-        const uint32_t rop = stretch ? stackArg(10) : stackArg(8);
-        const int32_t dstW = int32_t(a3);
-        const int32_t dstH = int32_t(stackArg(4));
-        const int32_t srcX = int32_t(stackArg(6));
-        const int32_t srcY = int32_t(stackArg(7));
-        const int32_t srcW = stretch ? int32_t(stackArg(8)) : dstW;
-        const int32_t srcH = stretch ? int32_t(stackArg(9)) : dstH;
-        auto srcBitmap = srcDc ? bitmaps_.find(srcDc->selectedBitmap) : bitmaps_.end();
-        auto dstBitmap = dstDc ? bitmaps_.find(dstDc->selectedBitmap) : bitmaps_.end();
-        if (!dstDc || !srcDc || srcBitmap == bitmaps_.end() || !supportedSourceRasterOp(rop)) {
-            spdlog::info("{} unsupported dst=0x{:08x} dstBitmap=0x{:08x} src=0x{:08x} srcBitmap=0x{:08x} "
-                         "dst={}x{} src={}x{} srcOrigin={},{} rop=0x{:08x}",
-                         name, a0, dstDc ? dstDc->selectedBitmap : 0, stackArg(5),
-                         srcDc ? srcDc->selectedBitmap : 0, dstW, dstH, srcW, srcH,
-                         srcX, srcY, rop);
-            lastError_ = dstDc && srcDc ? 120 : 6;
-            ret = 0;
-        } else if (dstW == 0 || dstH == 0 || srcW == 0 || srcH == 0) {
-            lastError_ = 0;
-            ret = 1;
-        } else if (dstBitmap != bitmaps_.end()) {
-            const bool ok = bitBltToBitmap(dstBitmap->second, srcBitmap->second,
-                                           int32_t(a1), int32_t(a2), dstW, dstH,
-                                           srcX, srcY, srcW, srcH, rop);
-            const int32_t srcBitmapHeight = std::abs(srcBitmap->second.heightRaw);
-            const int32_t dstBitmapHeight = std::abs(dstBitmap->second.heightRaw);
-            const bool interesting =
-                srcBitmap->second.width >= 100 || srcBitmapHeight >= 40 ||
-                dstBitmap->second.width >= 100 || dstBitmapHeight >= 40 ||
-                dstDc->hwnd || srcDc->hwnd;
-            if (ok && interesting && blitProbeLogCounter_ < 320) {
-                ++blitProbeLogCounter_;
-                const BitmapProbeStats srcStats =
-                    bitmapProbeStats(srcBitmap->second, srcX, srcY, srcW, srcH);
-                const BitmapProbeStats dstStats =
-                    bitmapProbeStats(dstBitmap->second, int32_t(a1), int32_t(a2), dstW, dstH);
-                spdlog::info("{} probe#{} memory dstDc=0x{:08x} dstHwnd=0x{:08x} "
-                             "dstBitmap=0x{:08x} dstSize={}x{} dstRect={},{} {}x{} "
-                             "dstStats sampled={} nonBlack={} unique~{} first=0x{:08x} last=0x{:08x} "
-                             "srcDc=0x{:08x} srcHwnd=0x{:08x} srcBitmap=0x{:08x} srcSize={}x{} "
-                             "srcRect={},{} {}x{} srcStats sampled={} nonBlack={} unique~{} "
-                             "first=0x{:08x} last=0x{:08x} rop=0x{:08x}",
-                             name, blitProbeLogCounter_, a0, dstDc->hwnd, dstDc->selectedBitmap,
-                             dstBitmap->second.width, dstBitmap->second.heightRaw,
-                             int32_t(a1), int32_t(a2), dstW, dstH, dstStats.sampled,
-                             dstStats.nonBlack, dstStats.uniqueApprox, dstStats.firstPixel,
-                             dstStats.lastPixel, stackArg(5), srcDc->hwnd, srcDc->selectedBitmap,
-                             srcBitmap->second.width, srcBitmap->second.heightRaw, srcX, srcY,
-                             srcW, srcH, srcStats.sampled, srcStats.nonBlack, srcStats.uniqueApprox,
-                             srcStats.firstPixel, srcStats.lastPixel, rop);
-                if (blitProbeDumpCounter_ < 12 &&
-                    (std::abs(dstW) >= 100 || std::abs(dstH) >= 40 || dstBitmap->second.width >= 700)) {
-                    ++blitProbeDumpCounter_;
-                    char tag[80]{};
-                    std::snprintf(tag, sizeof(tag), "memory_blit_%02u", blitProbeDumpCounter_);
-                    dumpGuestBitmapPpm(srcDc->selectedBitmap, srcBitmap->second, std::string(tag) + "_source");
-                    dumpGuestBitmapPpm(dstDc->selectedBitmap, dstBitmap->second, std::string(tag) + "_result");
-                }
-            }
-            const bool splashSlice =
-                ok && srcBitmap->second.width == 800 && dstBitmap->second.width == 800 &&
-                dstBitmapHeight == 480 && std::abs(dstW) == 800 &&
-                (std::abs(dstH) == 160 || std::abs(dstH) == 320) &&
-                std::abs(srcW) == 800 && std::abs(srcH) == std::abs(dstH) &&
-                (srcBitmapHeight == 160 || srcBitmapHeight == 320);
-            bool dumpSplashSlice = false;
-            std::string splashTag;
-            if (splashSlice && srcBitmapHeight == 160 && !splashTopBlitDumped_) {
-                splashTopBlitDumped_ = true;
-                dumpSplashSlice = true;
-                splashTag = name + "_splash_top";
-            } else if (splashSlice && srcBitmapHeight == 320 && !splashBottomBlitDumped_) {
-                splashBottomBlitDumped_ = true;
-                dumpSplashSlice = true;
-                splashTag = name + "_splash_bottom";
-            }
-            if (dumpSplashSlice) {
-                splashCompositeBitmap_ = dstDc->selectedBitmap;
-                dumpGuestBitmapPpm(srcDc->selectedBitmap, srcBitmap->second, splashTag + "_source");
-                dumpGuestBitmapPpm(dstDc->selectedBitmap, dstBitmap->second, splashTag + "_result");
-                spdlog::info("{} splash probe dstDc=0x{:08x} dstBitmap=0x{:08x} dstSize={}x{} "
-                             "srcDc=0x{:08x} srcBitmap=0x{:08x} srcSize={}x{} dst={}x{} "
-                             "src={}x{} srcOrigin={},{} rop=0x{:08x}",
-                             name, a0, dstDc->selectedBitmap, dstBitmap->second.width,
-                             dstBitmap->second.heightRaw, stackArg(5), srcDc->selectedBitmap,
-                             srcBitmap->second.width, srcBitmap->second.heightRaw, dstW, dstH,
-                             srcW, srcH, srcX, srcY, rop);
-            }
-            if (!ok) {
-                spdlog::info("{} bitmap blit failed dst=0x{:08x} dstBitmap=0x{:08x} "
-                             "dstBits=0x{:08x} dstSize={}x{} dstBpp={} src=0x{:08x} "
-                             "srcBitmap=0x{:08x} srcBits=0x{:08x} srcSize={}x{} srcBpp={} "
-                             "dst={}x{} src={}x{} srcOrigin={},{} rop=0x{:08x}",
-                             name, a0, dstDc->selectedBitmap, dstBitmap->second.bits,
-                             dstBitmap->second.width, dstBitmap->second.heightRaw, dstBitmap->second.bpp,
-                             stackArg(5), srcDc->selectedBitmap, srcBitmap->second.bits,
-                             srcBitmap->second.width, srcBitmap->second.heightRaw, srcBitmap->second.bpp,
-                             dstW, dstH, srcW, srcH, srcX, srcY, rop);
-            }
-            lastError_ = ok ? 0 : 120;
-            ret = ok ? 1 : 0;
-        } else {
-            const bool ok = bitBltToFramebuffer(*dstDc, srcBitmap->second,
-                                                int32_t(a1), int32_t(a2), dstW, dstH,
-                                                srcX, srcY, srcW, srcH, rop);
-            const int32_t srcBitmapHeight = std::abs(srcBitmap->second.heightRaw);
-            const bool interesting =
-                srcBitmap->second.width >= 100 || srcBitmapHeight >= 40 ||
-                std::abs(dstW) >= 100 || std::abs(dstH) >= 40 || dstDc->hwnd;
-            if (ok && interesting && blitProbeLogCounter_ < 320) {
-                ++blitProbeLogCounter_;
-                const BitmapProbeStats srcStats =
-                    bitmapProbeStats(srcBitmap->second, srcX, srcY, srcW, srcH);
-                spdlog::info("{} probe#{} framebuffer dstDc=0x{:08x} dstHwnd=0x{:08x} "
-                             "dstRect={},{} {}x{} srcDc=0x{:08x} srcHwnd=0x{:08x} "
-                             "srcBitmap=0x{:08x} srcSize={}x{} srcRect={},{} {}x{} "
-                             "srcStats sampled={} nonBlack={} unique~{} first=0x{:08x} "
-                             "last=0x{:08x} rop=0x{:08x}",
-                             name, blitProbeLogCounter_, a0, dstDc->hwnd, int32_t(a1), int32_t(a2),
-                             dstW, dstH, stackArg(5), srcDc->hwnd, srcDc->selectedBitmap,
-                             srcBitmap->second.width, srcBitmap->second.heightRaw, srcX, srcY,
-                             srcW, srcH, srcStats.sampled, srcStats.nonBlack, srcStats.uniqueApprox,
-                             srcStats.firstPixel, srcStats.lastPixel, rop);
-                if (blitProbeDumpCounter_ < 12 && std::abs(dstW) >= 100 && std::abs(dstH) >= 40) {
-                    ++blitProbeDumpCounter_;
-                    char tag[80]{};
-                    std::snprintf(tag, sizeof(tag), "framebuffer_blit_%02u", blitProbeDumpCounter_);
-                    dumpGuestBitmapPpm(srcDc->selectedBitmap, srcBitmap->second, std::string(tag) + "_source");
-                    dumpFramebufferPpm(tag);
-                }
-            }
-            const bool splashFrame =
-                ok && !splashFramebufferDumped_ && srcDc->selectedBitmap == splashCompositeBitmap_ &&
-                srcBitmap->second.width == 800 && std::abs(srcBitmap->second.heightRaw) == 480 &&
-                std::abs(dstW) == 800 && std::abs(dstH) == 480 &&
-                std::abs(srcW) == 800 && std::abs(srcH) == 480;
-            if (splashFrame) {
-                splashFramebufferDumped_ = true;
-                const std::string tag = name + "_splash_framebuffer";
-                dumpGuestBitmapPpm(srcDc->selectedBitmap, srcBitmap->second, tag + "_source");
-                dumpFramebufferPpm(tag);
-                spdlog::info("{} splash probe dstDc=0x{:08x} framebuffer srcDc=0x{:08x} "
-                             "srcBitmap=0x{:08x} srcSize={}x{} dst={}x{} src={}x{} "
-                             "srcOrigin={},{} rop=0x{:08x}",
-                             name, a0, stackArg(5), srcDc->selectedBitmap,
-                             srcBitmap->second.width, srcBitmap->second.heightRaw, dstW, dstH,
-                             srcW, srcH, srcX, srcY, rop);
-            }
-            if (!ok) {
-                spdlog::info("{} framebuffer blit failed dst=0x{:08x} src=0x{:08x} "
-                             "srcBitmap=0x{:08x} srcBits=0x{:08x} srcSize={}x{} srcBpp={} "
-                             "dst={}x{} src={}x{} srcOrigin={},{} rop=0x{:08x}",
-                             name, a0, stackArg(5), srcDc->selectedBitmap, srcBitmap->second.bits,
-                             srcBitmap->second.width, srcBitmap->second.heightRaw, srcBitmap->second.bpp,
-                             dstW, dstH, srcW, srcH, srcX, srcY, rop);
-            }
-            lastError_ = ok ? 0 : 120;
-            ret = ok ? 1 : 0;
-        }
-    } else if (name == "GetWindowLongW") {
-        auto it = windows_.find(a0);
-        if (it == windows_.end() || it->second.destroyed) {
-            lastError_ = 1400;
-            ret = 0;
-        } else {
-            lastError_ = 0;
-            ret = getWindowLongValue(it->second, int32_t(a1));
-        }
-    } else if (name == "SetWindowLongW") {
-        auto it = windows_.find(a0);
-        if (it == windows_.end() || it->second.destroyed) {
-            lastError_ = 1400;
-            ret = 0;
-        } else {
-            lastError_ = 0;
-            ret = setWindowLongValue(it->second, int32_t(a1), a2);
-        }
-    } else if (name == "GetParent") {
-        auto it = windows_.find(a0);
-        if (it == windows_.end() || it->second.destroyed) {
-            lastError_ = 1400;
-            ret = 0;
-        } else {
-            lastError_ = 0;
-            ret = it->second.parent;
-        }
-    } else if (name == "GetWindow") {
-        auto it = windows_.find(a0);
-        if (it == windows_.end() || it->second.destroyed) {
-            lastError_ = 1400;
-            ret = 0;
-        } else if (a1 == 5) {
-            ret = 0;
-            for (const auto& [hwnd, window] : windows_) {
-                if (!window.destroyed && window.parent == a0 &&
-                    (window.style & kWindowStyleChild)) {
-                    ret = hwnd;
-                    break;
-                }
-            }
-            lastError_ = ret ? 0 : 1400;
-        } else if (a1 == 4) {
-            const auto owner = windows_.find(it->second.parent);
-            ret = !(it->second.style & kWindowStyleChild) &&
-                  owner != windows_.end() && !owner->second.destroyed ? it->second.parent : 0;
-            lastError_ = ret ? 0 : 1400;
-        } else if (a1 == 2 || a1 == 3) {
-            std::vector<uint32_t> siblings;
-            for (const auto& [hwnd, window] : windows_) {
-                if (!window.destroyed && window.parent == it->second.parent &&
-                    ((window.style & kWindowStyleChild) == (it->second.style & kWindowStyleChild))) {
-                    siblings.push_back(hwnd);
-                }
-            }
-            auto pos = std::find(siblings.begin(), siblings.end(), a0);
-            if (pos == siblings.end()) {
-                ret = 0;
-            } else if (a1 == 2 && ++pos != siblings.end()) {
-                ret = *pos;
-            } else if (a1 == 3 && pos != siblings.begin()) {
-                ret = *--pos;
-            } else {
-                ret = 0;
-            }
-            lastError_ = ret ? 0 : 1400;
-        } else if (a1 == 0 || a1 == 1) {
-            ret = 0;
-            for (const auto& [hwnd, window] : windows_) {
-                if (!window.destroyed && window.parent == it->second.parent &&
-                    ((window.style & kWindowStyleChild) == (it->second.style & kWindowStyleChild))) {
-                    ret = hwnd;
-                    if (a1 == 0) break;
-                }
-            }
-            lastError_ = ret ? 0 : 1400;
-        } else {
-            lastError_ = 1400;
-            ret = 0;
-        }
-    } else if (name == "MoveWindow") {
-        auto it = windows_.find(a0);
-        if (it == windows_.end() || it->second.destroyed) {
-            lastError_ = 1400;
-            ret = 0;
-        } else {
-            const bool sizeChanged = it->second.width != int32_t(a3) ||
-                                     it->second.height != int32_t(stackArg(4));
-            it->second.x = int32_t(a1);
-            it->second.y = int32_t(a2);
-            it->second.width = int32_t(a3);
-            it->second.height = int32_t(stackArg(4));
-            if (sizeChanged) it->second.paintBoundsValid = false;
-#if defined(_WIN32)
-            if (it->second.hostHwnd) {
-                HWND hwnd = reinterpret_cast<HWND>(it->second.hostHwnd);
-                auto* presenter = reinterpret_cast<HostPresenterWindow*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
-                const int hostWidth = presenter ? hostPresenterOuterWidth(*presenter) : std::max(1, it->second.width);
-                const int hostHeight = presenter ? hostPresenterOuterHeight(*presenter) : std::max(1, it->second.height);
-                SetWindowPos(hwnd, nullptr, it->second.x, it->second.y, hostWidth, hostHeight,
-                             SWP_NOZORDER | SWP_NOACTIVATE);
-                if (stackArg(5)) presentHostWindows(true);
-            } else {
-                ensureHostWindow(a0, it->second);
-            }
-#endif
-            if (sizeChanged) {
-                GuestMessage message{};
-                message.hwnd = a0;
-                message.message = 0x0005; // WM_SIZE
-                message.lParam = (uint32_t(uint16_t(it->second.height)) << 16) | uint16_t(it->second.width);
-                message.time = uint32_t(++tick_ * 16);
-                guestMessages_.push_back(message);
-            }
-            lastError_ = 0;
-            ret = 1;
-        }
-    } else if (name == "SetWindowPos") {
-        auto it = windows_.find(a0);
-        if (it == windows_.end() || it->second.destroyed) {
-            lastError_ = 1400;
-            ret = 0;
-        } else {
-            const uint32_t flags = stackArg(6);
-            const int32_t newWidth = int32_t(stackArg(4));
-            const int32_t newHeight = int32_t(stackArg(5));
-            const bool oldVisible = it->second.visible;
-            const bool sizeChanged = !(flags & 0x0001u) &&
-                (it->second.width != newWidth || it->second.height != newHeight);
-            spdlog::info("SetWindowPos guest=0x{:08x} insertAfter=0x{:08x} x={} y={} cx={} cy={} flags=0x{:08x} oldRect={},{} {}x{} oldVisible={}",
-                         a0, a1, int32_t(a2), int32_t(a3), newWidth, newHeight, flags,
-                         it->second.x, it->second.y, it->second.width, it->second.height,
-                         oldVisible ? 1 : 0);
-            if (!(flags & 0x0002u)) {
-                it->second.x = int32_t(a2);
-                it->second.y = int32_t(a3);
-            }
-            if (!(flags & 0x0001u)) {
-                it->second.width = newWidth;
-                it->second.height = newHeight;
-                it->second.paintBoundsValid = false;
-            }
-            if (flags & 0x0040u) it->second.visible = true;  // SWP_SHOWWINDOW
-            if (flags & 0x0080u) {
-                it->second.visible = false; // SWP_HIDEWINDOW
-                it->second.paintBoundsValid = false;
-            }
-#if defined(_WIN32)
-            if (it->second.hostHwnd) {
-                HWND hwnd = reinterpret_cast<HWND>(it->second.hostHwnd);
-                if (!(flags & 0x0001u) || !(flags & 0x0002u)) {
-                    auto* presenter = reinterpret_cast<HostPresenterWindow*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
-                    const int hostWidth = presenter ? hostPresenterOuterWidth(*presenter)
-                                                    : std::max(1, it->second.width);
-                    const int hostHeight = presenter ? hostPresenterOuterHeight(*presenter)
-                                                     : std::max(1, it->second.height);
-                    SetWindowPos(hwnd, nullptr, it->second.x, it->second.y,
-                                 hostWidth, hostHeight,
-                                 SWP_NOZORDER | SWP_NOACTIVATE);
-                }
-                ShowWindow(hwnd, it->second.visible ? SW_SHOWNORMAL : SW_HIDE);
-                presentHostWindows(true);
-            } else {
-                ensureHostWindow(a0, it->second);
-            }
-#endif
-            if (sizeChanged) {
-                GuestMessage message{};
-                message.hwnd = a0;
-                message.message = 0x0005; // WM_SIZE
-                message.lParam = (uint32_t(uint16_t(it->second.height)) << 16) | uint16_t(it->second.width);
-                message.time = uint32_t(++tick_ * 16);
-                guestMessages_.push_back(message);
-            }
-            if (it->second.visible != oldVisible) {
-                GuestMessage message{};
-                message.hwnd = a0;
-                message.message = 0x0018; // WM_SHOWWINDOW
-                message.wParam = it->second.visible ? 1 : 0;
-                message.time = uint32_t(++tick_ * 16);
-                guestMessages_.push_back(message);
-                if (!it->second.visible && it->second.parent) {
-                    eraseGuestWindowArea(a0, it->second);
-                    spdlog::info("SetWindowPos invalidating parent=0x{:08x} after hiding child=0x{:08x}",
-                                 it->second.parent, a0);
-                    queueGuestPaint(it->second.parent, true);
-                }
-            }
-            lastError_ = 0;
-            ret = 1;
-        }
-    } else if (name == "SetWindowRgn") {
-        auto it = windows_.find(a0);
-        if (it == windows_.end()) {
-            lastError_ = 1400;
-            ret = 0;
-        } else {
-#if defined(_WIN32)
-            bool hostOk = true;
-            if (it->second.hostHwnd) {
-                HRGN region = nullptr;
-                auto regionHandle = guestHandles_.find(a1);
-                if (a1) {
-                    if (regionHandle == guestHandles_.end() ||
-                        regionHandle->second.kind != GuestHandle::Kind::HostRegion) {
-                        lastError_ = 6;
-                        ret = 0;
-                        return true;
-                    }
-                    region = reinterpret_cast<HRGN>(regionHandle->second.hostValue);
-                }
-                hostOk = SetWindowRgn(reinterpret_cast<HWND>(it->second.hostHwnd), region, a2 != 0) != 0;
-                if (hostOk && regionHandle != guestHandles_.end()) {
-                    regionHandle->second.hostValue = 0;
-                    guestHandles_.erase(regionHandle);
-                }
-            }
-            ret = hostOk ? 1 : 0;
-            lastError_ = ret ? 0 : GetLastError();
-#else
-            ret = 1;
-            lastError_ = 0;
-#endif
-        }
-    } else if (name == "GetWindowRgn") {
-        auto it = windows_.find(a0);
-        if (it == windows_.end()) {
-            lastError_ = 1400;
-            ret = 0;
-        } else {
-#if defined(_WIN32)
-            auto region = guestHandles_.find(a1);
-            if (it->second.hostHwnd && region != guestHandles_.end() &&
-                region->second.kind == GuestHandle::Kind::HostRegion && region->second.hostValue) {
-                ret = uint32_t(GetWindowRgn(reinterpret_cast<HWND>(it->second.hostHwnd),
-                                            reinterpret_cast<HRGN>(region->second.hostValue)));
-                lastError_ = ret ? 0 : GetLastError();
-            } else {
-                ret = 0;
-                lastError_ = 0;
-            }
-#else
-            ret = 0;
-            lastError_ = 0;
-#endif
-        }
-    } else if (name == "DestroyWindow") {
-        auto it = windows_.find(a0);
-        if (it == windows_.end() || it->second.destroyed) {
-            lastError_ = 1400;
-            ret = 0;
-        } else {
-            const bool wasVisible = it->second.visible;
-            const uint32_t parent = it->second.parent;
-            for (auto timer = timers_.begin(); timer != timers_.end();) {
-                if (timer->second.hwnd == a0) timer = timers_.erase(timer);
-                else ++timer;
-            }
-            if (focusedWindow_ == a0) focusedWindow_ = 0;
-            if (capturedWindow_ == a0) capturedWindow_ = 0;
-            if (hostPointerCaptureWindow_ == a0) hostPointerCaptureWindow_ = 0;
-            if (wasVisible) eraseGuestWindowArea(a0, it->second);
-            it->second.visible = false;
-            it->second.destroyed = true;
-            it->second.paintBoundsValid = false;
-            GuestMessage destroy{};
-            destroy.hwnd = a0;
-            destroy.message = 0x0002; // WM_DESTROY
-            destroy.time = uint32_t(++tick_ * 16);
-            guestMessages_.push_back(destroy);
-            GuestMessage ncDestroy{};
-            ncDestroy.hwnd = a0;
-            ncDestroy.message = 0x0082; // WM_NCDESTROY
-            ncDestroy.time = uint32_t(++tick_ * 16);
-            guestMessages_.push_back(ncDestroy);
-            destroyHostWindow(it->second);
-            if (wasVisible && parent) {
-                spdlog::info("DestroyWindow invalidating parent=0x{:08x} after child=0x{:08x}", parent, a0);
-                queueGuestPaint(parent, true);
-            }
-            lastError_ = 0;
-            ret = 1;
-        }
-    } else if (name == "ShowWindow") {
-        auto it = windows_.find(a0);
-        if (it == windows_.end() || it->second.destroyed) {
-            lastError_ = 1400;
-            ret = 0;
-        } else {
-            const bool wasVisible = it->second.visible;
-            it->second.visible = a1 != 0;
-            if (!it->second.visible) it->second.paintBoundsValid = false;
-            spdlog::info("ShowWindow guest=0x{:08x} cmd={} oldVisible={} newVisible={}",
-                         a0, int32_t(a1), wasVisible ? 1 : 0, it->second.visible ? 1 : 0);
-            ensureHostWindow(a0, it->second);
-#if defined(_WIN32)
-            if (it->second.hostHwnd) {
-                HWND hwnd = reinterpret_cast<HWND>(it->second.hostHwnd);
-                ShowWindow(hwnd, it->second.visible ? SW_SHOWNORMAL : SW_HIDE);
-                presentHostWindows(true);
-            }
-#endif
-            if (it->second.visible != wasVisible) {
-                GuestMessage message{};
-                message.hwnd = a0;
-                message.message = 0x0018; // WM_SHOWWINDOW
-                message.wParam = it->second.visible ? 1 : 0;
-                message.time = uint32_t(++tick_ * 16);
-                guestMessages_.push_back(message);
-                if (!it->second.visible && it->second.parent) {
-                    eraseGuestWindowArea(a0, it->second);
-                    spdlog::info("ShowWindow invalidating parent=0x{:08x} after hiding child=0x{:08x}",
-                                 it->second.parent, a0);
-                    queueGuestPaint(it->second.parent, true);
-                }
-            }
-            lastError_ = 0;
-            ret = wasVisible ? 1 : 0;
-        }
-    } else if (name == "UpdateWindow") {
-        auto it = windows_.find(a0);
-        if (it == windows_.end() || it->second.destroyed) {
-            lastError_ = 1400;
-            ret = 0;
-        } else {
-            queueGuestPaint(a0, true);
-            ensureHostWindow(a0, it->second);
-            lastError_ = 0;
-            ret = 1;
-        }
-    } else if (name == "DefWindowProcW") {
-        if (a1 == 0x0081) { // WM_NCCREATE defaults to TRUE.
-            ret = 1;
-        } else if (a1 == 0x000c) { // WM_SETTEXT
-            auto it = windows_.find(a0);
-            if (it == windows_.end() || it->second.destroyed) {
-                lastError_ = 1400;
-                ret = 0;
-            } else {
-                it->second.title = a3 ? readUtf16(a3) : std::string{};
-                queueGuestPaint(a0, true);
-                lastError_ = 0;
-                ret = 1;
-            }
-        } else if (a1 == 0x000d) { // WM_GETTEXT
-            auto it = windows_.find(a0);
-            if (it == windows_.end() || it->second.destroyed) {
-                lastError_ = 1400;
-                ret = 0;
-            } else if (!a2 || !a3) {
-                lastError_ = 0;
-                ret = 0;
-            } else {
-                ret = writeUtf16(a3, it->second.title, a2);
-                lastError_ = 0;
-            }
-        } else if (a1 == 0x000e) { // WM_GETTEXTLENGTH
-            auto it = windows_.find(a0);
-            ret = it == windows_.end() || it->second.destroyed ? 0 : uint32_t(it->second.title.size());
-            lastError_ = it == windows_.end() || it->second.destroyed ? 1400 : 0;
-        } else {
-            ret = 0;
-        }
-    } else if (name == "GetMessagePos") {
-        ret = 0;
-    } else if (name == "TranslateMessage") {
-        ret = a0 ? 1 : 0;
-    } else if (name == "PostQuitMessage") {
-        quitPosted_ = true;
-        GuestMessage message{};
-        message.message = 0x0012; // WM_QUIT
-        message.wParam = a0;
-        message.time = uint32_t(++tick_ * 16);
-        guestMessages_.push_back(message);
-        ret = 0;
-    } else if (name == "PostMessageW") {
-        if (!windows_.count(a0)) {
-            lastError_ = 1400;
-            ret = 0;
-        } else {
-            GuestMessage message{};
-            message.hwnd = a0;
-            message.message = a1;
-            message.wParam = a2;
-            message.lParam = a3;
-            message.time = uint32_t(++tick_ * 16);
-            guestMessages_.push_back(message);
-            lastError_ = 0;
-            ret = 1;
-        }
-    } else if (name == "GetMessageW" || name == "GetMessageWNoWait" || name == "PeekMessageW") {
-        const bool peek = name == "PeekMessageW" || name == "GetMessageWNoWait";
-        const uint32_t removeFlags = peek ? stackArg(4) : 1;
-        enqueueDueTimers();
-        GuestMessage message{};
-        bool haveMessage = false;
-        auto takeMessage = [&]() {
-            if (guestMessages_.empty()) return false;
-            message = guestMessages_.front();
-            if (!peek || (removeFlags & 1)) guestMessages_.pop_front();
-            return true;
-        };
-        haveMessage = takeMessage();
-        if (!haveMessage && !peek && !quitPosted_ && !timers_.empty() && !hasHostWindows()) {
-            const uint64_t now = hostTickMilliseconds();
-            auto next = std::min_element(timers_.begin(), timers_.end(),
-                                         [](const auto& left, const auto& right) {
-                                             return left.second.nextDueMs < right.second.nextDueMs;
-                                         });
-            if (next != timers_.end()) {
-                next->second.nextDueMs = now;
-                enqueueDueTimers();
-                haveMessage = takeMessage();
-            }
-        }
-        if (!haveMessage) {
-            ret = 0;
-            if (!peek && !quitPosted_) {
-                spdlog::info("synthetic coredll.dll!GetMessageW blocking with empty guest queue");
-                uc_emu_stop(uc_);
-            }
-        } else if (message.message == 0x0012) {
-            writeGuestMessage(a0, message);
-            ret = 0;
-        } else {
-            writeGuestMessage(a0, message);
-            ret = 1;
-        }
-    } else if (name == "SetForegroundWindow") {
-        if (windows_.count(a0)) {
-            guestMessages_.push_back({a0, 0x0006, 1, 0, uint32_t(++tick_ * 16), 0, 0});
-            guestMessages_.push_back({a0, 0x0007, 0, 0, uint32_t(++tick_ * 16), 0, 0});
-            focusedWindow_ = a0;
-            lastError_ = 0;
-            ret = 1;
-        } else {
-            lastError_ = 1400;
-            ret = 0;
-        }
-    } else if (name == "GetActiveWindow") {
-        ret = firstWindow();
-        lastError_ = ret ? 0 : 1400;
-    } else if (name == "IsWindowEnabled") {
-        ret = windows_.count(a0) ? 1 : 0;
-        lastError_ = ret ? 0 : 1400;
-    } else if (name == "MessageBoxW") {
-        spdlog::info("MessageBoxW caption=\"{}\" text=\"{}\" flags=0x{:08x}",
-                     readUtf16(a2), readUtf16(a1), a3);
-        ret = 1;
-        lastError_ = 0;
-    } else if (name == "IsWindowVisible") {
-        auto it = windows_.find(a0);
-        if (it == windows_.end()) {
-            lastError_ = 1400;
-            ret = 0;
-        } else {
-            lastError_ = 0;
-            ret = it->second.visible ? 1 : 0;
-        }
-    } else if (name == "FindResource" || name == "FindResourceW") {
-        const ResourceEntry* resource = findResource(a2, a1);
-        if (!resource) {
-            spdlog::info("{} miss type=0x{:08x} name=0x{:08x}", name, a2, a1);
-            lastError_ = 1814;
-            ret = 0;
-        } else {
-            const size_t index = size_t(resource - mainResources_.data());
-            ret = makeGuestHandle({GuestHandle::Kind::GuestResource, index + 1, 0});
-            spdlog::info("{} hit type=0x{:08x} name=0x{:08x} size={}", name, a2, a1, resource->data.size());
-            lastError_ = 0;
-        }
-    } else if (name == "SizeofResource") {
-        const ResourceEntry* resource = resourceFromHandle(a1);
-        if (!resource) {
-            lastError_ = 1814;
-            ret = 0;
-        } else {
-            lastError_ = 0;
-            ret = uint32_t(resource->data.size());
-        }
-    } else if (name == "LoadResource") {
-        const ResourceEntry* resource = resourceFromHandle(a1);
-        if (!resource) {
-            lastError_ = 1814;
-            ret = 0;
-        } else {
-            auto loaded = loadedResourceMemory_.find(a1);
-            if (loaded != loadedResourceMemory_.end()) {
-                ret = loaded->second;
-            } else {
-                ret = allocate(uint32_t(resource->data.size() ? resource->data.size() : 1), false);
-                if (ret && !resource->data.empty()) {
-                    uc_mem_write(uc_, ret, resource->data.data(), resource->data.size());
-                }
-                loadedResourceMemory_[a1] = ret;
-            }
-            lastError_ = ret ? 0 : 8;
-        }
-    } else if (name == "LoadStringW") {
-        const uint32_t blockId = (a1 >> 4) + 1;
-        const uint32_t stringIndex = a1 & 0x0f;
-        const ResourceEntry* resource = nullptr;
-        for (const auto& candidate : mainResources_) {
-            if (candidate.type.ordinal && candidate.type.id == 6 &&
-                candidate.name.ordinal && candidate.name.id == blockId) {
-                resource = &candidate;
-                break;
-            }
-        }
-        std::string value;
-        if (resource) {
-            size_t offset = 0;
-            for (uint32_t i = 0; i < 16 && offset + 2 <= resource->data.size(); ++i) {
-                const uint16_t length = readLe16(resource->data, offset);
-                offset += 2;
-                if (i == stringIndex) {
-                    value = utf16FromBytes(resource->data, offset, length);
-                    break;
-                }
-                offset += size_t(length) * 2;
-            }
-        }
-        if (!resource) {
-            spdlog::info("LoadStringW miss id={}", a1);
-            lastError_ = 1814;
-            ret = 0;
-        } else {
-            ret = a2 && a3 ? writeUtf16(a2, value, a3) : uint32_t(value.size());
-            spdlog::info("LoadStringW hit id={} ret={} value=\"{}\"", a1, ret, value);
-            lastError_ = 0;
-        }
-    } else if (name == "LoadAcceleratorsW") {
-        const ResourceEntry* resource = findResource(9, a1);
-#if defined(_WIN32)
-        if (!resource || resource->data.empty()) {
-            lastError_ = 1814;
-            ret = 0;
-        } else {
-            const int count = int(resource->data.size() / sizeof(ACCEL));
-            HACCEL accel = count > 0
-                ? CreateAcceleratorTableW(reinterpret_cast<LPACCEL>(const_cast<uint8_t*>(resource->data.data())), count)
-                : nullptr;
-            if (accel) {
-                ret = makeGuestHandle({GuestHandle::Kind::HostAccelerator, reinterpret_cast<uintptr_t>(accel), 0});
-                lastError_ = 0;
-            } else {
-                lastError_ = GetLastError();
-                ret = 0;
-            }
-        }
-#else
-        lastError_ = resource ? 0 : 1814;
-        ret = 0;
-#endif
-    } else if (name == "LoadIconW" || name == "LoadImageW") {
-        ret = handleLoadImageApi(name, a0, a1, a2, a3, stackArg(4), stackArg(5));
-    } else if (name == "LoadMenuW") {
-        ret = loadMenuResourceHandle(a1);
-    } else if (name == "RemoveMenu" || name == "CheckMenuItem" || name == "CheckMenuRadioItem") {
-        auto* handle = lookupGuestHandle(a0);
-#if defined(_WIN32)
-        if (!handle || handle->kind != GuestHandle::Kind::HostMenu || !handle->hostValue) {
-            lastError_ = 1401;
-            ret = name == "CheckMenuItem" ? 0xffffffffu : 0;
-        } else if (name == "RemoveMenu") {
-            ret = RemoveMenu(reinterpret_cast<HMENU>(handle->hostValue), a1, a2) ? 1 : 0;
-            if (!ret) lastError_ = GetLastError();
-        } else if (name == "CheckMenuItem") {
-            ret = CheckMenuItem(reinterpret_cast<HMENU>(handle->hostValue), a1, a2);
-            if (ret == 0xffffffffu) lastError_ = GetLastError();
-        } else {
-            ret = CheckMenuRadioItem(reinterpret_cast<HMENU>(handle->hostValue), a1, a2, a3, stackArg(4)) ? 1 : 0;
-            if (!ret) lastError_ = GetLastError();
-        }
-#else
-        lastError_ = handle ? 0 : 1401;
-        ret = name == "CheckMenuItem" ? 0xffffffffu : 0;
-#endif
-    } else if (name == "GetSystemInfo") {
-        if (a0) {
-            writeU32(a0, 0); // wProcessorArchitecture + wReserved
-            writeU32(a0 + 4, 0x1000);
-            writeU32(a0 + 8, 0x00010000);
-            writeU32(a0 + 12, 0x7ffeffff);
-            writeU32(a0 + 16, 1);
-            writeU32(a0 + 20, 1);
-            writeU32(a0 + 24, 4000); // PROCESSOR_INTEL_386-ish placeholder is not consumed as a handle.
-            writeU32(a0 + 28, 0x10000);
-            writeU32(a0 + 32, 0);
-            writeU32(a0 + 36, 0);
-        }
-        ret = 0;
-    } else if (name == "GetStoreInformation") {
-        if (a0) {
-            writeU32(a0, 64u * 1024u * 1024u);
-            writeU32(a0 + 4, 32u * 1024u * 1024u);
-        }
-        ret = a0 ? 1 : 0;
-    } else if (isRegistryApiName(name)) {
-        return dispatchRegistryApi(name, args, ret);
-    } else if (name == "GlobalAddAtomW") {
-        const std::string atomName = lowerAscii(readUtf16(a0));
-        if (atomName.empty()) {
-            lastError_ = 87;
-            ret = 0;
-        } else {
-            auto it = atomsByName_.find(atomName);
-            if (it == atomsByName_.end()) {
-                const uint16_t atom = nextAtom_++;
-                it = atomsByName_.emplace(atomName, atom).first;
-                atomNames_[atom] = atomName;
-            }
-            lastError_ = 0;
-            ret = it->second;
-        }
-    } else if (name == "GlobalFindAtomW") {
-        const std::string atomName = lowerAscii(readUtf16(a0));
-        auto it = atomsByName_.find(atomName);
-        ret = it == atomsByName_.end() ? 0 : it->second;
-        lastError_ = ret ? 0 : 2;
-    } else if (name == "GlobalDeleteAtom") {
-        auto it = atomNames_.find(uint16_t(a0));
-        if (it != atomNames_.end()) {
-            atomsByName_.erase(it->second);
-            atomNames_.erase(it);
-        }
-        ret = 0;
-        lastError_ = 0;
-    } else if (name == "WNetGetUserW") {
-        ret = handleWNetGetUserW(a0, a1, a2);
-    } else if (name == "WNetGetUniversalNameW" || name == "WNetConnectionDialog1W") {
-        lastError_ = 1200;
-        ret = 1200;
-    } else if (name == "waveInOpen" || name == "waveInReset" || name == "waveInGetID" ||
-               name == "waveInAddBuffer" || name == "waveInUnprepareHeader" ||
-               name == "waveInMessage" || name == "waveOutGetNumDevs" ||
-               name == "waveOutOpen" || name == "waveOutSetVolume" ||
-               name == "waveOutClose" || name == "waveOutPrepareHeader" ||
-               name == "waveOutUnprepareHeader" || name == "waveOutWrite" ||
-               name == "waveOutReset" ||
-               name == "mixerGetControlDetails") {
-        return dispatchWinmm(name, args, ret);
-    } else {
-        return false;
-    }
-
-    return true;
-}
-
-bool SyntheticDllRuntime::dispatchWinmm(const std::string& name,
-                                        const GuestCallArgs& args,
-                                        uint32_t& ret) {
-    const uint32_t a0 = args.a0;
-    const uint32_t a1 = args.a1;
-    const uint32_t a2 = args.a2;
-    const uint32_t a3 = args.a3;
-    if (name == "waveInOpen") {
-#if defined(_WIN32)
-        auto& winmm = winmmBridge();
-        if (!winmm.waveInOpen || !a0 || !a2) {
-            ret = MMSYSERR_ERROR;
-        } else {
-            WAVEFORMATEX format{};
-            if (uc_mem_read(uc_, a2, &format, sizeof(format)) != UC_ERR_OK) {
-                ret = MMSYSERR_INVALPARAM;
-            } else {
-                HWAVEIN host{};
-                ret = winmm.waveInOpen(&host, a1, &format, 0, 0, CALLBACK_NULL);
-                if (ret == MMSYSERR_NOERROR) {
-                    const uint32_t guest = makeGuestHandle({
-                        GuestHandle::Kind::HostWaveIn,
-                        reinterpret_cast<uintptr_t>(host),
-                        0,
-                    });
-                    writeU32(a0, guest);
-                }
-            }
-        }
-#else
-        ret = 2;
-#endif
-    } else if (name == "waveOutGetNumDevs") {
-#if defined(_WIN32)
-        auto& winmm = winmmBridge();
-        ret = winmm.waveOutGetNumDevs ? winmm.waveOutGetNumDevs() : 0;
-#else
-        ret = 0;
-#endif
-    } else if (name == "waveOutOpen") {
-#if defined(_WIN32)
-        auto& winmm = winmmBridge();
-        if (!winmm.waveOutOpen || !a0 || !a2) {
-            ret = MMSYSERR_INVALPARAM;
-        } else {
-            WAVEFORMATEX format{};
-            if (uc_mem_read(uc_, a2, &format, sizeof(format)) != UC_ERR_OK) {
-                ret = MMSYSERR_INVALPARAM;
-            } else {
-                HWAVEOUT host{};
-                const DWORD_PTR instance = DWORD_PTR(stackArg(4));
-                const DWORD flags = stackArg(5);
-                const DWORD callbackFlags = flags & CALLBACK_TYPEMASK;
-                const DWORD hostFlags = callbackFlags == CALLBACK_NULL ? flags : ((flags & ~CALLBACK_TYPEMASK) | CALLBACK_NULL);
-                ret = winmm.waveOutOpen(&host, a1, &format, 0, instance, hostFlags);
-                if (ret == MMSYSERR_NOERROR) {
-                    const uint32_t guest = makeGuestHandle({
-                        GuestHandle::Kind::HostWaveOut,
-                        reinterpret_cast<uintptr_t>(host),
-                        0,
-                    });
-                    waveOutStates_[guest] = {a3, uint32_t(instance), flags};
-                    writeU32(a0, guest);
-                }
-            }
-        }
-#else
-        ret = 2;
-#endif
-    } else if (name == "waveOutClose") {
-#if defined(_WIN32)
-        auto* handle = lookupGuestHandle(a0);
-        auto& winmm = winmmBridge();
-        if (handle && handle->kind == GuestHandle::Kind::HostWaveOut && handle->hostValue && winmm.waveOutClose) {
-            ret = winmm.waveOutClose(reinterpret_cast<HWAVEOUT>(handle->hostValue));
-            if (ret == MMSYSERR_NOERROR) {
-                handle->hostValue = 0;
-                waveOutStates_.erase(a0);
-            }
-        } else {
-            ret = MMSYSERR_INVALHANDLE;
-        }
-#else
-        ret = 2;
-#endif
-    } else if (name == "waveOutSetVolume") {
-#if defined(_WIN32)
-        auto* handle = lookupGuestHandle(a0);
-        auto& winmm = winmmBridge();
-        ret = handle && handle->kind == GuestHandle::Kind::HostWaveOut && handle->hostValue && winmm.waveOutSetVolume
-            ? winmm.waveOutSetVolume(reinterpret_cast<HWAVEOUT>(handle->hostValue), a1)
-            : MMSYSERR_INVALHANDLE;
-#else
-        ret = 2;
-#endif
-    } else if (name == "waveOutReset") {
-#if defined(_WIN32)
-        auto* handle = lookupGuestHandle(a0);
-        auto& winmm = winmmBridge();
-        ret = handle && handle->kind == GuestHandle::Kind::HostWaveOut && handle->hostValue && winmm.waveOutReset
-            ? winmm.waveOutReset(reinterpret_cast<HWAVEOUT>(handle->hostValue))
-            : MMSYSERR_INVALHANDLE;
-#else
-        ret = 2;
-#endif
-    } else if (name == "waveOutPrepareHeader" || name == "waveOutUnprepareHeader" || name == "waveOutWrite") {
-#if defined(_WIN32)
-        auto* handle = lookupGuestHandle(a0);
-        auto& winmm = winmmBridge();
-        if (!handle || handle->kind != GuestHandle::Kind::HostWaveOut || !handle->hostValue || !a1) {
-            ret = MMSYSERR_INVALHANDLE;
-        } else if (a2 < 32) {
-            ret = MMSYSERR_INVALPARAM;
-        } else {
-            uint32_t guestData = 0;
-            uint32_t guestLength = 0;
-            uint32_t guestBytesRecorded = 0;
-            uint32_t guestUser = 0;
-            uint32_t guestFlags = 0;
-            uint32_t guestLoops = 0;
-            uc_mem_read(uc_, a1, &guestData, sizeof(guestData));
-            uc_mem_read(uc_, a1 + 4, &guestLength, sizeof(guestLength));
-            uc_mem_read(uc_, a1 + 8, &guestBytesRecorded, sizeof(guestBytesRecorded));
-            uc_mem_read(uc_, a1 + 12, &guestUser, sizeof(guestUser));
-            uc_mem_read(uc_, a1 + 16, &guestFlags, sizeof(guestFlags));
-            uc_mem_read(uc_, a1 + 20, &guestLoops, sizeof(guestLoops));
-            if (!guestData || !guestLength || guestLength > 0x400000) {
-                ret = MMSYSERR_INVALPARAM;
-            } else {
-                auto& stored = hostWaveBuffers_[a1];
-                if (stored.data.size() != guestLength) stored.data.assign(guestLength, 0);
-                uc_mem_read(uc_, guestData, stored.data.data(), stored.data.size());
-                auto* header = reinterpret_cast<WAVEHDR*>(stored.header.data());
-                *header = {};
-                header->lpData = reinterpret_cast<LPSTR>(stored.data.data());
-                header->dwBufferLength = guestLength;
-                header->dwBytesRecorded = guestBytesRecorded;
-                header->dwUser = guestUser;
-                header->dwFlags = guestFlags;
-                header->dwLoops = guestLoops;
-                if (name == "waveOutPrepareHeader") {
-                    ret = winmm.waveOutPrepareHeader
-                        ? winmm.waveOutPrepareHeader(reinterpret_cast<HWAVEOUT>(handle->hostValue), header, sizeof(*header))
-                        : MMSYSERR_ERROR;
-                } else if (name == "waveOutUnprepareHeader") {
-                    ret = winmm.waveOutUnprepareHeader
-                        ? winmm.waveOutUnprepareHeader(reinterpret_cast<HWAVEOUT>(handle->hostValue), header, sizeof(*header))
-                        : MMSYSERR_ERROR;
-                } else {
-                    if (winmm.waveOutPrepareHeader && !(header->dwFlags & WHDR_PREPARED)) {
-                        winmm.waveOutPrepareHeader(reinterpret_cast<HWAVEOUT>(handle->hostValue), header, sizeof(*header));
-                    }
-                    ret = winmm.waveOutWrite
-                        ? winmm.waveOutWrite(reinterpret_cast<HWAVEOUT>(handle->hostValue), header, sizeof(*header))
-                        : MMSYSERR_ERROR;
-                    if (ret == MMSYSERR_NOERROR) {
-                        header->dwFlags |= WHDR_DONE;
-                        auto state = waveOutStates_.find(a0);
-                        if (state != waveOutStates_.end()) {
-                            const uint32_t callbackType = state->second.flags & CALLBACK_TYPEMASK;
-                            const uint32_t eventHandle = callbackType == CALLBACK_EVENT
-                                ? state->second.callback
-                                : guestUser;
-                            auto* event = lookupGuestHandle(eventHandle);
-                            if (event && event->kind == GuestHandle::Kind::HostEvent && event->hostValue) {
-                                SetEvent(reinterpret_cast<HANDLE>(event->hostValue));
-                                spdlog::info("waveOutWrite completed guest event=0x{:08x} callback=0x{:08x} flags=0x{:08x}",
-                                             eventHandle, state->second.callback, state->second.flags);
-                            }
-                        }
-                    }
-                }
-                writeU32(a1 + 16, uint32_t(header->dwFlags));
-            }
-        }
-#else
-        ret = 2;
-#endif
-    } else if (name == "waveInReset") {
-#if defined(_WIN32)
-        auto* handle = lookupGuestHandle(a0);
-        auto& winmm = winmmBridge();
-        ret = handle && handle->kind == GuestHandle::Kind::HostWaveIn && handle->hostValue && winmm.waveInReset
-            ? winmm.waveInReset(reinterpret_cast<HWAVEIN>(handle->hostValue))
-            : MMSYSERR_INVALHANDLE;
-#else
-        ret = 2;
-#endif
-    } else if (name == "waveInGetID") {
-        ret = handleWaveInGetID(a0, a1);
-    } else if (name == "waveInAddBuffer" || name == "waveInUnprepareHeader") {
-        ret = handleWaveInBuffer(name, a0, a1);
-    } else if (name == "waveInMessage") {
-#if defined(_WIN32)
-        auto* handle = lookupGuestHandle(a0);
-        auto& winmm = winmmBridge();
-        ret = handle && handle->kind == GuestHandle::Kind::HostWaveIn && handle->hostValue && winmm.waveInMessage
-            ? winmm.waveInMessage(reinterpret_cast<HWAVEIN>(handle->hostValue), a1, a2, a3)
-            : MMSYSERR_INVALHANDLE;
-#else
-        ret = 2;
-#endif
-    } else if (name == "mixerGetControlDetails") {
-#if defined(_WIN32)
-        auto& winmm = winmmBridge();
-        ret = winmm.mixerGetControlDetailsW && a1 ? MMSYSERR_INVALPARAM : MMSYSERR_ERROR;
-#else
-        ret = 2;
-#endif
-    } else {
-        return false;
-    }
-
-    return true;
-}
-
-bool SyntheticDllRuntime::dispatchCommctrl(const std::string& name,
-                                           const GuestCallArgs& args,
-                                           uint32_t& ret) {
-    const uint32_t a0 = args.a0;
-    const uint32_t a1 = args.a1;
-    const uint32_t a2 = args.a2;
-    const uint32_t a3 = args.a3;
-
-    auto commandBarHeight = [] { return 26; };
-    auto parentSize = [&](uint32_t hwnd, int32_t fallbackWidth, int32_t fallbackHeight) {
-        auto parent = windows_.find(hwnd);
-        if (parent == windows_.end()) return std::pair<int32_t, int32_t>{fallbackWidth, fallbackHeight};
-        return std::pair<int32_t, int32_t>{std::max<int32_t>(1, parent->second.width),
-                                           std::max<int32_t>(1, parent->second.height)};
-    };
-    auto topLevelWindow = [&](uint32_t hwnd) -> GuestWindow* {
-        uint32_t current = hwnd;
-        for (;;) {
-            auto it = windows_.find(current);
-            if (it == windows_.end()) return nullptr;
-            if (!it->second.parent) return &it->second;
-            current = it->second.parent;
-        }
-    };
-    auto drawCommandBarMenu = [&](GuestWindow& commandBar) -> bool {
-#if defined(_WIN32)
-        auto* menuHandle = lookupGuestHandle(commandBar.menu);
-        auto* top = topLevelWindow(commandBar.hwnd);
-        if (!menuHandle || menuHandle->kind != GuestHandle::Kind::HostMenu || !menuHandle->hostValue ||
-            !top || !top->hostHwnd) {
-            return true;
-        }
-        HWND hostHwnd = reinterpret_cast<HWND>(top->hostHwnd);
-        if (!IsWindow(hostHwnd)) return true;
-        SetMenu(hostHwnd, reinterpret_cast<HMENU>(menuHandle->hostValue));
-        DrawMenuBar(hostHwnd);
-#endif
-        return true;
-    };
-
-    if (name == "InitCommonControls") {
-        ret = 0;
-    } else if (name == "InitCommonControlsEx" ||
-               name == "InitCapEdit" ||
-               name == "InitDateClasses" ||
-               name == "InitProgressClass" ||
-               name == "InitReBarClass" ||
-               name == "InitSBEdit" ||
-               name == "InitStatusClass" ||
-               name == "InitTTButton" ||
-               name == "InitTTStatic" ||
-               name == "InitToolTipsClass" ||
-               name == "InitToolbarClass" ||
-               name == "InitTrackBar" ||
-               name == "InitUpDownClass" ||
-               name == "?Header_Init@@YAHPAUHINSTANCE__@@@Z" ||
-               name == "?ListView_Init@@YAHPAUHINSTANCE__@@@Z" ||
-               name == "?TV_Init@@YAHPAUHINSTANCE__@@@Z" ||
-               name == "Tab_Init") {
-        ret = 1;
-    } else if (name == "CommandBar_Create") {
-        const auto [width, ignoredHeight] = parentSize(a1, framebufferWidth_ > 0 ? framebufferWidth_ : 800, 480);
-        (void)ignoredHeight;
-        ret = makeGuestWindow("CommandBar", {}, 0x50000000u, 0, a1, uint32_t(a2), a0, 0,
-                              0, 0, width, commandBarHeight(), true);
-        lastError_ = ret ? 0 : 8;
-    } else if (name == "CommandBar_Show") {
-        auto it = windows_.find(a0);
-        if (it == windows_.end()) {
-            lastError_ = 1400;
-            ret = 0;
-        } else {
-            it->second.visible = a1 != 0;
-            lastError_ = 0;
-            ret = 1;
-        }
-    } else if (name == "CommandBar_Height") {
-        ret = windows_.count(a0) ? uint32_t(commandBarHeight()) : 0;
-        lastError_ = ret ? 0 : 1400;
-    } else if (name == "CommandBar_InsertComboBox" || name == "CommandBar_InsertControl") {
-        auto it = windows_.find(a0);
-        if (it == windows_.end()) {
-            lastError_ = 1400;
-            ret = 0;
-        } else {
-            const int32_t width = name == "CommandBar_InsertComboBox" ? std::max<int32_t>(1, int32_t(a2)) : 80;
-            const uint32_t style = name == "CommandBar_InsertComboBox" ? a3 : 0x50000000u;
-            const uint32_t id = name == "CommandBar_InsertComboBox" ? stackArg(4) : a2;
-            ret = makeGuestWindow(name == "CommandBar_InsertComboBox" ? "ComboBox" : "CommandBarControl",
-                                  {}, style | 0x50000000u, 0, a0, id, a1, 0,
-                                  0, 0, width, 22, it->second.visible);
-            lastError_ = ret ? 0 : 8;
-        }
-    } else if (name == "CommandBar_AddBitmap") {
-        ret = findResource(2, a2) ? 0 : 0xffffffffu;
-        lastError_ = ret == 0xffffffffu ? 1814 : 0;
-    } else if (name == "CommandBar_InsertMenubar" || name == "CommandBar_InsertMenubarEx") {
-        auto it = windows_.find(a0);
-        if (it == windows_.end()) {
-            lastError_ = 1400;
-            ret = 0;
-        } else {
-            const uint32_t nameArg = name == "CommandBar_InsertMenubar" ? a2 : a2;
-            const uint32_t menu = loadMenuResourceHandle(nameArg);
-            if (!menu) {
-                ret = 0;
-            } else {
-                it->second.menu = menu;
-                drawCommandBarMenu(it->second);
-                lastError_ = 0;
-                ret = 1;
-            }
-        }
-    } else if (name == "CommandBar_GetMenu") {
-        auto it = windows_.find(a0);
-        if (it == windows_.end()) {
-            lastError_ = 1400;
-            ret = 0;
-        } else {
-            lastError_ = it->second.menu ? 0 : 1401;
-            ret = it->second.menu;
-        }
-    } else if (name == "CommandBar_AddAdornments" ||
-               name == "CommandBar_DrawMenuBar" ||
-               name == "CommandBar_AlignAdornments") {
-        auto it = windows_.find(a0);
-        if (it == windows_.end()) {
-            lastError_ = 1400;
-            ret = name == "CommandBar_AlignAdornments" ? 0 : 0;
-        } else {
-            if (name == "CommandBar_DrawMenuBar") drawCommandBarMenu(it->second);
-            lastError_ = 0;
-            ret = name == "CommandBar_AlignAdornments" ? 0 : 1;
-        }
-    } else if (name == "IsCommandBarMessage") {
-        ret = 0;
-        lastError_ = 0;
-    } else if (name == "CreateStatusWindowW") {
-        const auto [parentWidth, parentHeight] = parentSize(a2, framebufferWidth_ > 0 ? framebufferWidth_ : 800,
-                                                           framebufferHeight_ > 0 ? framebufferHeight_ : 480);
-        const int32_t height = 22;
-        ret = makeGuestWindow("msctls_statusbar32", readUtf16(a1), a0 | 0x50000000u, 0, a2, a3, 0, 0,
-                              0, std::max<int32_t>(0, parentHeight - height), parentWidth, height, true);
-        lastError_ = ret ? 0 : 8;
-    } else if (name == "CreateToolbarEx" ||
-               name == "?CreateToolbar@@YAPAUHWND__@@PAU1@KIHPAUHINSTANCE__@@IPBU_TBBUTTON@@H@Z" ||
-               name == "CreateUpDownControl") {
-        const uint32_t parent = name == "CreateUpDownControl" ? stackArg(9) : a0;
-        const auto [parentWidth, ignoredHeight] = parentSize(parent, framebufferWidth_ > 0 ? framebufferWidth_ : 800, 480);
-        (void)ignoredHeight;
-        ret = makeGuestWindow(name == "CreateUpDownControl" ? "msctls_updown32" : "ToolbarWindow32",
-                              {}, 0x50000000u, 0, parent, a2, a3, 0,
-                              0, 0, parentWidth, commandBarHeight(), true);
-        lastError_ = ret ? 0 : 8;
-    } else if (name == "DrawStatusTextW") {
-        GuestDc* dc = lookupGuestDc(a0);
-        int32_t left = 0, top = 0, right = 0, bottom = 0;
-        if (!dc || !readGuestRect(a1, left, top, right, bottom)) {
-            lastError_ = 87;
-            ret = 0;
-        } else {
-            fillFramebufferRect(*dc, left, top, right, bottom, colorRefToPixel(0x00c0c0c0));
-            lastError_ = 0;
-            ret = 0;
-        }
-    } else if (name == "InvertRect") {
-        GuestDc* dc = lookupGuestDc(a0);
-        int32_t left = 0, top = 0, right = 0, bottom = 0;
-        if (!dc || !readGuestRect(a1, left, top, right, bottom)) {
-            lastError_ = 87;
-            ret = 0;
-        } else {
-            fillFramebufferRect(*dc, left, top, right, bottom, colorRefToPixel(0x00000000));
-            lastError_ = 0;
-            ret = 1;
-        }
-    } else if (name == "CreatePropertySheetPageW") {
-        ret = makeGuestHandle({GuestHandle::Kind::GuestPropertySheetPage, 0, 0});
-        lastError_ = ret ? 0 : 8;
-    } else if (name == "DestroyPropertySheetPage") {
-        auto it = guestHandles_.find(a0);
-        if (it == guestHandles_.end() || it->second.kind != GuestHandle::Kind::GuestPropertySheetPage) {
-            lastError_ = 6;
-            ret = 0;
-        } else {
-            guestHandles_.erase(it);
-            lastError_ = 0;
-            ret = 1;
-        }
-    } else if (name == "PropertySheetW") {
-        lastError_ = 120;
-        ret = 0xffffffffu;
-    } else if (name == "ListView_SetItemSpacing") {
-        lastError_ = windows_.count(a0) ? 0 : 1400;
-        ret = 0;
-    } else {
-        return false;
-    }
-    return true;
-}
-
-bool SyntheticDllRuntime::dispatchWinsock(const std::string& name,
-                                          const GuestCallArgs& args,
-                                          uint32_t& ret) {
-    const uint32_t a0 = args.a0;
-    const uint32_t a1 = args.a1;
-    const uint32_t a2 = args.a2;
-    const uint32_t a3 = args.a3;
-#if defined(_WIN32)
-    auto guestSocket = [&](uint32_t handle) -> SOCKET {
-        auto* guest = lookupGuestHandle(handle);
-        return guest && guest->kind == GuestHandle::Kind::HostSocket
-            ? SOCKET(guest->hostValue)
-            : INVALID_SOCKET;
-    };
-    auto setSocketError = [&]() {
-        lastError_ = WSAGetLastError();
-    };
-    auto readSockaddr = [&](uint32_t address, uint32_t length, sockaddr_storage& storage, int& outLength) -> bool {
-        if (!address || !length || length > sizeof(storage)) return false;
-        std::memset(&storage, 0, sizeof(storage));
-        outLength = int(length);
-        return uc_mem_read(uc_, address, &storage, length) == UC_ERR_OK;
-    };
-
-    if (name == "WSAStartup") {
-        WSADATA data{};
-        ret = WSAStartup(MAKEWORD(uint8_t(a0), uint8_t(a0 >> 8)), &data);
-        if (a1) {
-            std::array<uint8_t, 400> guest{};
-            std::memcpy(guest.data(), &data, std::min(sizeof(data), guest.size()));
-            uc_mem_write(uc_, a1, guest.data(), guest.size());
-        }
-    } else if (name == "WSACleanup") {
-        ret = WSACleanup();
-        if (ret) setSocketError();
-    } else if (name == "socket") {
-        const SOCKET host = ::socket(int(a0), int(a1), int(a2));
-        if (host == INVALID_SOCKET) {
-            setSocketError();
-            ret = 0xffffffffu;
-        } else {
-            ret = makeGuestHandle({GuestHandle::Kind::HostSocket, uintptr_t(host), 0});
-            lastError_ = 0;
-        }
-    } else if (name == "closesocket") {
-        auto* handle = lookupGuestHandle(a0);
-        if (!handle || handle->kind != GuestHandle::Kind::HostSocket) {
-            lastError_ = WSAENOTSOCK;
-            ret = 0xffffffffu;
-        } else {
-            ret = closesocket(SOCKET(handle->hostValue));
-            guestHandles_.erase(a0);
-            lastError_ = ret ? WSAGetLastError() : 0;
-        }
-    } else if (name == "connect" || name == "bind") {
-        sockaddr_storage storage{};
-        int length = 0;
-        const SOCKET s = guestSocket(a0);
-        if (s == INVALID_SOCKET || !readSockaddr(a1, a2, storage, length)) {
-            lastError_ = s == INVALID_SOCKET ? WSAENOTSOCK : WSAEFAULT;
-            ret = 0xffffffffu;
-        } else {
-            ret = name == "connect"
-                ? ::connect(s, reinterpret_cast<sockaddr*>(&storage), length)
-                : ::bind(s, reinterpret_cast<sockaddr*>(&storage), length);
-            if (ret) setSocketError();
-            else lastError_ = 0;
-        }
-    } else if (name == "listen") {
-        const SOCKET s = guestSocket(a0);
-        ret = s == INVALID_SOCKET ? SOCKET_ERROR : ::listen(s, int(a1));
-        if (ret) setSocketError();
-    } else if (name == "accept") {
-        const SOCKET s = guestSocket(a0);
-        sockaddr_storage storage{};
-        int length = a2 ? int(readU32(a2)) : sizeof(storage);
-        const SOCKET accepted = s == INVALID_SOCKET
-            ? INVALID_SOCKET
-            : ::accept(s, reinterpret_cast<sockaddr*>(&storage), a1 ? &length : nullptr);
-        if (accepted == INVALID_SOCKET) {
-            setSocketError();
-            ret = 0xffffffffu;
-        } else {
-            if (a1 && a2 && length > 0) {
-                uc_mem_write(uc_, a1, &storage, size_t(length));
-                writeU32(a2, uint32_t(length));
-            }
-            ret = makeGuestHandle({GuestHandle::Kind::HostSocket, uintptr_t(accepted), 0});
-            lastError_ = 0;
-        }
-    } else if (name == "recv" || name == "send") {
-        const SOCKET s = guestSocket(a0);
-        if (s == INVALID_SOCKET || (a2 && !a1)) {
-            lastError_ = s == INVALID_SOCKET ? WSAENOTSOCK : WSAEFAULT;
-            ret = 0xffffffffu;
-        } else if (name == "recv") {
-            std::vector<char> bytes(a2);
-            const int got = ::recv(s, bytes.data(), int(bytes.size()), int(a3));
-            if (got >= 0 && got) uc_mem_write(uc_, a1, bytes.data(), size_t(got));
-            ret = got < 0 ? 0xffffffffu : uint32_t(got);
-            if (got < 0) setSocketError();
-            else lastError_ = 0;
-        } else {
-            std::vector<char> bytes(a2);
-            if (a2) uc_mem_read(uc_, a1, bytes.data(), bytes.size());
-            const int sent = ::send(s, bytes.data(), int(bytes.size()), int(a3));
-            ret = sent < 0 ? 0xffffffffu : uint32_t(sent);
-            if (sent < 0) setSocketError();
-            else lastError_ = 0;
-        }
-    } else if (name == "ioctlsocket") {
-        const SOCKET s = guestSocket(a0);
-        u_long value = a2 ? readU32(a2) : 0;
-        ret = s == INVALID_SOCKET ? SOCKET_ERROR : ::ioctlsocket(s, long(a1), &value);
-        if (a2) writeU32(a2, uint32_t(value));
-        if (ret) setSocketError();
-    } else if (name == "setsockopt") {
-        const SOCKET s = guestSocket(a0);
-        const uint32_t optLen = stackArg(4);
-        std::vector<char> value(optLen);
-        if (a3 && optLen) uc_mem_read(uc_, a3, value.data(), value.size());
-        ret = s == INVALID_SOCKET ? SOCKET_ERROR : ::setsockopt(s, int(a1), int(a2), value.data(), int(value.size()));
-        if (ret) setSocketError();
-    } else if (name == "select") {
-        auto buildSet = [&](uint32_t ptr, fd_set& host, std::vector<uint32_t>& guestHandles) {
-            FD_ZERO(&host);
-            guestHandles.clear();
-            if (!ptr) return;
-            const uint32_t count = std::min<uint32_t>(readU32(ptr), FD_SETSIZE);
-            for (uint32_t i = 0; i < count; ++i) {
-                const uint32_t guest = readU32(ptr + 4 + i * 4);
-                const SOCKET s = guestSocket(guest);
-                if (s != INVALID_SOCKET) {
-                    FD_SET(s, &host);
-                    guestHandles.push_back(guest);
-                }
-            }
-        };
-        auto writeSet = [&](uint32_t ptr, const fd_set& host, const std::vector<uint32_t>& guestHandles) {
-            if (!ptr) return;
-            uint32_t count = 0;
-            for (uint32_t guest : guestHandles) {
-                const SOCKET s = guestSocket(guest);
-                if (s != INVALID_SOCKET && FD_ISSET(s, const_cast<fd_set*>(&host))) {
-                    writeU32(ptr + 4 + count * 4, guest);
-                    ++count;
-                }
-            }
-            writeU32(ptr, count);
-        };
-        fd_set readSet{}, writeSetHost{}, exceptSet{};
-        std::vector<uint32_t> readGuest, writeGuest, exceptGuest;
-        buildSet(a1, readSet, readGuest);
-        buildSet(a2, writeSetHost, writeGuest);
-        buildSet(a3, exceptSet, exceptGuest);
-        timeval timeout{};
-        timeval* timeoutPtr = nullptr;
-        const uint32_t timeoutGuest = stackArg(4);
-        if (timeoutGuest) {
-            timeout.tv_sec = long(readU32(timeoutGuest));
-            timeout.tv_usec = long(readU32(timeoutGuest + 4));
-            timeoutPtr = &timeout;
-        }
-        const int selected = ::select(0, a1 ? &readSet : nullptr, a2 ? &writeSetHost : nullptr,
-                                      a3 ? &exceptSet : nullptr, timeoutPtr);
-        if (selected == SOCKET_ERROR) {
-            setSocketError();
-            ret = 0xffffffffu;
-        } else {
-            writeSet(a1, readSet, readGuest);
-            writeSet(a2, writeSetHost, writeGuest);
-            writeSet(a3, exceptSet, exceptGuest);
-            ret = uint32_t(selected);
-            lastError_ = 0;
-        }
-    } else if (name == "__WSAFDIsSet") {
-        ret = 0;
-        if (a1) {
-            const uint32_t count = readU32(a1);
-            for (uint32_t i = 0; i < count; ++i) {
-                if (readU32(a1 + 4 + i * 4) == a0) {
-                    ret = 1;
-                    break;
-                }
-            }
-        }
-    } else if (name == "htonl" || name == "ntohl") {
-        ret = htonl(a0);
-    } else if (name == "htons" || name == "ntohs") {
-        ret = htons(uint16_t(a0));
-    } else if (name == "inet_addr") {
-        ret = inet_addr(readAscii(a0).c_str());
-    } else if (name == "inet_ntoa") {
-        in_addr addr{};
-        addr.S_un.S_addr = a0;
-        const char* text = inet_ntoa(addr);
-        ret = allocate(uint32_t(std::strlen(text ? text : "") + 1), true);
-        writeAscii(ret, text ? text : "");
-    } else if (name == "gethostname") {
-        std::vector<char> buffer(a1 ? a1 : 1);
-        const int ok = ::gethostname(buffer.data(), int(buffer.size()));
-        if (!ok) {
-            size_t copyLen = 0;
-            while (copyLen < buffer.size() && buffer[copyLen]) ++copyLen;
-            if (copyLen < buffer.size()) ++copyLen;
-            if (a0 && a1) uc_mem_write(uc_, a0, buffer.data(), copyLen);
-            ret = 0;
-            lastError_ = 0;
-        } else {
-            setSocketError();
-            ret = 0xffffffffu;
-        }
-    } else if (name == "gethostbyname") {
-        hostent* host = ::gethostbyname(readAscii(a0).c_str());
-        if (!host || !host->h_addr_list || !host->h_addr_list[0]) {
-            setSocketError();
-            ret = 0;
-        } else {
-            const std::string hostName = host->h_name ? host->h_name : readAscii(a0);
-            const uint32_t namePtr = allocate(uint32_t(hostName.size() + 1), true);
-            writeAscii(namePtr, hostName);
-            const uint32_t aliasesPtr = allocate(4, true);
-            const uint32_t addrPtr = allocate(4, false);
-            uc_mem_write(uc_, addrPtr, host->h_addr_list[0], 4);
-            const uint32_t addrListPtr = allocate(8, true);
-            writeU32(addrListPtr, addrPtr);
-            ret = allocate(16, true);
-            writeU32(ret, namePtr);
-            writeU32(ret + 4, aliasesPtr);
-            uint16_t family = uint16_t(host->h_addrtype);
-            uint16_t length = uint16_t(host->h_length);
-            uc_mem_write(uc_, ret + 8, &family, sizeof(family));
-            uc_mem_write(uc_, ret + 10, &length, sizeof(length));
-            writeU32(ret + 12, addrListPtr);
-            lastError_ = 0;
-        }
-    } else {
-        return false;
-    }
-    return true;
-#else
-    (void)name; (void)args;
-    ret = 0xffffffffu;
-    lastError_ = 10047;
-    return true;
-#endif
-}
-
-bool SyntheticDllRuntime::dispatchOle32(const std::string& name,
-                                        const GuestCallArgs& args,
-                                        uint32_t& ret) {
-    const uint32_t a0 = args.a0;
-    const uint32_t a1 = args.a1;
-    const uint32_t a2 = args.a2;
-    const uint32_t a3 = args.a3;
-    auto readGuid = [&](uint32_t ptr, GUID& guid) -> bool {
-        return ptr && uc_mem_read(uc_, ptr, &guid, sizeof(guid)) == UC_ERR_OK;
-    };
-#if defined(_WIN32)
-    auto wideFromGuest = [&](uint32_t ptr) {
-        const std::string text = readUtf16(ptr, 256);
-        return std::wstring(text.begin(), text.end());
-    };
-    auto asciiFromWide = [](const wchar_t* text) {
-        std::string out;
-        for (const wchar_t* p = text; p && *p; ++p) out.push_back(*p < 0x80 ? char(*p) : '?');
-        return out;
-    };
-    auto comHandleFromThis = [&](uint32_t thisPtr) -> std::pair<uint32_t, GuestHandle*> {
-        if (!thisPtr) return {0, nullptr};
-        const uint32_t guestHandle = readU32(thisPtr + 4);
-        GuestHandle* handle = lookupGuestHandle(guestHandle);
-        if (!handle || handle->kind != GuestHandle::Kind::HostComInterface || !handle->hostValue) {
-            return {guestHandle, nullptr};
-        }
-        return {guestHandle, handle};
-    };
-    if (name == "__ComQueryInterface") {
-        auto [guestHandle, handle] = comHandleFromThis(a0);
-        (void)guestHandle;
-        GUID iid{};
-        IUnknown* out = nullptr;
-        HRESULT hr = E_POINTER;
-        if (a2) writeU32(a2, 0);
-        if (handle && readGuid(a1, iid) && a2) {
-            hr = reinterpret_cast<IUnknown*>(handle->hostValue)->QueryInterface(iid, reinterpret_cast<void**>(&out));
-            if (SUCCEEDED(hr) && out) writeU32(a2, makeGuestComProxy(reinterpret_cast<uintptr_t>(out)));
-        }
-        ret = uint32_t(hr);
-    } else if (name == "__ComAddRef") {
-        auto [guestHandle, handle] = comHandleFromThis(a0);
-        (void)guestHandle;
-        ret = handle ? reinterpret_cast<IUnknown*>(handle->hostValue)->AddRef() : 0;
-    } else if (name == "__ComRelease") {
-        auto [guestHandle, handle] = comHandleFromThis(a0);
-        if (!handle) {
-            ret = 0;
-        } else {
-            ret = reinterpret_cast<IUnknown*>(handle->hostValue)->Release();
-            if (!ret) guestHandles_.erase(guestHandle);
-        }
-    } else if (name == "CoInitializeEx") {
-        ret = uint32_t(::CoInitializeEx(nullptr, a1));
-    } else if (name == "CoUninitialize") {
-        ::CoUninitialize();
-        ret = 0;
-    } else if (name == "CoTaskMemAlloc") {
-        ret = allocate(a0, false);
-    } else if (name == "CoTaskMemRealloc") {
-        if (!a1) {
-            releaseAllocation(a0);
-            ret = 0;
-        } else {
-            const uint32_t oldSize = allocationSize(a0);
-            ret = allocate(a1, false);
-            if (ret && a0 && oldSize) {
-                copyGuest(ret, a0, std::min(oldSize, a1));
-                releaseAllocation(a0);
-            }
-        }
-    } else if (name == "CoTaskMemFree") {
-        releaseAllocation(a0);
-        ret = 0;
-    } else if (name == "CoTaskMemSize") {
-        ret = allocationSize(a0);
-    } else if (name == "CoCreateGuid") {
-        GUID guid{};
-        const HRESULT hr = ::CoCreateGuid(&guid);
-        if (SUCCEEDED(hr) && a0) uc_mem_write(uc_, a0, &guid, sizeof(guid));
-        ret = uint32_t(hr);
-    } else if (name == "CLSIDFromString" || name == "CLSIDFromProgID") {
-        GUID guid{};
-        const std::wstring text = wideFromGuest(a0);
-        const HRESULT hr = name == "CLSIDFromString"
-            ? ::CLSIDFromString(text.c_str(), &guid)
-            : ::CLSIDFromProgID(text.c_str(), &guid);
-        if (SUCCEEDED(hr) && a1) uc_mem_write(uc_, a1, &guid, sizeof(guid));
-        ret = uint32_t(hr);
-    } else if (name == "StringFromGUID2") {
-        GUID guid{};
-        wchar_t text[64]{};
-        if (!readGuid(a0, guid) || !a1 || !a2) {
-            ret = 0;
-        } else {
-            const int written = ::StringFromGUID2(guid, text, int(a2));
-            writeUtf16(a1, asciiFromWide(text), a2);
-            ret = uint32_t(written);
-        }
-    } else if (name == "StringFromCLSID" || name == "StringFromIID" || name == "ProgIDFromCLSID") {
-        GUID guid{};
-        LPOLESTR hostText = nullptr;
-        HRESULT hr = E_INVALIDARG;
-        if (readGuid(a0, guid) && a1) {
-            if (name == "ProgIDFromCLSID") hr = ::ProgIDFromCLSID(guid, &hostText);
-            else if (name == "StringFromIID") hr = ::StringFromIID(guid, &hostText);
-            else hr = ::StringFromCLSID(guid, &hostText);
-        }
-        if (SUCCEEDED(hr) && hostText) {
-            const std::string text = asciiFromWide(hostText);
-            const uint32_t guestText = allocate(uint32_t((text.size() + 1) * 2), true);
-            writeUtf16(guestText, text, uint32_t(text.size() + 1));
-            writeU32(a1, guestText);
-            ::CoTaskMemFree(hostText);
-        }
-        ret = uint32_t(hr);
-    } else if (name == "CoCreateInstance") {
-        const uint32_t outPtr = stackArg(4);
-        if (outPtr) writeU32(outPtr, 0);
-        GUID clsid{};
-        GUID iid{};
-        IUnknown* out = nullptr;
-        HRESULT hr = E_INVALIDARG;
-        if (!outPtr) {
-            hr = E_POINTER;
-        } else if (a1) {
-            hr = CLASS_E_NOAGGREGATION;
-        } else if (readGuid(a0, clsid) && readGuid(a3, iid)) {
-            const DWORD context = a2 ? a2 : CLSCTX_INPROC_SERVER;
-            hr = ::CoCreateInstance(clsid, nullptr, context, iid, reinterpret_cast<void**>(&out));
-            if (SUCCEEDED(hr) && out) writeU32(outPtr, makeGuestComProxy(reinterpret_cast<uintptr_t>(out)));
-        }
-        ret = uint32_t(hr);
-    } else if (name == "OleCreate") {
-        if (stackArg(6)) writeU32(stackArg(6), 0);
-        ret = 0x80004001u;
-    } else if (name == "OleRun" || name == "OleSave" || name == "OleSetMenuDescriptor" ||
-               name == "OleDraw" || name == "OleSetContainedObject" ||
-               name == "CreateOleAdviseHolder" || name == "ReadClassStm" || name == "WriteClassStm") {
-        ret = 0x80004001u; // E_NOTIMPL until an interface/vtable bridge exists.
-    } else if (name == "OleIsRunning") {
-        ret = 0;
-    } else {
-        return false;
-    }
-    return true;
-#else
-    (void)a0; (void)a1; (void)a2; (void)a3;
-    if (name == "CoTaskMemAlloc") ret = allocate(a0, false);
-    else if (name == "CoTaskMemFree") {
-        releaseAllocation(a0);
-        ret = 0;
-    }
-    else if (name == "CoUninitialize") ret = 0;
-    else return false;
-    return true;
-#endif
-}
-
-bool SyntheticDllRuntime::dispatchOleAut32(const std::string& name,
-                                           const GuestCallArgs& args,
-                                           uint32_t& ret) {
-    const uint32_t a0 = args.a0;
-    const uint32_t a1 = args.a1;
-    const uint32_t a2 = args.a2;
-    const uint32_t a3 = args.a3;
-    auto allocBstr = [&](uint32_t source, uint32_t chars) -> uint32_t {
-        if (!chars && source) chars = uint32_t(readUtf16(source, 65536).size());
-        const uint32_t base = allocate(4 + chars * 2 + 2, true);
-        writeU32(base, chars * 2);
-        if (source && chars) copyGuest(base + 4, source, chars * 2);
-        return base ? base + 4 : 0;
-    };
-    if (name == "SysAllocString") {
-        ret = allocBstr(a0, 0);
-    } else if (name == "SysAllocStringLen") {
-        ret = allocBstr(a0, a1);
-    } else if (name == "SysAllocStringByteLen") {
-        const uint32_t base = allocate(4 + a1 + 2, true);
-        writeU32(base, a1);
-        if (a0 && a1) copyGuest(base + 4, a0, a1);
-        ret = base ? base + 4 : 0;
-    } else if (name == "SysFreeString") {
-        if (a0 >= 4) releaseAllocation(a0 - 4);
-        ret = 0;
-    } else if (name == "SysStringLen") {
-        ret = a0 >= 4 ? readU32(a0 - 4) / 2 : 0;
-    } else if (name == "SysStringByteLen") {
-        ret = a0 >= 4 ? readU32(a0 - 4) : 0;
-    } else if (name == "VariantClear") {
-        if (a0) {
-            const uint16_t empty = 0;
-            uc_mem_write(uc_, a0, &empty, sizeof(empty));
-        }
-        ret = 0;
-    } else if (name == "VariantChangeType") {
-        if (a0 && a1) copyGuest(a0, a1, 16);
-        ret = 0;
-    } else if (name == "VarUI4FromStr") {
-        const std::string value = readUtf16(a0, 128);
-        char* end = nullptr;
-        const uint32_t parsed = uint32_t(std::strtoul(value.c_str(), &end, 0));
-        if (a3) writeU32(a3, parsed);
-        ret = 0;
-    } else if (name == "CreateErrorInfo" || name == "SetErrorInfo" ||
-               name == "LoadRegTypeLib" || name == "LoadTypeLib" || name == "RegisterTypeLib") {
-        ret = 0x80004001u;
-    } else {
-        return false;
-    }
-    return true;
-}
-
 void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
     auto& mutableEntry = exportsByAddress_[reg(UC_MIPS_REG_PC)];
     mutableEntry.calls++;
@@ -10240,9 +5062,12 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
     const uint32_t a3 = reg(UC_MIPS_REG_A3);
     const uint32_t ra = reg(UC_MIPS_REG_RA);
     const GuestCallArgs args{a0, a1, a2, a3, ra};
+    const bool isCoredll = mutableEntry.moduleKind == SyntheticModuleKind::Coredll;
+    const uint16_t ordinal = mutableEntry.ordinal;
+    const uint32_t pc = reg(UC_MIPS_REG_PC);
     if (mutableEntry.calls <= 128) {
-        spdlog::info("synthetic {}!{} call {} a0=0x{:08x} a1=0x{:08x} a2=0x{:08x} a3=0x{:08x} ra=0x{:08x}",
-                     mutableEntry.moduleName, name, mutableEntry.calls, a0, a1, a2, a3, ra);
+        spdlog::debug("synthetic {}!{} call {} a0=0x{:08x} a1=0x{:08x} a2=0x{:08x} a3=0x{:08x} ra=0x{:08x}",
+                      mutableEntry.moduleName, name, mutableEntry.calls, a0, a1, a2, a3, ra);
     }
 
     auto translatedWndProc = [&](uint32_t wndProc, const char* why) {
@@ -10306,7 +5131,7 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         return true;
     };
 
-    if (mutableEntry.moduleName == "coredll.dll" && name == "__DestroyWindowContinue") {
+    if (isCoredll && pc == destroyWindowContinuationStub_) {
         if (pendingDestroyWindows_.empty()) {
             spdlog::warn("DestroyWindow continuation reached with no pending window");
             setReg(UC_MIPS_REG_V0, 1);
@@ -10345,7 +5170,7 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         return;
     }
 
-    if (mutableEntry.moduleName == "coredll.dll" && name == "__CreateWindowContinue") {
+    if (isCoredll && pc == createWindowContinuationStub_) {
         if (pendingCreateWindows_.empty()) {
             spdlog::warn("CreateWindowExW continuation reached with no pending window");
             setReg(UC_MIPS_REG_V0, 0);
@@ -10386,11 +5211,14 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         const uint32_t hwnd = pending.hwnd;
         const uint32_t originalRa = pending.originalRa;
         pendingCreateWindows_.pop_back();
-        if (wndProcResult == 0xffffffffu) {
+        auto completedWindow = windows_.find(hwnd);
+        if (wndProcResult == 0xffffffffu ||
+            completedWindow == windows_.end() ||
+            completedWindow->second.destroyed) {
             finalizeDestroyedWindow(hwnd);
             lastError_ = 0;
             setReg(UC_MIPS_REG_V0, 0);
-            spdlog::info("CreateWindowExW synchronous WM_CREATE failed hwnd=0x{:08x}", hwnd);
+            spdlog::info("CreateWindowExW synchronous WM_CREATE failed/destroyed hwnd=0x{:08x}", hwnd);
         } else {
             lastError_ = 0;
             setReg(UC_MIPS_REG_V0, hwnd);
@@ -10403,7 +5231,7 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         return;
     }
 
-    if (mutableEntry.moduleName == "coredll.dll" && name == "__BlockingApiContinue") {
+    if (isCoredll && pc == blockingApiContinuationStub_) {
         if (pendingBlockingApis_.empty()) {
             spdlog::warn("blocking API continuation reached with no pending call");
             setReg(UC_MIPS_REG_V0, 0);
@@ -10416,7 +5244,9 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         PendingBlockingApi pending = pendingBlockingApis_.back();
         pendingBlockingApis_.pop_back();
         uint32_t ret = 0;
-        if (!dispatchHostWin32(pending.name, pending.args, ret)) {
+        if (pending.ordinal == 0x01F0) {
+            handleSleep(SyntheticExportCode::CoreDllSleep, pending.args, ret);
+        } else if (!dispatchHostWin32(pending.ordinal, pending.args, ret)) {
             spdlog::warn("blocking API continuation could not resume {}", pending.name);
             lastError_ = 120;
             ret = 0;
@@ -10430,7 +5260,7 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         return;
     }
 
-    if (mutableEntry.moduleName == "coredll.dll" && name == "__UpdateWindowContinue") {
+    if (isCoredll && pc == updateWindowContinuationStub_) {
         if (pendingUpdateWindows_.empty()) {
             spdlog::warn("UpdateWindow continuation reached with no pending window");
             setReg(UC_MIPS_REG_V0, 1);
@@ -10481,7 +5311,7 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         return;
     }
 
-    if (mutableEntry.moduleName == "coredll.dll" && name == "__ThreadExit") {
+    if (isCoredll && pc == threadExitStub_) {
         if (!finishActiveGuestThread(reg(UC_MIPS_REG_V0))) {
             spdlog::warn("guest thread exit reached without active guest thread");
             setReg(UC_MIPS_REG_PC, ra);
@@ -10490,7 +5320,7 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         return;
     }
 
-    if (mutableEntry.moduleName == "coredll.dll" && name == "ExitThread") {
+    if (isCoredll && ordinal == 0x0006) {
         if (!finishActiveGuestThread(a0)) {
             spdlog::warn("ExitThread called without active guest thread exitCode=0x{:08x}", a0);
             setReg(UC_MIPS_REG_V0, 0);
@@ -10500,9 +5330,9 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         return;
     }
 
-    if (mutableEntry.moduleName == "coredll.dll" && name == "CreateWindowExW") {
+    if (isCoredll && ordinal == 0x00F6) {
         uint32_t ret = 0;
-        if (!dispatchHostWin32(name, args, ret)) {
+        if (!dispatchHostWin32(ordinal, args, ret)) {
             lastError_ = 120;
             setReg(UC_MIPS_REG_V0, 0);
             pumpHostMessages();
@@ -10533,7 +5363,7 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         return;
     }
 
-    if (mutableEntry.moduleName == "coredll.dll" && name == "UpdateWindow") {
+    if (isCoredll && ordinal == 0x010B) {
         auto it = windows_.find(a0);
         if (it == windows_.end() || it->second.destroyed) {
             lastError_ = 1400;
@@ -10569,7 +5399,7 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         return;
     }
 
-    if (mutableEntry.moduleName == "coredll.dll" && name == "InvalidateRect") {
+    if (isCoredll && ordinal == 0x00FA) {
         uint32_t target = a0;
         if (!target) {
             for (const auto& [hwnd, window] : windows_) {
@@ -10627,7 +5457,7 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         }
     }
 
-    if (mutableEntry.moduleName == "coredll.dll" && name == "DestroyWindow") {
+    if (isCoredll && ordinal == 0x0109) {
         auto it = windows_.find(a0);
         if (it == windows_.end() || it->second.destroyed) {
             lastError_ = 1400;
@@ -10664,7 +5494,7 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         return;
     }
 
-    if (mutableEntry.moduleName == "coredll.dll" && name == "WaitForSingleObject") {
+    if (isCoredll && ordinal == 0x01F1) {
         if (activeGuestThread_) {
             uint32_t ret = 0xffffffffu;
             bool wouldBlock = false;
@@ -10677,7 +5507,7 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
                 else lastError_ = 0;
             } else
 #endif
-            if (!dispatchHostWin32(name, args, ret)) {
+            if (!dispatchHostWin32(ordinal, args, ret)) {
                 lastError_ = 120;
                 ret = 0xffffffffu;
             }
@@ -10715,16 +5545,12 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         }
     }
 
-    if (mutableEntry.moduleName == "coredll.dll" &&
-        (name == "WaitForMultipleObjects" || name == "CreatePatternBrush" ||
-         name == "SetBrushOrgEx" || name == "GetClipBox")) {
+    if (isCoredll && (ordinal == 0x039D || ordinal == 0x03AF || ordinal == 0x03CB)) {
         uint32_t ret = 0;
-        if (name == "WaitForMultipleObjects") {
-            ret = waitForMultipleGuestObjects(a0, a1, a2 != 0);
-        } else if (name == "CreatePatternBrush") {
+        if (ordinal == 0x039D) {
             ret = createPatternBrushFromBitmap(a0);
             lastError_ = 0;
-        } else if (name == "SetBrushOrgEx") {
+        } else if (ordinal == 0x03AF) {
             GuestDc* dc = lookupGuestDc(a0);
             if (!dc) {
                 lastError_ = 6;
@@ -10764,9 +5590,8 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         return;
     }
 
-    if (mutableEntry.moduleName == "coredll.dll" &&
-        (name == "Sleep" || name == "WaitForSingleObject") && blockingApiContinuationStub_) {
-        pendingBlockingApis_.push_back(PendingBlockingApi{name, args});
+    if (isCoredll && (ordinal == 0x01F0 || ordinal == 0x01F1) && blockingApiContinuationStub_) {
+        pendingBlockingApis_.push_back(PendingBlockingApi{name, ordinal, args});
         if (dispatchQueuedPaintForBlockingApi(pendingBlockingApis_.back(), "before block")) {
             return;
         }
@@ -10774,14 +5599,13 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
     }
 
     uint32_t ret = 1;
-    if (mutableEntry.moduleName == "coredll.dll" &&
-        (name == "CallWindowProcW" || name == "DispatchMessageW" || name == "SendMessageW")) {
+    if (isCoredll && (ordinal == 0x011D || ordinal == 0x035B || ordinal == 0x0364)) {
         uint32_t wndProc = a0;
         uint32_t hwnd = a1;
         uint32_t msg = a2;
         uint32_t wParam = a3;
         uint32_t lParam = stackArg(4);
-        if (name == "DispatchMessageW") {
+        if (ordinal == 0x035B) {
             if (a0) {
                 uc_mem_read(uc_, a0, &hwnd, sizeof(hwnd));
                 uc_mem_read(uc_, a0 + 4, &msg, sizeof(msg));
@@ -10795,7 +5619,7 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
                 auto it = windows_.find(hwnd);
                 wndProc = it == windows_.end() ? 0 : it->second.wndProc;
             }
-        } else if (name == "SendMessageW") {
+        } else if (ordinal == 0x0364) {
             auto it = windows_.find(a0);
             wndProc = it == windows_.end() ? 0 : it->second.wndProc;
             hwnd = a0;
@@ -10821,8 +5645,21 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         setReg(UC_MIPS_REG_PC, wndProc);
         return;
     }
-    if (mutableEntry.moduleName == "coredll.dll" &&
-        (dispatchHostWin32(name, args, ret) || dispatchGuestMemoryApi(name, args, ret))) {
+    if (const auto* ordinalHandler = findOrdinalHandler(mutableEntry);
+        ordinalHandler && ordinalHandler->handler) {
+        bool handled = (this->*ordinalHandler->handler)(ordinalHandler->code, args, ret);
+        if (handled) {
+            if (mutableEntry.calls <= 128) {
+                spdlog::info("synthetic {}!{} -> 0x{:08x}", mutableEntry.moduleName, name, ret);
+            }
+            setReg(UC_MIPS_REG_V0, ret);
+            pumpHostMessages();
+            cooperateGuestThreadsAfterCall(name);
+            return;
+        }
+    }
+    if (isCoredll &&
+        (dispatchHostWin32(ordinal, args, ret) || dispatchGuestMemoryApi(ordinal, args, ret))) {
         if (mutableEntry.calls <= 128) {
             spdlog::info("synthetic {}!{} -> 0x{:08x}", mutableEntry.moduleName, name, ret);
         }
@@ -10831,7 +5668,7 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         cooperateGuestThreadsAfterCall(name);
         return;
     }
-    if (mutableEntry.moduleName == "coredll.dll") {
+    if (isCoredll) {
         lastError_ = 120; // ERROR_CALL_NOT_IMPLEMENTED
         ret = 0;
         if (mutableEntry.calls <= 128) {
@@ -10843,14 +5680,9 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
     }
 
     bool handled = false;
-    if (sameModule(mutableEntry.moduleName, "winsock.dll") ||
-        sameModule(mutableEntry.moduleName, "ws2.dll")) {
-        handled = dispatchWinsock(name, args, ret);
-    } else if (sameModule(mutableEntry.moduleName, "commctrl.dll")) {
-        handled = dispatchCommctrl(name, args, ret);
-    } else if (sameModule(mutableEntry.moduleName, "ole32.dll")) {
+    if (mutableEntry.moduleKind == SyntheticModuleKind::Ole32) {
         handled = dispatchOle32(name, args, ret);
-    } else if (sameModule(mutableEntry.moduleName, "oleaut32.dll")) {
+    } else if (mutableEntry.moduleKind == SyntheticModuleKind::OleAut32) {
         handled = dispatchOleAut32(name, args, ret);
     }
 

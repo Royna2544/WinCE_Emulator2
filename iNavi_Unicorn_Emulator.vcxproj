@@ -28,8 +28,29 @@
     <Link><SubSystem>Console</SubSystem><GenerateDebugInformation>true</GenerateDebugInformation><AdditionalDependencies>user32.lib;gdi32.lib;ws2_32.lib;ole32.lib;oleaut32.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="src\coredll_audio.cpp" />
+    <ClCompile Include="src\coredll_comm.cpp" />
+    <ClCompile Include="src\coredll_crt.cpp" />
+    <ClCompile Include="src\coredll_fs.cpp" />
+    <ClCompile Include="src\coredll_gui.cpp" />
+    <ClCompile Include="src\coredll_math.cpp" />
+    <ClCompile Include="src\coredll_memory.cpp" />
+    <ClCompile Include="src\coredll_named_dispatch.cpp" />
+    <ClCompile Include="src\coredll_paint.cpp" />
+    <ClCompile Include="src\coredll_rect.cpp" />
+    <ClCompile Include="src\coredll_registry.cpp" />
+    <ClCompile Include="src\coredll_res.cpp" />
+    <ClCompile Include="src\coredll_sync.cpp" />
+    <ClCompile Include="src\coredll_system.cpp" />
+    <ClCompile Include="src\coredll_thread.cpp" />
+    <ClCompile Include="src\coredll_time.cpp" />
+    <ClCompile Include="src\coredll_window.cpp" />
     <ClCompile Include="src\main.cpp" />
+    <ClCompile Include="src\synthetic_dll_commctrl.cpp" />
     <ClCompile Include="src\synthetic_dll.cpp" />
+    <ClCompile Include="src\synthetic_dll_ole32.cpp" />
+    <ClCompile Include="src\synthetic_dll_oleaut32.cpp" />
+    <ClCompile Include="src\synthetic_dll_winsock.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\synthetic_dll.h" />
