@@ -141,6 +141,7 @@ private:
     };
     struct GuestBrush {
         uint32_t colorRef{};
+        uint32_t patternBitmap{};
         bool stock{};
     };
     struct GuestPen {
@@ -408,6 +409,8 @@ private:
     uint32_t makeGuestHandle(GuestHandle handle);
     GuestHandle* lookupGuestHandle(uint32_t guestHandle);
     uint32_t closeGuestHandle(uint32_t guestHandle);
+    uint32_t createPatternBrushFromBitmap(uint32_t bitmapHandle);
+    uint32_t waitForMultipleGuestObjects(uint32_t count, uint32_t handlesPtr, bool waitAll);
     void initializeUserKData();
     void updateCurrentThreadKData(uint32_t currentThreadValue, uint32_t tlsBase);
     GuestCpuContext captureGuestCpuContext() const;
@@ -457,6 +460,7 @@ private:
     bool drawBitmapLine(const GuestBitmap& bitmap, int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint32_t pixel);
     bool fillDcRect(const GuestDc& dc, int32_t left, int32_t top, int32_t right, int32_t bottom, uint32_t pixel);
     bool drawDcLine(const GuestDc& dc, int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint32_t pixel);
+    bool fillDcPolygon(const GuestDc& dc, const std::vector<std::pair<int32_t, int32_t>>& points, uint32_t pixel);
     bool handleCreateBitmap(const GuestCallArgs& args, uint32_t& ret);
     bool handleGetObjectW(const GuestCallArgs& args, uint32_t& ret);
     bool handleSetDIBColorTable(const GuestCallArgs& args, uint32_t& ret);

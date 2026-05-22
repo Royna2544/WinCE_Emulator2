@@ -1225,6 +1225,7 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x01EE, "EventModify");
     registerExport(module, 0x01F0, "Sleep");
     registerExport(module, 0x01F1, "WaitForSingleObject");
+    registerExport(module, 0x01F2, "WaitForMultipleObjects");
     registerExport(module, 0x01F4, "ResumeThread");
     registerExport(module, 0x0202, "SetThreadPriority");
     registerExport(module, 0x0203, "GetThreadPriority");
@@ -1317,20 +1318,25 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x039A, "SetBkColor");
     registerExport(module, 0x039B, "SetBkMode");
     registerExport(module, 0x039C, "SetTextColor");
+    registerExport(module, 0x039D, "CreatePatternBrush");
     registerExport(module, 0x039E, "CreatePen");
     registerExport(module, 0x03A2, "CreatePenIndirect");
     registerExport(module, 0x03A3, "CreateSolidBrush");
     registerExport(module, 0x03A7, "FillRect");
     registerExport(module, 0x03AA, "PatBlt");
+    registerExport(module, 0x03AB, "Polygon");
     registerExport(module, 0x03AC, "Polyline");
     registerExport(module, 0x03AD, "Rectangle");
+    registerExport(module, 0x03AF, "SetBrushOrgEx");
     registerExport(module, 0x03B1, "DrawTextW");
     registerExport(module, 0x03D4, "CreateRectRgn");
     registerExport(module, 0x03C8, "CombineRgn");
+    registerExport(module, 0x03CB, "GetClipBox");
     registerExport(module, 0x037B, "RegisterWindowMessageW");
     registerExport(module, 0x037C, "RegisterTaskBar");
     registerExport(module, 0x03E1, "atoi");
     registerExport(module, 0x03E3, "atof");
+    registerExport(module, 0x03EC, "cos");
     registerExport(module, 0x04A1, "GetDCEx");
     registerExport(module, 0x0448, "_snwprintf");
     registerExport(module, 0x0449, "swprintf");
@@ -1379,6 +1385,7 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x042B, "strcspn");
     registerExport(module, 0x042C, "strlen");
     registerExport(module, 0x0431, "strtok");
+    registerExport(module, 0x0422, "sin");
     registerExport(module, 0x0446, "operator_delete");
     registerExport(module, 0x0447, "operator_new");
     registerExport(module, 0x0499, "GetModuleHandleW");
@@ -1422,6 +1429,7 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x07E6, "__fpadd");
     registerExport(module, 0x0628, "__ehvec_ctor");
     registerExport(module, 0x07E7, "__dpadd");
+    registerExport(module, 0x07E8, "__fpsub");
     registerExport(module, 0x07E9, "__dpsub");
     registerExport(module, 0x07EA, "__fpmul");
     registerExport(module, 0x07EC, "__fpdiv");
@@ -1883,6 +1891,55 @@ uint32_t SyntheticDllRuntime::closeGuestHandle(uint32_t guestHandle) {
     return 1;
 }
 
+uint32_t SyntheticDllRuntime::waitForMultipleGuestObjects(uint32_t count,
+                                                          uint32_t handlesPtr,
+                                                          bool waitAll) {
+    constexpr uint32_t kWaitObject0 = 0x00000000u;
+    constexpr uint32_t kWaitTimeout = 0x00000102u;
+    constexpr uint32_t kWaitFailed = 0xffffffffu;
+    if (!count || !handlesPtr || count > 64) {
+        lastError_ = 87;
+        return kWaitFailed;
+    }
+
+    std::vector<uint32_t> handles(count);
+    if (uc_mem_read(uc_, handlesPtr, handles.data(), handles.size() * sizeof(uint32_t)) != UC_ERR_OK) {
+        lastError_ = 87;
+        return kWaitFailed;
+    }
+
+    bool allReady = true;
+    for (uint32_t i = 0; i < count; ++i) {
+        auto* handle = lookupGuestHandle(handles[i]);
+        if (!handle) {
+            lastError_ = 6;
+            return kWaitFailed;
+        }
+        bool ready = false;
+        if (handle->kind == GuestHandle::Kind::GuestThread) {
+            auto thread = guestThreads_.find(handles[i]);
+            ready = thread == guestThreads_.end() ||
+                    thread->second.state == GuestThreadRunState::Terminated;
+        }
+#if defined(_WIN32)
+        else if (handle->hostValue) {
+            ready = ::WaitForSingleObject(reinterpret_cast<HANDLE>(handle->hostValue), 0) == kWaitObject0;
+        }
+#endif
+        else {
+            ready = true;
+        }
+        allReady = allReady && ready;
+        if (!waitAll && ready) {
+            lastError_ = 0;
+            return kWaitObject0 + i;
+        }
+    }
+
+    lastError_ = 0;
+    return waitAll && allReady ? kWaitObject0 : kWaitTimeout;
+}
+
 std::optional<std::string> SyntheticDllRuntime::registryPathFromHandle(uint32_t hkey, const std::string& subKey) const {
     std::string base = registryRootName(hkey);
     if (base.empty()) {
@@ -2190,8 +2247,41 @@ SyntheticDllRuntime::GuestDc* SyntheticDllRuntime::lookupGuestDc(uint32_t hdc) {
 
 uint32_t SyntheticDllRuntime::makeGuestBrush(uint32_t colorRef, bool stock) {
     const uint32_t handle = makeGuestHandle({GuestHandle::Kind::GuestBrush, 0, stock ? 1u : 0u});
-    brushes_[handle] = GuestBrush{colorRef, stock};
+    brushes_[handle] = GuestBrush{colorRef, 0, stock};
     return handle;
+}
+
+uint32_t SyntheticDllRuntime::createPatternBrushFromBitmap(uint32_t bitmapHandle) {
+    uint32_t colorRef = 0;
+    auto bitmapIt = bitmaps_.find(bitmapHandle);
+    if (bitmapIt != bitmaps_.end()) {
+        const GuestBitmap& bitmap = bitmapIt->second;
+        const int32_t height = std::abs(bitmap.heightRaw);
+        const uint64_t byteCount = uint64_t(bitmap.stride) * uint64_t(height);
+        if (bitmap.bits && bitmap.width > 0 && height > 0 && byteCount && byteCount <= 0x2000000ull) {
+            std::vector<uint8_t> bits(static_cast<size_t>(byteCount));
+            if (uc_mem_read(uc_, bitmap.bits, bits.data(), bits.size()) == UC_ERR_OK) {
+                for (int32_t y = 0; y < height; ++y) {
+                    bool found = false;
+                    for (int32_t x = 0; x < bitmap.width; ++x) {
+                        uint32_t pixel = 0;
+                        if (readBitmapPixel(bitmap, bits, height, x, y, pixel) &&
+                            (pixel & 0x00ffffffu) != 0) {
+                            colorRef = ((pixel >> 16) & 0x000000ffu) |
+                                       (pixel & 0x0000ff00u) |
+                                       ((pixel & 0x000000ffu) << 16);
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (found) break;
+                }
+            }
+        }
+    }
+    const uint32_t brush = makeGuestBrush(colorRef);
+    brushes_[brush].patternBitmap = bitmapHandle;
+    return brush;
 }
 
 uint32_t SyntheticDllRuntime::makeGuestPen(uint32_t style, uint32_t width, uint32_t colorRef, bool stock) {
@@ -2908,6 +2998,82 @@ bool SyntheticDllRuntime::drawDcLine(const GuestDc& dc,
     auto bitmap = bitmaps_.find(dc.selectedBitmap);
     if (bitmap != bitmaps_.end()) return drawBitmapLine(bitmap->second, x0, y0, x1, y1, pixel);
     drawFramebufferLine(dc, x0, y0, x1, y1, pixel);
+    return true;
+}
+
+bool SyntheticDllRuntime::fillDcPolygon(const GuestDc& dc,
+                                        const std::vector<std::pair<int32_t, int32_t>>& points,
+                                        uint32_t pixel) {
+    if (points.size() < 3 || pixel == 0xffffffffu) return false;
+
+    int32_t minY = points.front().second;
+    int32_t maxY = points.front().second;
+    for (const auto& point : points) {
+        minY = std::min(minY, point.second);
+        maxY = std::max(maxY, point.second);
+    }
+
+    auto bitmapIt = bitmaps_.find(dc.selectedBitmap);
+    std::vector<uint8_t> raw;
+    int32_t bitmapHeight = 0;
+    if (bitmapIt != bitmaps_.end()) {
+        const GuestBitmap& bitmap = bitmapIt->second;
+        bitmapHeight = std::abs(bitmap.heightRaw);
+        if (!bitmap.bits || bitmap.width <= 0 || bitmapHeight <= 0 || bitmap.stride == 0) return false;
+        const uint64_t byteCount = uint64_t(bitmap.stride) * uint64_t(bitmapHeight);
+        if (!byteCount || byteCount > 0x2000000ull) return false;
+        raw.resize(static_cast<size_t>(byteCount));
+        if (uc_mem_read(uc_, bitmap.bits, raw.data(), raw.size()) != UC_ERR_OK) return false;
+        minY = std::clamp<int32_t>(minY, 0, bitmapHeight - 1);
+        maxY = std::clamp<int32_t>(maxY, 0, bitmapHeight - 1);
+    } else {
+        if (!framebuffer_) return false;
+        minY = std::clamp<int32_t>(minY, 0, framebufferHeight_ - 1);
+        maxY = std::clamp<int32_t>(maxY, 0, framebufferHeight_ - 1);
+    }
+
+    std::vector<int32_t> intersections;
+    intersections.reserve(points.size());
+    for (int32_t y = minY; y <= maxY; ++y) {
+        intersections.clear();
+        const double scanY = double(y) + 0.5;
+        for (size_t i = 0; i < points.size(); ++i) {
+            const auto& p0 = points[i];
+            const auto& p1 = points[(i + 1) % points.size()];
+            if (p0.second == p1.second) continue;
+            const int32_t edgeMinY = std::min(p0.second, p1.second);
+            const int32_t edgeMaxY = std::max(p0.second, p1.second);
+            if (scanY < double(edgeMinY) || scanY >= double(edgeMaxY)) continue;
+            const double t = (scanY - double(p0.second)) / double(p1.second - p0.second);
+            intersections.push_back(int32_t(std::floor(double(p0.first) + t * double(p1.first))));
+        }
+        std::sort(intersections.begin(), intersections.end());
+        for (size_t i = 0; i + 1 < intersections.size(); i += 2) {
+            int32_t left = intersections[i];
+            int32_t right = intersections[i + 1];
+            if (left > right) std::swap(left, right);
+            if (bitmapIt != bitmaps_.end()) {
+                const GuestBitmap& bitmap = bitmapIt->second;
+                left = std::clamp<int32_t>(left, 0, bitmap.width - 1);
+                right = std::clamp<int32_t>(right, 0, bitmap.width - 1);
+                for (int32_t x = left; x <= right; ++x) {
+                    writeBitmapPixel(bitmap, raw, bitmapHeight, x, y, pixel);
+                }
+            } else {
+                left = std::clamp<int32_t>(left, 0, framebufferWidth_ - 1);
+                right = std::clamp<int32_t>(right, 0, framebufferWidth_ - 1);
+                for (int32_t x = left; x <= right; ++x) {
+                    writeFramebufferTargetPixel(dc.hwnd, x, y, pixel);
+                }
+            }
+        }
+    }
+
+    if (bitmapIt != bitmaps_.end()) {
+        const GuestBitmap& bitmap = bitmapIt->second;
+        return uc_mem_write(uc_, bitmap.bits, raw.data(), raw.size()) == UC_ERR_OK;
+    }
+    invalidateHostWindows();
     return true;
 }
 
@@ -5050,6 +5216,38 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(const std::string& name,
         lastError_ = ret ? 0 : 8;
         spdlog::info("CreateCompatibleBitmap {}x{} bits=0x{:08x} bitmap=0x{:08x}",
                      width, height, bits, ret);
+    } else if (name == "Polygon") {
+        GuestDc* dc = lookupGuestDc(a0);
+        auto brush = dc ? brushes_.find(dc->selectedBrush) : brushes_.end();
+        auto pen = dc ? pens_.find(dc->selectedPen) : pens_.end();
+        if (!dc || !a1 || a2 < 2 || (brush == brushes_.end() && pen == pens_.end())) {
+            lastError_ = dc ? 87 : 6;
+            ret = 0;
+        } else {
+            std::vector<std::pair<int32_t, int32_t>> points;
+            points.reserve(std::min<uint32_t>(a2, 0x10000));
+            for (uint32_t index = 0; index < a2 && index < 0x10000; ++index) {
+                const uint32_t point = a1 + index * 8;
+                points.emplace_back(int32_t(readU32(point)), int32_t(readU32(point + 4)));
+            }
+            if (brush != brushes_.end()) {
+                fillDcPolygon(*dc, points, colorRefToPixel(brush->second.colorRef));
+            }
+            if (pen != pens_.end()) {
+                const uint32_t pixel = colorRefToPixel(pen->second.colorRef);
+                for (size_t index = 0; index < points.size(); ++index) {
+                    const auto& from = points[index];
+                    const auto& to = points[(index + 1) % points.size()];
+                    drawDcLine(*dc, from.first, from.second, to.first, to.second, pixel);
+                }
+            }
+            if (!points.empty()) {
+                dc->x = points.back().first;
+                dc->y = points.back().second;
+            }
+            lastError_ = 0;
+            ret = 1;
+        }
     } else if (name == "Polyline") {
         GuestDc* dc = lookupGuestDc(a0);
         auto pen = dc ? pens_.find(dc->selectedPen) : pens_.end();
@@ -5974,12 +6172,12 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(const std::string& name,
         setGuestDoubleReturn(uc_, static_cast<double>(int32_t(a0)), ret);
     } else if (name == "__ultodp") {
         setGuestDoubleReturn(uc_, static_cast<double>(a0), ret);
-    } else if (name == "__fpadd") {
+    } else if (name == "__fpadd" || name == "__fpsub") {
         float left = 0.0f;
         float right = 0.0f;
         std::memcpy(&left, &a0, sizeof(left));
         std::memcpy(&right, &a1, sizeof(right));
-        const float value = left + right;
+        const float value = name == "__fpadd" ? left + right : left - right;
         std::memcpy(&ret, &value, sizeof(ret));
     } else if (name == "__dpadd" || name == "__dpsub" || name == "__dpmul" || name == "__dpdiv") {
         const double left = doubleFromGuestPair(a0, a1);
@@ -6040,6 +6238,9 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(const std::string& name,
         setGuestDoubleReturn(uc_, std::hypot(doubleFromGuestPair(a0, a1), doubleFromGuestPair(a2, a3)), ret);
     } else if (name == "sqrt") {
         setGuestDoubleReturn(uc_, std::sqrt(doubleFromGuestPair(a0, a1)), ret);
+    } else if (name == "sin" || name == "cos") {
+        const double value = doubleFromGuestPair(a0, a1);
+        setGuestDoubleReturn(uc_, name == "sin" ? std::sin(value) : std::cos(value), ret);
     } else if (name == "toupper") {
         ret = uint32_t(std::toupper(int(a0)));
     } else if (name == "__ltd" || name == "__led" || name == "__eqd" || name == "__ged" || name == "__gtd") {
@@ -10038,6 +10239,55 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
             pumpHostMessages();
             return;
         }
+    }
+
+    if (mutableEntry.moduleName == "coredll.dll" &&
+        (name == "WaitForMultipleObjects" || name == "CreatePatternBrush" ||
+         name == "SetBrushOrgEx" || name == "GetClipBox")) {
+        uint32_t ret = 0;
+        if (name == "WaitForMultipleObjects") {
+            ret = waitForMultipleGuestObjects(a0, a1, a2 != 0);
+        } else if (name == "CreatePatternBrush") {
+            ret = createPatternBrushFromBitmap(a0);
+            lastError_ = 0;
+        } else if (name == "SetBrushOrgEx") {
+            GuestDc* dc = lookupGuestDc(a0);
+            if (!dc) {
+                lastError_ = 6;
+                ret = 0;
+            } else {
+                if (a3) {
+                    writeU32(a3, 0);
+                    writeU32(a3 + 4, 0);
+                }
+                lastError_ = 0;
+                ret = 1;
+            }
+        } else {
+            GuestDc* dc = lookupGuestDc(a0);
+            if (!dc || !a1) {
+                lastError_ = dc ? 87 : 6;
+                ret = 0;
+            } else {
+                int32_t width = framebufferWidth_;
+                int32_t height = framebufferHeight_;
+                auto bitmap = bitmaps_.find(dc->selectedBitmap);
+                if (bitmap != bitmaps_.end()) {
+                    width = bitmap->second.width;
+                    height = std::abs(bitmap->second.heightRaw);
+                }
+                writeGuestRect(a1, 0, 0, width, height);
+                lastError_ = 0;
+                ret = 2; // SIMPLEREGION
+            }
+        }
+        if (mutableEntry.calls <= 128) {
+            spdlog::info("synthetic {}!{} -> 0x{:08x}", mutableEntry.moduleName, name, ret);
+        }
+        setReg(UC_MIPS_REG_V0, ret);
+        pumpHostMessages();
+        cooperateGuestThreadsAfterCall(name);
+        return;
     }
 
     if (mutableEntry.moduleName == "coredll.dll" &&
