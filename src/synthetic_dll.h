@@ -399,10 +399,10 @@ private:
     uint32_t createGuestThread(uint32_t startAddress, uint32_t parameter, uint32_t flags);
     uint32_t resumeGuestThread(uint32_t guestHandle);
     bool hasRunnableGuestThread() const;
-    bool switchToRunnableGuestThread(const char* reason);
-    bool yieldActiveGuestThread(const char* reason);
+    bool switchToRunnableGuestThread(const char* reason, uint32_t returnAddress = 0);
+    bool yieldActiveGuestThread(const char* reason, uint32_t returnAddress = 0);
     bool finishActiveGuestThread(uint32_t exitCode);
-    bool cooperateGuestThreadsAfterCall(const std::string& name);
+    bool cooperateGuestThreadsAfterCall(const std::string& name, uint32_t returnAddress = 0);
     uint32_t makeGuestDc(uint32_t hwnd);
     GuestDc* lookupGuestDc(uint32_t hdc);
     uint32_t makeGuestBrush(uint32_t colorRef, bool stock = false);

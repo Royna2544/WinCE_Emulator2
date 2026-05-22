@@ -1622,6 +1622,7 @@ SyntheticDllRuntime::GuestCpuContext SyntheticDllRuntime::initialGuestThreadCont
     context.registers[UC_MIPS_REG_SP] = stackTop;
     context.registers[UC_MIPS_REG_FP] = 0;
     context.registers[UC_MIPS_REG_A0] = parameter;
+    context.registers[UC_MIPS_REG_T9] = startAddress;
     return context;
 }
 
@@ -1692,19 +1693,21 @@ bool SyntheticDllRuntime::hasRunnableGuestThread() const {
     return false;
 }
 
-bool SyntheticDllRuntime::switchToRunnableGuestThread(const char* reason) {
+bool SyntheticDllRuntime::switchToRunnableGuestThread(const char* reason, uint32_t returnAddress) {
     for (auto& [handle, thread] : guestThreads_) {
         if (thread.state != GuestThreadRunState::Runnable || !thread.context.valid) continue;
         if (activeGuestThread_) {
             auto active = guestThreads_.find(activeGuestThread_);
             if (active != guestThreads_.end()) {
                 active->second.context = captureGuestCpuContext();
+                if (returnAddress) active->second.context.registers[UC_MIPS_REG_PC] = returnAddress;
                 if (active->second.state == GuestThreadRunState::Running) {
                     active->second.state = GuestThreadRunState::Runnable;
                 }
             }
         } else {
             mainThreadContext_ = captureGuestCpuContext();
+            if (returnAddress) mainThreadContext_.registers[UC_MIPS_REG_PC] = returnAddress;
         }
         thread.state = GuestThreadRunState::Running;
         activeGuestThread_ = handle;
@@ -1717,11 +1720,12 @@ bool SyntheticDllRuntime::switchToRunnableGuestThread(const char* reason) {
     return false;
 }
 
-bool SyntheticDllRuntime::yieldActiveGuestThread(const char* reason) {
-    if (!activeGuestThread_) return switchToRunnableGuestThread(reason);
+bool SyntheticDllRuntime::yieldActiveGuestThread(const char* reason, uint32_t returnAddress) {
+    if (!activeGuestThread_) return switchToRunnableGuestThread(reason, returnAddress);
     auto active = guestThreads_.find(activeGuestThread_);
     if (active != guestThreads_.end() && active->second.state == GuestThreadRunState::Running) {
         active->second.context = captureGuestCpuContext();
+        if (returnAddress) active->second.context.registers[UC_MIPS_REG_PC] = returnAddress;
         active->second.state = GuestThreadRunState::Runnable;
         spdlog::info("guest thread yield reason={} handle=0x{:08x} pc=0x{:08x}",
                      reason ? reason : "cooperate", activeGuestThread_,
@@ -1754,11 +1758,12 @@ bool SyntheticDllRuntime::finishActiveGuestThread(uint32_t exitCode) {
     return switchToRunnableGuestThread("thread exit");
 }
 
-bool SyntheticDllRuntime::cooperateGuestThreadsAfterCall(const std::string& name) {
+bool SyntheticDllRuntime::cooperateGuestThreadsAfterCall(const std::string& name, uint32_t returnAddress) {
+    if (!returnAddress) returnAddress = reg(UC_MIPS_REG_RA);
     const bool yieldingCall = name == "Sleep" || name == "WaitForSingleObject";
-    if (activeGuestThread_ && yieldingCall) return yieldActiveGuestThread(name.c_str());
-    if (!activeGuestThread_ && name == "ResumeThread" && hasRunnableGuestThread()) {
-        return switchToRunnableGuestThread(name.c_str());
+    if (activeGuestThread_ && yieldingCall) return yieldActiveGuestThread(name.c_str(), returnAddress);
+    if (!activeGuestThread_ && (name == "CreateThread" || name == "ResumeThread") && hasRunnableGuestThread()) {
+        return switchToRunnableGuestThread(name.c_str(), returnAddress);
     }
     return false;
 }
@@ -9511,6 +9516,16 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
     if (mutableEntry.moduleName == "coredll.dll" && name == "__ThreadExit") {
         if (!finishActiveGuestThread(reg(UC_MIPS_REG_V0))) {
             spdlog::warn("guest thread exit reached without active guest thread");
+            setReg(UC_MIPS_REG_PC, ra);
+        }
+        pumpHostMessages();
+        return;
+    }
+
+    if (mutableEntry.moduleName == "coredll.dll" && name == "ExitThread") {
+        if (!finishActiveGuestThread(a0)) {
+            spdlog::warn("ExitThread called without active guest thread exitCode=0x{:08x}", a0);
+            setReg(UC_MIPS_REG_V0, 0);
             setReg(UC_MIPS_REG_PC, ra);
         }
         pumpHostMessages();
