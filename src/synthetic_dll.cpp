@@ -9103,7 +9103,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             return true;
         };
         haveMessage = takeMessage();
-        if (!haveMessage && !peek && !quitPosted_ && !timers_.empty()) {
+        if (!haveMessage && !peek && !quitPosted_ && !timers_.empty() && !hasHostWindows()) {
             const uint64_t now = hostTickMilliseconds();
             auto next = std::min_element(timers_.begin(), timers_.end(),
                                          [](const auto& left, const auto& right) {
@@ -10581,10 +10581,14 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         }
         auto it = windows_.find(target);
         bool dispatchNow = false;
+        const bool pendingMouseInput = std::any_of(
+            guestMessages_.begin(), guestMessages_.end(), [](const GuestMessage& message) {
+                return message.message >= 0x0200 && message.message <= 0x0202;
+            });
         if (it != windows_.end() && !it->second.destroyed && it->second.visible &&
             (it->second.style & kWindowStyleChild) && it->second.parent &&
             it->second.width > 1 && it->second.height > 1 && updateWindowContinuationStub_ &&
-            pendingUpdateWindows_.empty()) {
+            pendingUpdateWindows_.empty() && !pendingMouseInput) {
             auto parent = windows_.find(it->second.parent);
             const int64_t area = int64_t(it->second.width) * int64_t(it->second.height);
             const int64_t framebufferArea = int64_t(framebufferWidth_) * int64_t(framebufferHeight_);
