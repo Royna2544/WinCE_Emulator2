@@ -330,6 +330,27 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(uint16_t ordinal,
                 const uint32_t point = a1 + index * 8;
                 points.emplace_back(int32_t(readU32(point)), int32_t(readU32(point + 4)));
             }
+            static uint32_t polygonDebugCount = 0;
+            if (!points.empty() && polygonDebugCount < 96) {
+                ++polygonDebugCount;
+                int32_t minX = points.front().first;
+                int32_t maxX = points.front().first;
+                int32_t minY = points.front().second;
+                int32_t maxY = points.front().second;
+                for (const auto& point : points) {
+                    minX = std::min(minX, point.first);
+                    maxX = std::max(maxX, point.first);
+                    minY = std::min(minY, point.second);
+                    maxY = std::max(maxY, point.second);
+                }
+                spdlog::debug("Polygon probe#{} dc=0x{:08x} hwnd=0x{:08x} bitmap=0x{:08x} count={} bounds={},{}..{},{} "
+                              "brush=0x{:08x} brushColor=0x{:08x} pattern=0x{:08x} pen=0x{:08x} penColor=0x{:08x}",
+                              polygonDebugCount, a0, dc->hwnd, dc->selectedBitmap, a2,
+                              minX, minY, maxX, maxY, dc->selectedBrush,
+                              hasBrush ? brush->second.colorRef : 0xffffffffu,
+                              hasBrush ? brush->second.patternBitmap : 0,
+                              dc->selectedPen, hasPen ? pen->second.colorRef : 0xffffffffu);
+            }
             if (hasBrush) {
                 fillDcPolygon(*dc, points, colorRefToPixel(brush->second.colorRef));
             }

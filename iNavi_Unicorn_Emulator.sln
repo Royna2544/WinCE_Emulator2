@@ -2,7 +2,9 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 18
 VisualStudioVersion = 18.0.0.0
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{BC8A1FFA-BEE3-4634-8014-F334798102B3}") = "iNavi_Unicorn_Emulator", "iNavi_Unicorn_Emulator.vcxproj", "{B62DB654-924B-4C1D-8844-2AF5D0A73C5D}"
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "iNavi_Unicorn_Emulator", "iNavi_Unicorn_Emulator.vcxproj", "{B62DB654-924B-4C1D-8844-2AF5D0A73C5D}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "NMEASender", "..\NMEASender\NMEASender.vcxproj", "{CB48E8F4-00A5-41A7-B3DE-2BAE9CE2D68F}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -14,5 +16,15 @@ Global
 		{B62DB654-924B-4C1D-8844-2AF5D0A73C5D}.Debug|x64.Build.0 = Debug|x64
 		{B62DB654-924B-4C1D-8844-2AF5D0A73C5D}.Release|x64.ActiveCfg = Release|x64
 		{B62DB654-924B-4C1D-8844-2AF5D0A73C5D}.Release|x64.Build.0 = Release|x64
+		{CB48E8F4-00A5-41A7-B3DE-2BAE9CE2D68F}.Debug|x64.ActiveCfg = Debug|x64
+		{CB48E8F4-00A5-41A7-B3DE-2BAE9CE2D68F}.Debug|x64.Build.0 = Debug|x64
+		{CB48E8F4-00A5-41A7-B3DE-2BAE9CE2D68F}.Release|x64.ActiveCfg = Release|x64
+		{CB48E8F4-00A5-41A7-B3DE-2BAE9CE2D68F}.Release|x64.Build.0 = Release|x64
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {19EC05CF-645C-4EF0-83F2-63766CD8AD23}
 	EndGlobalSection
 EndGlobal

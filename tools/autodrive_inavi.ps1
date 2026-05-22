@@ -250,6 +250,7 @@ foreach ($root in $FsRoot) {
 }
 $argumentList += @("--instructions", [string]$Instructions)
 $argumentList += $DllSearchDir
+$argumentList += @("--gps-comm", "COM7")
 
 $emulatorPath = (Resolve-Path $Emulator).Path
 $workingDirectory = (Resolve-Path ".").Path

@@ -9,6 +9,10 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <cstdint>
+#include <cstdio>
+#include <spdlog/spdlog.h>
 
 namespace {
 struct WinmmBridge {
@@ -31,6 +35,68 @@ struct WinmmBridge {
     decltype(&mixerGetControlDetailsW) mixerGetControlDetailsW{};
     bool attempted{};
 };
+
+struct HostWaveDoneContext {
+    LONG done{};
+    uint32_t guestHeader{};
+    uint32_t guestEvent{};
+    HANDLE hostEvent{};
+};
+
+std::atomic<uint32_t> g_waveOutDoneCallbacks{0};
+std::atomic<uint64_t> g_waveOutDoneTick{0};
+
+void CALLBACK hostWaveOutCallback(HWAVEOUT, UINT message, DWORD_PTR, DWORD_PTR param1, DWORD_PTR) {
+    if (message != WOM_DONE || !param1) return;
+    const auto* header = reinterpret_cast<const WAVEHDR*>(param1);
+    g_waveOutDoneCallbacks.fetch_add(1, std::memory_order_relaxed);
+    g_waveOutDoneTick.store(GetTickCount64(), std::memory_order_relaxed);
+    auto* context = reinterpret_cast<HostWaveDoneContext*>(header->dwUser);
+    if (context) {
+        InterlockedExchange(&context->done, 1);
+        if (context->hostEvent) {
+            SetEvent(context->hostEvent);
+        }
+    }
+}
+
+void logPcmStats(const char* op, uint32_t guestData, const std::vector<uint8_t>& data, bool readOk) {
+    uint32_t nonZeroBytes = 0;
+    int peak = 0;
+    uint64_t absSum = 0;
+    uint32_t sampleCount = 0;
+
+    for (uint8_t byte : data) {
+        if (byte != 0) {
+            ++nonZeroBytes;
+        }
+    }
+
+    for (size_t i = 1; i < data.size(); i += 2) {
+        const int16_t sample = static_cast<int16_t>(static_cast<uint16_t>(data[i - 1]) |
+                                                     (static_cast<uint16_t>(data[i]) << 8));
+        const int absValue = sample == -32768 ? 32768 : (sample < 0 ? -sample : sample);
+        peak = std::max(peak, absValue);
+        absSum += static_cast<uint64_t>(absValue);
+        ++sampleCount;
+    }
+
+    std::array<char, 3 * 16 + 1> prefix{};
+    const size_t prefixBytes = std::min<size_t>(16, data.size());
+    for (size_t i = 0; i < prefixBytes; ++i) {
+        std::snprintf(prefix.data() + i * 3, prefix.size() - i * 3, "%02x ", data[i]);
+    }
+
+    spdlog::debug("{} PCM readOk={} guestData=0x{:08x} bytes={} nonZeroBytes={} peak16={} avgAbs16={} first16={}",
+                  op,
+                  readOk,
+                  guestData,
+                  data.size(),
+                  nonZeroBytes,
+                  peak,
+                  sampleCount ? absSum / sampleCount : 0,
+                  prefix.data());
+}
 
 WinmmBridge& winmmBridge() {
     static WinmmBridge bridge;
@@ -56,6 +122,39 @@ WinmmBridge& winmmBridge() {
     bridge.mixerGetControlDetailsW = reinterpret_cast<decltype(bridge.mixerGetControlDetailsW)>(GetProcAddress(bridge.module, "mixerGetControlDetailsW"));
     return bridge;
 }
+}
+
+void SyntheticDllRuntime::refreshCompletedHostWaveBuffers() {
+    for (auto& [guestHeader, stored] : hostWaveBuffers_) {
+        auto* context = static_cast<HostWaveDoneContext*>(stored.completionContext.get());
+        if (!context) continue;
+
+        auto* header = reinterpret_cast<WAVEHDR*>(stored.header.data());
+        if ((header->dwFlags & WHDR_DONE) && InterlockedCompareExchange(&context->done, 1, 0) == 0) {
+            // Native WinMM marked the header done before the callback path was observed.
+        }
+
+        if (InterlockedCompareExchange(&context->done, 2, 1) != 1) continue;
+
+        header->dwFlags |= WHDR_DONE;
+        header->dwFlags &= ~WHDR_INQUEUE;
+        const uint32_t headerAddress = context->guestHeader ? context->guestHeader : guestHeader;
+        writeU32(headerAddress + 16, uint32_t(header->dwFlags));
+
+        if (context->guestEvent) {
+            for (auto& [threadHandle, thread] : guestThreads_) {
+                (void)threadHandle;
+                if (thread.state == GuestThreadRunState::Waiting && thread.waitHandle == context->guestEvent) {
+                    thread.state = GuestThreadRunState::Runnable;
+                    thread.waitHandle = 0;
+                    thread.context.registers[UC_MIPS_REG_V0] = 0;
+                }
+            }
+        }
+
+        spdlog::debug("waveOut completion guestHeader=0x{:08x} event=0x{:08x} flags=0x{:08x}",
+                      headerAddress, context->guestEvent, uint32_t(header->dwFlags));
+    }
 }
 
 void SyntheticDllRuntime::registerCoredllAudioExports(SyntheticModule& module) {
@@ -244,12 +343,31 @@ bool SyntheticDllRuntime::handleWaveOutOpen(SyntheticExportCode code, const Gues
     HWAVEOUT host{};
     const DWORD_PTR instance = DWORD_PTR(stackArg(4));
     const DWORD flags = stackArg(5);
+    spdlog::debug("waveOutOpen format tag={} channels={} samplesPerSec={} avgBytesPerSec={} blockAlign={} bitsPerSample={} callback=0x{:08x} instance=0x{:08x} flags=0x{:08x}",
+                  format.wFormatTag, format.nChannels, format.nSamplesPerSec,
+                  format.nAvgBytesPerSec, format.nBlockAlign, format.wBitsPerSample,
+                  args.a3, uint32_t(instance), flags);
     const DWORD callbackFlags = flags & CALLBACK_TYPEMASK;
-    const DWORD hostFlags = callbackFlags == CALLBACK_NULL ? flags : ((flags & ~CALLBACK_TYPEMASK) | CALLBACK_NULL);
-    ret = winmm.waveOutOpen(&host, args.a1, &format, 0, instance, hostFlags);
+    DWORD_PTR hostCallback = 0;
+    DWORD hostFlags = flags;
+    if (callbackFlags == CALLBACK_EVENT) {
+        auto* event = lookupGuestHandle(args.a3);
+        if (event && event->kind == GuestHandle::Kind::HostEvent && event->hostValue) {
+            hostCallback = DWORD_PTR(event->hostValue);
+        } else {
+            hostFlags = (flags & ~CALLBACK_TYPEMASK) | CALLBACK_NULL;
+        }
+    } else if (callbackFlags == CALLBACK_FUNCTION) {
+        hostCallback = DWORD_PTR(&hostWaveOutCallback);
+        hostFlags = (flags & ~CALLBACK_TYPEMASK) | CALLBACK_FUNCTION;
+    } else if (callbackFlags != CALLBACK_NULL) {
+        hostFlags = (flags & ~CALLBACK_TYPEMASK) | CALLBACK_NULL;
+    }
+    const UINT hostDeviceId = args.a1 == 0 ? WAVE_MAPPER : UINT(args.a1);
+    ret = winmm.waveOutOpen(&host, hostDeviceId, &format, hostCallback, instance, hostFlags);
     if (ret == MMSYSERR_NOERROR) {
         const uint32_t guest = makeGuestHandle({GuestHandle::Kind::HostWaveOut, reinterpret_cast<uintptr_t>(host), 0});
-        waveOutStates_[guest] = {args.a3, uint32_t(instance), flags};
+        waveOutStates_[guest] = {args.a3, uint32_t(instance), flags, format.nAvgBytesPerSec};
         writeU32(args.a0, guest);
     }
     return true;
@@ -301,10 +419,13 @@ bool SyntheticDllRuntime::handleWaveOutPrepareHeader(SyntheticExportCode code, c
     }
     const uint32_t guestData = readU32(args.a1);
     const uint32_t guestLength = readU32(args.a1 + 4);
+    const uint32_t guestFlags = readU32(args.a1 + 16);
     if (!guestData || !guestLength || guestLength > 0x400000 || !winmm.waveOutPrepareHeader) {
         ret = MMSYSERR_INVALPARAM;
         return true;
     }
+    spdlog::debug("waveOutPrepareHeader hdr=0x{:08x} data=0x{:08x} length={} user=0x{:08x} flags=0x{:08x}",
+                  args.a1, guestData, guestLength, readU32(args.a1 + 12), guestFlags);
     auto& stored = hostWaveBuffers_[args.a1];
     if (stored.data.size() != guestLength) stored.data.assign(guestLength, 0);
     uc_mem_read(uc_, guestData, stored.data.data(), stored.data.size());
@@ -314,7 +435,7 @@ bool SyntheticDllRuntime::handleWaveOutPrepareHeader(SyntheticExportCode code, c
     header->dwBufferLength = guestLength;
     header->dwBytesRecorded = readU32(args.a1 + 8);
     header->dwUser = readU32(args.a1 + 12);
-    header->dwFlags = readU32(args.a1 + 16);
+    header->dwFlags = guestFlags;
     header->dwLoops = readU32(args.a1 + 20);
     ret = winmm.waveOutPrepareHeader(reinterpret_cast<HWAVEOUT>(handle->hostValue), header, sizeof(*header));
     writeU32(args.a1 + 16, uint32_t(header->dwFlags));
@@ -348,40 +469,69 @@ bool SyntheticDllRuntime::handleWaveOutWrite(SyntheticExportCode code, const Gue
     }
     const uint32_t guestData = readU32(args.a1);
     const uint32_t guestLength = readU32(args.a1 + 4);
+    const uint32_t guestFlags = readU32(args.a1 + 16);
     if (!guestData || !guestLength || guestLength > 0x400000) {
         ret = MMSYSERR_INVALPARAM;
         return true;
     }
+    const uint32_t guestUser = readU32(args.a1 + 12);
+    spdlog::debug("waveOutWrite hdr=0x{:08x} data=0x{:08x} length={} user=0x{:08x} flags=0x{:08x}",
+                  args.a1, guestData, guestLength, guestUser, guestFlags);
+    const bool hadStoredHeader = hostWaveBuffers_.find(args.a1) != hostWaveBuffers_.end();
     auto& stored = hostWaveBuffers_[args.a1];
     if (stored.data.size() != guestLength) stored.data.assign(guestLength, 0);
-    uc_mem_read(uc_, guestData, stored.data.data(), stored.data.size());
+    const bool readOk = uc_mem_read(uc_, guestData, stored.data.data(), stored.data.size()) == UC_ERR_OK;
+    logPcmStats("waveOutWrite", guestData, stored.data, readOk);
     auto* header = reinterpret_cast<WAVEHDR*>(stored.header.data());
-    *header = {};
-    header->lpData = reinterpret_cast<LPSTR>(stored.data.data());
-    header->dwBufferLength = guestLength;
-    header->dwBytesRecorded = readU32(args.a1 + 8);
-    header->dwUser = readU32(args.a1 + 12);
-    header->dwFlags = readU32(args.a1 + 16);
-    header->dwLoops = readU32(args.a1 + 20);
+    if (!hadStoredHeader) {
+        *header = {};
+        header->lpData = reinterpret_cast<LPSTR>(stored.data.data());
+        header->dwBufferLength = guestLength;
+        header->dwBytesRecorded = readU32(args.a1 + 8);
+        header->dwUser = guestUser;
+        header->dwFlags = guestFlags & ~WHDR_PREPARED;
+        header->dwLoops = readU32(args.a1 + 20);
+    } else {
+        header->lpData = reinterpret_cast<LPSTR>(stored.data.data());
+        header->dwBufferLength = guestLength;
+        header->dwBytesRecorded = readU32(args.a1 + 8);
+        header->dwUser = guestUser;
+        header->dwLoops = readU32(args.a1 + 20);
+    }
+    auto state = waveOutStates_.find(args.a0);
+    if (state != waveOutStates_.end() && (state->second.flags & CALLBACK_TYPEMASK) == CALLBACK_EVENT) {
+        auto* event = lookupGuestHandle(state->second.callback);
+        if (event && event->kind == GuestHandle::Kind::HostEvent && event->hostValue) {
+            ResetEvent(reinterpret_cast<HANDLE>(event->hostValue));
+        }
+    } else if (state != waveOutStates_.end() && (state->second.flags & CALLBACK_TYPEMASK) == CALLBACK_FUNCTION) {
+        auto* event = lookupGuestHandle(guestUser);
+        if (event && event->kind == GuestHandle::Kind::HostEvent && event->hostValue) {
+            ResetEvent(reinterpret_cast<HANDLE>(event->hostValue));
+            auto context = std::make_shared<HostWaveDoneContext>();
+            context->guestHeader = args.a1;
+            context->guestEvent = guestUser;
+            context->hostEvent = reinterpret_cast<HANDLE>(event->hostValue);
+            stored.completionContext = context;
+            header->dwUser = DWORD_PTR(context.get());
+        }
+    }
     if (winmm.waveOutPrepareHeader && !(header->dwFlags & WHDR_PREPARED)) {
         winmm.waveOutPrepareHeader(reinterpret_cast<HWAVEOUT>(handle->hostValue), header, sizeof(*header));
     }
+    header->dwFlags = (header->dwFlags & WHDR_PREPARED) | (guestFlags & ~(WHDR_DONE | WHDR_PREPARED));
+    const uint32_t doneBefore = g_waveOutDoneCallbacks.load(std::memory_order_relaxed);
     ret = winmm.waveOutWrite
         ? winmm.waveOutWrite(reinterpret_cast<HWAVEOUT>(handle->hostValue), header, sizeof(*header))
         : MMSYSERR_ERROR;
-    if (ret == MMSYSERR_NOERROR) {
-        header->dwFlags |= WHDR_DONE;
-        auto state = waveOutStates_.find(args.a0);
-        if (state != waveOutStates_.end()) {
-            const uint32_t callbackType = state->second.flags & CALLBACK_TYPEMASK;
-            const uint32_t eventHandle = callbackType == CALLBACK_EVENT
-                ? state->second.callback
-                : uint32_t(header->dwUser);
-            auto* event = lookupGuestHandle(eventHandle);
-            if (event && event->kind == GuestHandle::Kind::HostEvent && event->hostValue) {
-                SetEvent(reinterpret_cast<HANDLE>(event->hostValue));
-            }
-        }
+    spdlog::debug("waveOutWrite host ret={} flags=0x{:08x} doneCallbacksBefore={} doneCallbacksAfter={} lastDoneTick={}",
+                  ret,
+                  uint32_t(header->dwFlags),
+                  doneBefore,
+                  g_waveOutDoneCallbacks.load(std::memory_order_relaxed),
+                  g_waveOutDoneTick.load(std::memory_order_relaxed));
+    if (ret == MMSYSERR_NOERROR && (header->dwFlags & WHDR_DONE)) {
+        writeU32(args.a1 + 16, uint32_t(header->dwFlags));
     }
     writeU32(args.a1 + 16, uint32_t(header->dwFlags));
     return true;

@@ -1000,31 +1000,39 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed() {
     }
     spdlog::info("entering host GUI message loop; close the presenter window to exit");
     MSG message{};
+    auto resumeGuestSlice = [&](uint64_t instructionBudget, const char* reason) -> bool {
+        uint32_t pc = 0;
+        uint32_t ra = 0;
+        uc_reg_read(uc_, UC_MIPS_REG_PC, &pc);
+        uc_reg_read(uc_, UC_MIPS_REG_RA, &ra);
+        const uc_err err = uc_emu_start(uc_, pc, 0, 0, instructionBudget);
+        uc_reg_read(uc_, UC_MIPS_REG_PC, &pc);
+        uc_reg_read(uc_, UC_MIPS_REG_RA, &ra);
+        if (err != UC_ERR_OK) {
+            spdlog::warn("interactive emulation stopped reason={} err={} ({}) pc=0x{:08x} ra=0x{:08x}",
+                         reason, int(err), uc_strerror(err), pc, ra);
+            return false;
+        }
+        pumpHostMessages();
+        enqueueDueTimers();
+        return true;
+    };
     while (hasHostWindows()) {
         enqueueDueTimers();
         while (!guestMessages_.empty() && hasHostWindows()) {
-            uint32_t pc = 0;
-            uint32_t ra = 0;
-            uc_reg_read(uc_, UC_MIPS_REG_PC, &pc);
-            uc_reg_read(uc_, UC_MIPS_REG_RA, &ra);
-            spdlog::info("resuming guest for queued message pc=0x{:08x} ra=0x{:08x} queued={}",
-                         pc, ra, guestMessages_.size());
-            const uc_err err = uc_emu_start(uc_, pc, 0, 0, 50000000);
-            uc_reg_read(uc_, UC_MIPS_REG_PC, &pc);
-            uc_reg_read(uc_, UC_MIPS_REG_RA, &ra);
-            if (err != UC_ERR_OK) {
-                spdlog::warn("interactive emulation stopped err={} ({}) pc=0x{:08x} ra=0x{:08x}",
-                             int(err), uc_strerror(err), pc, ra);
+            spdlog::info("resuming guest for queued message queued={}", guestMessages_.size());
+            if (!resumeGuestSlice(50000000, "queued-message")) {
                 return;
             }
-            pumpHostMessages();
-            enqueueDueTimers();
         }
         const DWORD waitMs = std::max<DWORD>(1, std::min<DWORD>(50, timerWaitMilliseconds()));
         while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
             if (message.message == WM_QUIT) return;
             TranslateMessage(&message);
             DispatchMessageW(&message);
+        }
+        if (guestMessages_.empty() && hasHostWindows() && !resumeGuestSlice(5000000, "idle")) {
+            return;
         }
         if (guestMessages_.empty()) MsgWaitForMultipleObjects(0, nullptr, FALSE, waitMs, QS_ALLINPUT);
     }
@@ -1451,7 +1459,42 @@ uint32_t SyntheticDllRuntime::resumeGuestThread(uint32_t guestHandle) {
     return previousSuspendCount;
 }
 
-bool SyntheticDllRuntime::hasRunnableGuestThread() const {
+void SyntheticDllRuntime::refreshSignaledGuestWaits() {
+    refreshCompletedHostWaveBuffers();
+#if defined(_WIN32)
+    constexpr DWORD kWaitObject0 = WAIT_OBJECT_0;
+    constexpr DWORD kWaitTimeout = WAIT_TIMEOUT;
+    for (auto& [threadHandle, thread] : guestThreads_) {
+        if (thread.state != GuestThreadRunState::Waiting || !thread.waitHandle) continue;
+        auto* handle = lookupGuestHandle(thread.waitHandle);
+        if (!handle || !handle->hostValue) continue;
+        if (handle->kind != GuestHandle::Kind::HostEvent &&
+            handle->kind != GuestHandle::Kind::HostMutex) {
+            continue;
+        }
+        const DWORD wait = ::WaitForSingleObject(reinterpret_cast<HANDLE>(handle->hostValue), 0);
+        if (wait == kWaitObject0) {
+            const uint32_t waitHandle = thread.waitHandle;
+            thread.state = GuestThreadRunState::Runnable;
+            thread.waitHandle = 0;
+            thread.context.registers[UC_MIPS_REG_V0] = 0;
+            spdlog::info("guest thread wait satisfied handle=0x{:08x} waitHandle=0x{:08x}",
+                         threadHandle, waitHandle);
+        } else if (wait != kWaitTimeout) {
+            const uint32_t waitHandle = thread.waitHandle;
+            thread.state = GuestThreadRunState::Runnable;
+            thread.waitHandle = 0;
+            thread.context.registers[UC_MIPS_REG_V0] = 0xffffffffu;
+            lastError_ = GetLastError();
+            spdlog::warn("guest thread wait failed handle=0x{:08x} waitHandle=0x{:08x} error={}",
+                         threadHandle, waitHandle, lastError_);
+        }
+    }
+#endif
+}
+
+bool SyntheticDllRuntime::hasRunnableGuestThread() {
+    refreshSignaledGuestWaits();
     for (const auto& [handle, thread] : guestThreads_) {
         (void)handle;
         if (thread.state == GuestThreadRunState::Runnable) return true;
@@ -1460,6 +1503,7 @@ bool SyntheticDllRuntime::hasRunnableGuestThread() const {
 }
 
 bool SyntheticDllRuntime::switchToRunnableGuestThread(const char* reason, uint32_t returnAddress) {
+    refreshSignaledGuestWaits();
     for (auto& [handle, thread] : guestThreads_) {
         if (thread.state != GuestThreadRunState::Runnable || !thread.context.valid) continue;
         if (activeGuestThread_) {
@@ -1870,10 +1914,24 @@ uint32_t SyntheticDllRuntime::handleRegEnumValueW(uint32_t hkey, uint32_t index,
 
 uint32_t SyntheticDllRuntime::openGuestSerialDevice(const std::string& guestPath, uint32_t access, uint32_t share) {
 #if defined(_WIN32)
-    if (!gpsCommPort_.empty()) {
+    const std::string lowerGuestPath = lowerAscii(guestPath);
+    bool guestIsCommPort = lowerGuestPath.size() >= 5 &&
+                           lowerGuestPath[0] == 'c' &&
+                           lowerGuestPath[1] == 'o' &&
+                           lowerGuestPath[2] == 'm' &&
+                           lowerGuestPath.back() == ':';
+    if (guestIsCommPort) {
+        for (size_t i = 3; i + 1 < lowerGuestPath.size(); ++i) {
+            if (lowerGuestPath[i] < '0' || lowerGuestPath[i] > '9') {
+                guestIsCommPort = false;
+                break;
+            }
+        }
+    }
+    if (!gpsCommPort_.empty() && guestIsCommPort) {
         const std::wstring hostPort = normalizeHostCommPort(gpsCommPort_);
         const DWORD desiredAccess = access ? access : (GENERIC_READ | GENERIC_WRITE);
-        HANDLE host = CreateFileW(hostPort.c_str(), desiredAccess, 0, nullptr, OPEN_EXISTING,
+        HANDLE host = CreateFileW(hostPort.c_str(), desiredAccess, share, nullptr, OPEN_EXISTING,
                                   FILE_ATTRIBUTE_NORMAL, nullptr);
         const std::string displayName = narrowAsciiLossy(hostPort);
         if (host != INVALID_HANDLE_VALUE) {
@@ -3068,6 +3126,111 @@ bool SyntheticDllRuntime::fillDcPolygon(const GuestDc& dc,
 
     std::vector<std::pair<int32_t, int32_t>> translatedPoints = points;
     auto bitmapIt = bitmaps_.find(dc.selectedBitmap);
+    if (bitmapIt != bitmaps_.end()) {
+#if defined(_WIN32)
+        const GuestBitmap& bitmap = bitmapIt->second;
+        const int32_t bitmapHeight = std::abs(bitmap.heightRaw);
+        if (!bitmap.bits || bitmap.width <= 0 || bitmapHeight <= 0 || bitmap.stride == 0) return false;
+
+        int32_t minX = points.front().first;
+        int32_t maxX = points.front().first;
+        int32_t minY = points.front().second;
+        int32_t maxY = points.front().second;
+        for (const auto& point : points) {
+            minX = std::min(minX, point.first);
+            maxX = std::max(maxX, point.first);
+            minY = std::min(minY, point.second);
+            maxY = std::max(maxY, point.second);
+        }
+        const int32_t clipLeft = std::clamp<int32_t>(minX, 0, bitmap.width - 1);
+        const int32_t clipTop = std::clamp<int32_t>(minY, 0, bitmapHeight - 1);
+        const int32_t clipRight = std::clamp<int32_t>(maxX, 0, bitmap.width - 1);
+        const int32_t clipBottom = std::clamp<int32_t>(maxY, 0, bitmapHeight - 1);
+        if (clipRight < clipLeft || clipBottom < clipTop) return true;
+
+        const int32_t dibWidth = clipRight - clipLeft + 1;
+        const int32_t dibHeight = clipBottom - clipTop + 1;
+        const uint64_t bitmapByteCount = uint64_t(bitmap.stride) * uint64_t(bitmapHeight);
+        const uint64_t dibByteCount = uint64_t(dibWidth) * uint64_t(dibHeight) * 4ull;
+        if (!bitmapByteCount || bitmapByteCount > 0x2000000ull ||
+            !dibByteCount || dibByteCount > 0x2000000ull) {
+            return false;
+        }
+
+        std::vector<uint8_t> raw(static_cast<size_t>(bitmapByteCount));
+        if (uc_mem_read(uc_, bitmap.bits, raw.data(), raw.size()) != UC_ERR_OK) return false;
+
+        BITMAPINFO info{};
+        info.bmiHeader.biSize = sizeof(info.bmiHeader);
+        info.bmiHeader.biWidth = dibWidth;
+        info.bmiHeader.biHeight = -dibHeight;
+        info.bmiHeader.biPlanes = 1;
+        info.bmiHeader.biBitCount = 32;
+        info.bmiHeader.biCompression = BI_RGB;
+
+        void* dibBits = nullptr;
+        HDC hdc = CreateCompatibleDC(nullptr);
+        HBITMAP dib = hdc ? CreateDIBSection(hdc, &info, DIB_RGB_COLORS, &dibBits, nullptr, 0) : nullptr;
+        if (!hdc || !dib || !dibBits) {
+            if (dib) DeleteObject(dib);
+            if (hdc) DeleteDC(hdc);
+            return false;
+        }
+
+        auto* pixels = static_cast<uint8_t*>(dibBits);
+        for (int32_t y = 0; y < dibHeight; ++y) {
+            for (int32_t x = 0; x < dibWidth; ++x) {
+                uint32_t current = 0;
+                readBitmapPixel(bitmap, raw, bitmapHeight, clipLeft + x, clipTop + y, current);
+                const size_t offset = (size_t(y) * size_t(dibWidth) + size_t(x)) * 4;
+                pixels[offset + 0] = uint8_t(current & 0xff);
+                pixels[offset + 1] = uint8_t((current >> 8) & 0xff);
+                pixels[offset + 2] = uint8_t((current >> 16) & 0xff);
+                pixels[offset + 3] = 0xff;
+            }
+        }
+
+        HGDIOBJ oldBitmap = SelectObject(hdc, dib);
+        HBRUSH brush = CreateSolidBrush(RGB((pixel >> 16) & 0xff, (pixel >> 8) & 0xff, pixel & 0xff));
+        HGDIOBJ oldBrush = SelectObject(hdc, brush);
+        HGDIOBJ oldPen = SelectObject(hdc, GetStockObject(NULL_PEN));
+        SetPolyFillMode(hdc, ALTERNATE);
+
+        std::vector<POINT> gdiPoints;
+        gdiPoints.reserve(points.size());
+        for (const auto& point : points) {
+            POINT p{};
+            p.x = point.first - clipLeft;
+            p.y = point.second - clipTop;
+            gdiPoints.push_back(p);
+        }
+        const BOOL drew = Polygon(hdc, gdiPoints.data(), int(gdiPoints.size()));
+
+        SelectObject(hdc, oldPen);
+        SelectObject(hdc, oldBrush);
+        SelectObject(hdc, oldBitmap);
+        DeleteObject(brush);
+
+        if (drew) {
+            GdiFlush();
+            for (int32_t y = 0; y < dibHeight; ++y) {
+                for (int32_t x = 0; x < dibWidth; ++x) {
+                    const size_t offset = (size_t(y) * size_t(dibWidth) + size_t(x)) * 4;
+                    const uint32_t outPixel = 0xff000000u |
+                        (uint32_t(pixels[offset + 2]) << 16) |
+                        (uint32_t(pixels[offset + 1]) << 8) |
+                        uint32_t(pixels[offset + 0]);
+                    writeBitmapPixel(bitmap, raw, bitmapHeight, clipLeft + x, clipTop + y, outPixel);
+                }
+            }
+        }
+
+        DeleteObject(dib);
+        DeleteDC(hdc);
+        if (!drew) return false;
+        return uc_mem_write(uc_, bitmap.bits, raw.data(), raw.size()) == UC_ERR_OK;
+#endif
+    }
     if (bitmapIt == bitmaps_.end()) {
         int32_t originX = 0;
         int32_t originY = 0;

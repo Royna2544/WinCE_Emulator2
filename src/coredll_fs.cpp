@@ -7,6 +7,7 @@
 #include <cctype>
 #include <cstring>
 #include <filesystem>
+#include <regex>
 #include <string>
 #include <vector>
 

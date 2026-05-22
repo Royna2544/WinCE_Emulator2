@@ -9,6 +9,7 @@
 #include <deque>
 #include <filesystem>
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -523,11 +524,13 @@ private:
     struct HostWaveBuffer {
         std::vector<uint8_t> data;
         std::array<uint8_t, 64> header{};
+        std::shared_ptr<void> completionContext;
     };
     struct GuestWaveOutState {
         uint32_t callback{};
         uint32_t instance{};
         uint32_t flags{};
+        uint32_t avgBytesPerSec{};
     };
     struct GuestMessage {
         uint32_t hwnd{};
@@ -1079,7 +1082,9 @@ private:
     void restoreGuestCpuContext(const GuestCpuContext& context) const;
     uint32_t createGuestThread(uint32_t startAddress, uint32_t parameter, uint32_t flags);
     uint32_t resumeGuestThread(uint32_t guestHandle);
-    bool hasRunnableGuestThread() const;
+    void refreshCompletedHostWaveBuffers();
+    void refreshSignaledGuestWaits();
+    bool hasRunnableGuestThread();
     bool switchToRunnableGuestThread(const char* reason, uint32_t returnAddress = 0);
     bool yieldActiveGuestThread(const char* reason, uint32_t returnAddress = 0);
     bool finishActiveGuestThread(uint32_t exitCode);
