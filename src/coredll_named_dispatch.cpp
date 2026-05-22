@@ -1986,7 +1986,7 @@ ensureHostWindow(a0, it->second);
             ret = 0;
         }
     } else if (ordinal == ord(CoredllOrdinal::GetMessagePos)) {
-        ret = 0;
+        ret = lastMessagePos_;
     } else if (ordinal == ord(CoredllOrdinal::TranslateMessage)) {
         ret = a0 ? 1 : 0;
     } else if (ordinal == ord(CoredllOrdinal::PostQuitMessage)) {
@@ -1998,7 +1998,34 @@ ensureHostWindow(a0, it->second);
         guestMessages_.push_back(message);
         ret = 0;
     } else if (ordinal == ord(CoredllOrdinal::PostMessageW)) {
-        if (!windows_.count(a0)) {
+        if (a0 == 0xffff) {
+            bool posted = false;
+            for (const auto& [hwnd, window] : windows_) {
+                if (window.destroyed || window.parent) {
+                    continue;
+                }
+                GuestMessage message{};
+                message.hwnd = hwnd;
+                message.message = a1;
+                message.wParam = a2;
+                message.lParam = a3;
+                message.time = uint32_t(++tick_ * 16);
+                guestMessages_.push_back(message);
+                posted = true;
+            }
+            lastError_ = posted ? 0 : 1400;
+            ret = posted ? 1 : 0;
+        } else if (a0 == 0) {
+            GuestMessage message{};
+            message.hwnd = 0;
+            message.message = a1;
+            message.wParam = a2;
+            message.lParam = a3;
+            message.time = uint32_t(++tick_ * 16);
+            guestMessages_.push_back(message);
+            lastError_ = 0;
+            ret = 1;
+        } else if (!windows_.count(a0)) {
             lastError_ = 1400;
             ret = 0;
         } else {
@@ -2022,9 +2049,21 @@ ensureHostWindow(a0, it->second);
         GuestMessage message{};
         bool haveMessage = false;
         auto takeMessage = [&]() {
-            if (guestMessages_.empty()) return false;
-            message = guestMessages_.front();
-            if (!peek || (removeFlags & 1)) guestMessages_.pop_front();
+            auto matchesFilter = [&](const GuestMessage& candidate) {
+                if (a1 == 0xffffffffu) {
+                    if (candidate.hwnd != 0) return false;
+                } else if (a1 != 0 && candidate.hwnd != a1 && !isWindowOrDescendant(candidate.hwnd, a1)) {
+                    return false;
+                }
+                if (a2 || a3) {
+                    if (candidate.message < a2 || candidate.message > a3) return false;
+                }
+                return true;
+            };
+            auto it = std::find_if(guestMessages_.begin(), guestMessages_.end(), matchesFilter);
+            if (it == guestMessages_.end()) return false;
+            message = *it;
+            if (!peek || (removeFlags & 1)) guestMessages_.erase(it);
             return true;
         };
         haveMessage = takeMessage();
@@ -2047,9 +2086,13 @@ ensureHostWindow(a0, it->second);
                 uc_emu_stop(uc_);
             }
         } else if (message.message == 0x0012) {
+            lastMessagePos_ = uint32_t(uint16_t(message.x) | (uint32_t(uint16_t(message.y)) << 16));
+            lastMessageTime_ = message.time;
             writeGuestMessage(a0, message);
             ret = 0;
         } else {
+            lastMessagePos_ = uint32_t(uint16_t(message.x) | (uint32_t(uint16_t(message.y)) << 16));
+            lastMessageTime_ = message.time;
             writeGuestMessage(a0, message);
             ret = 1;
         }

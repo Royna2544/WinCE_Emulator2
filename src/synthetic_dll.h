@@ -702,6 +702,8 @@ private:
     std::vector<PendingBlockingApi> pendingBlockingApis_;
     std::vector<PendingUpdateWindow> pendingUpdateWindows_;
     std::deque<GuestMessage> guestMessages_;
+    uint32_t lastMessagePos_{};
+    uint32_t lastMessageTime_{};
     std::vector<uintptr_t> retainedHostWindows_;
     uint32_t hostPresenterGuestHwnd_{};
     uint64_t lastHostPresentMs_{};

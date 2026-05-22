@@ -1019,9 +1019,9 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed() {
     };
     while (hasHostWindows()) {
         enqueueDueTimers();
-        while (!guestMessages_.empty() && hasHostWindows()) {
+        if (!guestMessages_.empty() && hasHostWindows()) {
             spdlog::info("resuming guest for queued message queued={}", guestMessages_.size());
-            if (!resumeGuestSlice(50000000, "queued-message")) {
+            if (!resumeGuestSlice(5000000, "queued-message")) {
                 return;
             }
         }
@@ -2775,6 +2775,13 @@ void SyntheticDllRuntime::enqueueDueTimers() {
     for (auto& [key, timer] : timers_) {
         (void)key;
         if (timer.intervalMs == 0 || now < timer.nextDueMs) continue;
+        const bool alreadyQueued = std::any_of(guestMessages_.begin(), guestMessages_.end(),
+                                               [&](const GuestMessage& queued) {
+                                                   return queued.hwnd == timer.hwnd &&
+                                                          queued.message == 0x0113 &&
+                                                          queued.wParam == timer.id;
+                                               });
+        if (alreadyQueued) continue;
         GuestMessage message{};
         message.hwnd = timer.hwnd;
         message.message = 0x0113; // WM_TIMER
@@ -2838,6 +2845,7 @@ uint32_t SyntheticDllRuntime::windowAtPoint(uint32_t rootGuestHwnd, int32_t x, i
         const uint32_t hwnd = it->first;
         const GuestWindow& window = it->second;
         if (window.destroyed || !window.visible || !belongsToRoot(hwnd)) continue;
+        if (hasCoveringRootPopup(hwnd)) continue;
         const auto [ox, oy] = originOf(hwnd);
         int32_t left = ox;
         int32_t top = oy;
@@ -2902,14 +2910,26 @@ void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t
     const auto [originX, originY] = originOf(hwnd);
     clientX = hostX - originX;
     clientY = hostY - originY;
+    auto queueInputMessage = [&](const GuestMessage& input) {
+        const auto isInputPriority = [](const GuestMessage& queued) {
+            return queued.message == 0x0007 || queued.message == 0x0008 ||
+                   queued.message == 0x0200 || queued.message == 0x0201 ||
+                   queued.message == 0x0202;
+        };
+        auto insertAt = guestMessages_.begin();
+        while (insertAt != guestMessages_.end() && isInputPriority(*insertAt)) {
+            ++insertAt;
+        }
+        guestMessages_.insert(insertAt, input);
+    };
     if (message == 0x0201) {
         hostPointerCaptureWindow_ = hwnd;
         if (focusedWindow_ != hwnd) {
             auto focused = windows_.find(focusedWindow_);
             if (focused != windows_.end() && !focused->second.destroyed) {
-                guestMessages_.push_back({focusedWindow_, 0x0008, hwnd, 0, uint32_t(++tick_ * 16), 0, 0});
+                queueInputMessage({focusedWindow_, 0x0008, hwnd, 0, uint32_t(++tick_ * 16), 0, 0});
             }
-            guestMessages_.push_back({hwnd, 0x0007, focusedWindow_, 0, uint32_t(++tick_ * 16), 0, 0});
+            queueInputMessage({hwnd, 0x0007, focusedWindow_, 0, uint32_t(++tick_ * 16), 0, 0});
             focusedWindow_ = hwnd;
         }
     } else if (message == 0x0202) {
@@ -2923,9 +2943,10 @@ void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t
     guest.time = uint32_t(++tick_ * 16);
     guest.x = uint32_t(clientX);
     guest.y = uint32_t(clientY);
-    guestMessages_.push_back(guest);
+    queueInputMessage(guest);
     spdlog::info("queued host mouse msg=0x{:04x} root=0x{:08x} hwnd=0x{:08x} point={},{} client={},{} queued={}",
                  message, rootGuestHwnd, hwnd, hostX, hostY, clientX, clientY, guestMessages_.size());
+    uc_emu_stop(uc_);
 }
 
 uint32_t SyntheticDllRuntime::colorRefToPixel(uint32_t colorRef) const {
@@ -5269,17 +5290,19 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         }
     };
     auto dispatchQueuedPaintForBlockingApi = [&](PendingBlockingApi& pending, const char* reason) {
-        if (pending.paintDispatches >= 6) return false;
-        auto paint = std::find_if(guestMessages_.begin(), guestMessages_.end(),
-                                  [&](const GuestMessage& message) {
-                                      if (message.message != 0x0014 && message.message != 0x000f) return false;
-                                      auto window = windows_.find(message.hwnd);
-                                      return window != windows_.end() && !window->second.destroyed && window->second.wndProc &&
-                                             !hasCoveringRootPopup(message.hwnd);
-                                  });
-        if (paint == guestMessages_.end()) return false;
-        const GuestMessage message = *paint;
-        guestMessages_.erase(paint);
+        if (pending.paintDispatches >= 32) return false;
+        auto queued = std::find_if(guestMessages_.begin(), guestMessages_.end(),
+                                   [&](const GuestMessage& message) {
+                                       auto window = windows_.find(message.hwnd);
+                                       if (window == windows_.end() || window->second.destroyed || !window->second.wndProc) {
+                                           return false;
+                                       }
+                                       const bool paintMessage = message.message == 0x0014 || message.message == 0x000f;
+                                       return !paintMessage || !hasCoveringRootPopup(message.hwnd);
+                                   });
+        if (queued == guestMessages_.end()) return false;
+        const GuestMessage message = *queued;
+        guestMessages_.erase(queued);
         auto window = windows_.find(message.hwnd);
         uint32_t wndProc = translatedWndProc(window->second.wndProc, pending.name.c_str());
         ++pending.paintDispatches;
@@ -5701,7 +5724,7 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
             pumpHostMessages();
             return;
         }
-        if (hasRunnableGuestThread()) {
+        if (guestMessages_.empty() && hasRunnableGuestThread()) {
             switchToRunnableGuestThread(name.c_str());
             pumpHostMessages();
             return;
