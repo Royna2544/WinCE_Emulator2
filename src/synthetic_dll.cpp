@@ -42,6 +42,7 @@
 namespace {
 constexpr uint32_t kErrorFileNotFound = 2;
 constexpr uint32_t kErrorPathNotFound = 3;
+constexpr uint32_t kWindowStyleChild = 0x40000000u; // WS_CHILD
 
 bool supportedSourceRasterOp(uint32_t rop) {
     switch (rop) {
@@ -2499,22 +2500,75 @@ std::pair<int32_t, int32_t> SyntheticDllRuntime::guestWindowOrigin(uint32_t hwnd
         if (it == windows_.end()) break;
         x += it->second.x;
         y += it->second.y;
-        current = it->second.parent;
+        current = (it->second.style & kWindowStyleChild) ? it->second.parent : 0;
     }
     return {x, y};
 }
 
+void SyntheticDllRuntime::retireOwnedPopupsCoveredByChild(uint32_t childHwnd) {
+    auto child = windows_.find(childHwnd);
+    if (child == windows_.end() || child->second.destroyed || !child->second.visible ||
+        !(child->second.style & kWindowStyleChild) || !child->second.parent) {
+        return;
+    }
+    auto parent = windows_.find(child->second.parent);
+    if (parent == windows_.end() || parent->second.destroyed || parent->second.parent) {
+        return;
+    }
+    const auto [childX, childY] = guestWindowOrigin(childHwnd);
+    const auto [parentX, parentY] = guestWindowOrigin(child->second.parent);
+    if (childX > parentX || childY > parentY ||
+        childX + child->second.width < parentX + parent->second.width ||
+        childY + child->second.height < parentY + parent->second.height) {
+        return;
+    }
+
+    std::vector<uint32_t> retired;
+    for (auto& [hwnd, window] : windows_) {
+        if (!window.visible || window.destroyed || window.parent != child->second.parent ||
+            (window.style & kWindowStyleChild)) {
+            continue;
+        }
+        const auto [popupX, popupY] = guestWindowOrigin(hwnd);
+        if (popupX > parentX || popupY > parentY ||
+            popupX + window.width < parentX + parent->second.width ||
+            popupY + window.height < parentY + parent->second.height) {
+            continue;
+        }
+        restoreGuestWindowBacking(hwnd, window);
+        window.visible = false;
+        window.backingValid = false;
+        window.backingPixels.clear();
+        retired.push_back(hwnd);
+    }
+
+    if (retired.empty()) return;
+    guestMessages_.erase(std::remove_if(guestMessages_.begin(), guestMessages_.end(),
+                                        [&](const GuestMessage& message) {
+                                            return std::find(retired.begin(), retired.end(), message.hwnd) != retired.end();
+                                        }),
+                         guestMessages_.end());
+    for (uint32_t hwnd : retired) {
+        spdlog::info("retired covered owned popup hwnd=0x{:08x} after child=0x{:08x} covered parent=0x{:08x}",
+                     hwnd, childHwnd, child->second.parent);
+    }
+}
+
 void SyntheticDllRuntime::captureGuestWindowBacking(uint32_t hwnd) {
     auto it = windows_.find(hwnd);
-    if (it == windows_.end() || !it->second.parent || it->second.backingValid ||
+    if (it == windows_.end()) return;
+    const bool childWindow = (it->second.style & kWindowStyleChild) != 0;
+    const bool ownedPopup = isOwnedPopupWindow(hwnd);
+    const uint32_t visualParent = (childWindow || ownedPopup) ? it->second.parent : 0;
+    if (!visualParent || it->second.backingValid ||
         !framebuffer_ || framebufferWidth_ <= 0 || framebufferHeight_ <= 0 ||
         it->second.width <= 0 || it->second.height <= 0) {
         return;
     }
-    auto parent = windows_.find(it->second.parent);
+    auto parent = windows_.find(visualParent);
     if (parent == windows_.end()) return;
-    const bool popupLike = (it->second.style & 0x80000000u) != 0; // WS_POPUP
-    if (!parent->second.parent && !popupLike) return;
+    if (childWindow && !parent->second.parent) return;
+    if (ownedPopup && parent->second.parent) return;
 
     const auto [originX, originY] = guestWindowOrigin(hwnd);
     const int32_t left = std::clamp<int32_t>(originX, 0, framebufferWidth_);
@@ -2615,9 +2669,15 @@ bool SyntheticDllRuntime::isWindowOrDescendant(uint32_t hwnd, uint32_t ancestor)
         if (current == ancestor) return true;
         auto it = windows_.find(current);
         if (it == windows_.end()) break;
-        current = it->second.parent;
+        current = (it->second.style & kWindowStyleChild) ? it->second.parent : 0;
     }
     return false;
+}
+
+bool SyntheticDllRuntime::isOwnedPopupWindow(uint32_t hwnd) const {
+    auto it = windows_.find(hwnd);
+    return it != windows_.end() && it->second.parent &&
+           !(it->second.style & kWindowStyleChild);
 }
 
 uint32_t SyntheticDllRuntime::readFramebufferTargetPixel(uint32_t targetHwnd,
@@ -2626,21 +2686,23 @@ uint32_t SyntheticDllRuntime::readFramebufferTargetPixel(uint32_t targetHwnd,
     if (!framebuffer_ || x < 0 || y < 0 || x >= framebufferWidth_ || y >= framebufferHeight_) {
         return 0xff000000u;
     }
-    for (const auto& [hwnd, window] : windows_) {
-        if (!window.visible || !window.backingValid || window.backingPixels.empty() ||
-            window.backingWidth <= 0 || window.backingHeight <= 0 ||
-            isWindowOrDescendant(targetHwnd, hwnd)) {
-            continue;
+    if (!isOwnedPopupWindow(targetHwnd)) {
+        for (const auto& [hwnd, window] : windows_) {
+            if (!window.visible || !window.backingValid || window.backingPixels.empty() ||
+                window.backingWidth <= 0 || window.backingHeight <= 0 ||
+                isWindowOrDescendant(targetHwnd, hwnd)) {
+                continue;
+            }
+            if (targetHwnd && hwnd < targetHwnd) continue;
+            if (x < window.backingX || y < window.backingY ||
+                x >= window.backingX + window.backingWidth ||
+                y >= window.backingY + window.backingHeight) {
+                continue;
+            }
+            const size_t offset = size_t(y - window.backingY) * size_t(window.backingWidth) +
+                                  size_t(x - window.backingX);
+            if (offset < window.backingPixels.size()) return window.backingPixels[offset];
         }
-        if (targetHwnd && hwnd < targetHwnd) continue;
-        if (x < window.backingX || y < window.backingY ||
-            x >= window.backingX + window.backingWidth ||
-            y >= window.backingY + window.backingHeight) {
-            continue;
-        }
-        const size_t offset = size_t(y - window.backingY) * size_t(window.backingWidth) +
-                              size_t(x - window.backingX);
-        if (offset < window.backingPixels.size()) return window.backingPixels[offset];
     }
     return framebuffer_[size_t(y) * size_t(framebufferWidth_) + size_t(x)];
 }
@@ -2653,23 +2715,25 @@ void SyntheticDllRuntime::writeFramebufferTargetPixel(uint32_t targetHwnd,
         return;
     }
     bool covered = false;
-    for (auto& [hwnd, window] : windows_) {
-        if (!window.visible || !window.backingValid || window.backingPixels.empty() ||
-            window.backingWidth <= 0 || window.backingHeight <= 0 ||
-            isWindowOrDescendant(targetHwnd, hwnd)) {
-            continue;
-        }
-        if (targetHwnd && hwnd < targetHwnd) continue;
-        if (x < window.backingX || y < window.backingY ||
-            x >= window.backingX + window.backingWidth ||
-            y >= window.backingY + window.backingHeight) {
-            continue;
-        }
-        const size_t offset = size_t(y - window.backingY) * size_t(window.backingWidth) +
-                              size_t(x - window.backingX);
-        if (offset < window.backingPixels.size()) {
-            window.backingPixels[offset] = pixel;
-            covered = true;
+    if (!isOwnedPopupWindow(targetHwnd)) {
+        for (auto& [hwnd, window] : windows_) {
+            if (!window.visible || !window.backingValid || window.backingPixels.empty() ||
+                window.backingWidth <= 0 || window.backingHeight <= 0 ||
+                isWindowOrDescendant(targetHwnd, hwnd)) {
+                continue;
+            }
+            if (targetHwnd && hwnd < targetHwnd) continue;
+            if (x < window.backingX || y < window.backingY ||
+                x >= window.backingX + window.backingWidth ||
+                y >= window.backingY + window.backingHeight) {
+                continue;
+            }
+            const size_t offset = size_t(y - window.backingY) * size_t(window.backingWidth) +
+                                  size_t(x - window.backingX);
+            if (offset < window.backingPixels.size()) {
+                window.backingPixels[offset] = pixel;
+                covered = true;
+            }
         }
     }
     if (!covered) framebuffer_[size_t(y) * size_t(framebufferWidth_) + size_t(x)] = pixel;
@@ -2727,7 +2791,7 @@ uint32_t SyntheticDllRuntime::windowAtPoint(uint32_t rootGuestHwnd, int32_t x, i
             if (current == rootGuestHwnd) return true;
             auto it = windows_.find(current);
             if (it == windows_.end()) break;
-            current = it->second.parent;
+            current = (it->second.style & kWindowStyleChild) ? it->second.parent : 0;
         }
         return false;
     };
@@ -2739,7 +2803,7 @@ uint32_t SyntheticDllRuntime::windowAtPoint(uint32_t rootGuestHwnd, int32_t x, i
             if (it == windows_.end()) break;
             ox += it->second.x;
             oy += it->second.y;
-            current = it->second.parent;
+            current = (it->second.style & kWindowStyleChild) ? it->second.parent : 0;
         }
         return std::pair<int32_t, int32_t>{ox, oy};
     };
@@ -2783,7 +2847,7 @@ void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t
             if (it == windows_.end()) break;
             x += it->second.x;
             y += it->second.y;
-            current = it->second.parent;
+            current = (it->second.style & kWindowStyleChild) ? it->second.parent : 0;
         }
         return std::pair<int32_t, int32_t>{x, y};
     };
@@ -6730,7 +6794,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             if (it == windows_.end()) break;
             x += it->second.x;
             y += it->second.y;
-            current = it->second.parent;
+            current = (it->second.style & kWindowStyleChild) ? it->second.parent : 0;
         }
         return std::pair<int32_t, int32_t>{x, y};
     };
@@ -8385,7 +8449,8 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
         } else if (a1 == 5) {
             ret = 0;
             for (const auto& [hwnd, window] : windows_) {
-                if (!window.destroyed && window.parent == a0) {
+                if (!window.destroyed && window.parent == a0 &&
+                    (window.style & kWindowStyleChild)) {
                     ret = hwnd;
                     break;
                 }
@@ -8393,12 +8458,16 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
             lastError_ = ret ? 0 : 1400;
         } else if (a1 == 4) {
             const auto owner = windows_.find(it->second.parent);
-            ret = owner != windows_.end() && !owner->second.destroyed ? it->second.parent : 0;
+            ret = !(it->second.style & kWindowStyleChild) &&
+                  owner != windows_.end() && !owner->second.destroyed ? it->second.parent : 0;
             lastError_ = ret ? 0 : 1400;
         } else if (a1 == 2 || a1 == 3) {
             std::vector<uint32_t> siblings;
             for (const auto& [hwnd, window] : windows_) {
-                if (!window.destroyed && window.parent == it->second.parent) siblings.push_back(hwnd);
+                if (!window.destroyed && window.parent == it->second.parent &&
+                    ((window.style & kWindowStyleChild) == (it->second.style & kWindowStyleChild))) {
+                    siblings.push_back(hwnd);
+                }
             }
             auto pos = std::find(siblings.begin(), siblings.end(), a0);
             if (pos == siblings.end()) {
@@ -8414,7 +8483,8 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
         } else if (a1 == 0 || a1 == 1) {
             ret = 0;
             for (const auto& [hwnd, window] : windows_) {
-                if (!window.destroyed && window.parent == it->second.parent) {
+                if (!window.destroyed && window.parent == it->second.parent &&
+                    ((window.style & kWindowStyleChild) == (it->second.style & kWindowStyleChild))) {
                     ret = hwnd;
                     if (a1 == 0) break;
                 }
@@ -8457,6 +8527,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
                 message.time = uint32_t(++tick_ * 16);
                 guestMessages_.push_back(message);
             }
+            retireOwnedPopupsCoveredByChild(a0);
             lastError_ = 0;
             ret = 1;
         }
@@ -8513,6 +8584,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(const std::string& name,
                 message.time = uint32_t(++tick_ * 16);
                 guestMessages_.push_back(message);
             }
+            retireOwnedPopupsCoveredByChild(a0);
             if (it->second.visible != oldVisible) {
                 GuestMessage message{};
                 message.hwnd = a0;
@@ -10044,7 +10116,19 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         auto& pending = pendingUpdateWindows_.back();
         auto window = windows_.find(pending.hwnd);
         uint32_t wndProc = pending.wndProc;
-        if (window != windows_.end() && window->second.wndProc) wndProc = window->second.wndProc;
+        if (window == windows_.end() || window->second.destroyed || !window->second.visible) {
+            const uint32_t originalRa = pending.originalRa;
+            const uint32_t hwnd = pending.hwnd;
+            pendingUpdateWindows_.pop_back();
+            lastError_ = 0;
+            setReg(UC_MIPS_REG_V0, 1);
+            setReg(UC_MIPS_REG_RA, originalRa);
+            setReg(UC_MIPS_REG_PC, originalRa);
+            spdlog::info("UpdateWindow skipped invisible/destroyed hwnd=0x{:08x}", hwnd);
+            pumpHostMessages();
+            return;
+        }
+        if (window->second.wndProc) wndProc = window->second.wndProc;
         wndProc = translatedWndProc(wndProc, "UpdateWindow");
         if (pending.stage == 0) {
             pending.stage = 1;
@@ -10130,6 +10214,13 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
             lastError_ = 1400;
             setReg(UC_MIPS_REG_V0, 0);
             pumpHostMessages();
+            return;
+        }
+        if (!it->second.visible) {
+            lastError_ = 0;
+            setReg(UC_MIPS_REG_V0, 1);
+            pumpHostMessages();
+            spdlog::info("UpdateWindow ignored invisible hwnd=0x{:08x}", a0);
             return;
         }
         uint32_t wndProc = translatedWndProc(it->second.wndProc, "UpdateWindow");

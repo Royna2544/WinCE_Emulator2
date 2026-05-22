@@ -441,10 +441,12 @@ private:
     void invalidateHostWindows();
     void queueGuestPaint(uint32_t hwnd, bool erase);
     std::pair<int32_t, int32_t> guestWindowOrigin(uint32_t hwnd) const;
+    void retireOwnedPopupsCoveredByChild(uint32_t childHwnd);
     void captureGuestWindowBacking(uint32_t hwnd);
     bool restoreGuestWindowBacking(uint32_t hwnd, GuestWindow& window);
     void eraseGuestWindowArea(uint32_t hwnd, const GuestWindow& window);
     bool isWindowOrDescendant(uint32_t hwnd, uint32_t ancestor) const;
+    bool isOwnedPopupWindow(uint32_t hwnd) const;
     uint32_t readFramebufferTargetPixel(uint32_t targetHwnd, int32_t x, int32_t y) const;
     void writeFramebufferTargetPixel(uint32_t targetHwnd, int32_t x, int32_t y, uint32_t pixel);
     void pumpHostMessages();
