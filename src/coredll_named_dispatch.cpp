@@ -1027,9 +1027,9 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
                     childArgs.emplace_back(L"--registry");
                     childArgs.push_back(registryPath_.wstring());
                 }
-                if (!gpsCommPort_.empty()) {
-                    childArgs.emplace_back(L"--gps-comm");
-                    childArgs.push_back(widenUtf8Lossy(gpsCommPort_));
+                if (!serialDeviceMapPath_.empty()) {
+                    childArgs.emplace_back(L"--serial-map");
+                    childArgs.push_back(serialDeviceMapPath_.wstring());
                 }
                 if (!commandLine.empty()) {
                     childArgs.emplace_back(L"--guest-command-line");

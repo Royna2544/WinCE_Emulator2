@@ -47,7 +47,7 @@ public:
     void setRegistryPath(const std::filesystem::path& path);
     void setFileSystemRoots(std::vector<std::filesystem::path> roots);
     void setSdmmcPath(std::string path);
-    void setGpsCommPort(std::string port);
+    void setSerialDeviceMapPath(const std::filesystem::path& path);
     void registerLoadedModule(const std::string& moduleName, const std::filesystem::path& path, uint32_t base,
                               const std::map<std::string, uint32_t>& exportsByName = {},
                               const std::map<uint16_t, uint32_t>& exportsByOrdinal = {});
@@ -467,6 +467,16 @@ private:
         uintptr_t hostValue{};
         uint32_t filePointer{};
     };
+    struct SerialDeviceConfig {
+        std::string guest;
+        std::string type;
+        std::string backend;
+        std::string host;
+        bool enabled{};
+        uint32_t baud{9600};
+        std::string mode{"8N1"};
+        std::string note;
+    };
     struct GuestWindowClass {
         std::array<uint8_t, 40> bytes{};
         std::string name;
@@ -800,7 +810,10 @@ private:
     std::filesystem::path registryPath_;
     nlohmann::json registry_;
     bool registryDirty_{};
-    std::string gpsCommPort_;
+    std::filesystem::path serialDeviceMapPath_;
+    std::map<std::string, SerialDeviceConfig> serialDevicesByGuest_;
+    uint32_t defaultSerialBaud_{9600};
+    std::string defaultSerialMode_{"8N1"};
     bool diagnosticDumpsEnabled_{};
 
     std::optional<SyntheticModule> createCoredll();

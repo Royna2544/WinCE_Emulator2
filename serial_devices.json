@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "defaults": {
+    "baud": 9600,
+    "mode": "8N1"
+  },
+  "devices": [
+    {
+      "guest": "COM1:",
+      "type": "serial",
+      "backend": "win32_com",
+      "host": "COM21",
+      "enabled": true,
+      "note": "GPS Sensor; real device Drivers\\BuiltIn\\VSP, VSP.dll, GPS NMEA output confirmed, 9600 8N1"
+    },
+    {
+      "guest": "COM3:",
+      "type": "serial",
+      "backend": "stub",
+      "enabled": true,
+      "note": "Drivers\\BuiltIn\\Serial3, au16550.dll, real UART candidate, 9600 8N1, no automatic RX observed"
+    },
+    {
+      "guest": "UID1:",
+      "type": "ioctl_device",
+      "backend": "stub",
+      "enabled": true,
+      "note": "Drivers\\BuiltIn\\NANDUUID, NANDUUID.dll, NAND UUID custom device"
+    },
+    {
+      "guest": "PIC1:",
+      "type": "ioctl_device",
+      "backend": "stub",
+      "enabled": true,
+      "note": "Drivers\\BuiltIn\\pic_drv, pic_drv.dll, secondary MCU or PIC-family candidate"
+    },
+    {
+      "guest": "BTN1:",
+      "type": "ioctl_device",
+      "backend": "stub",
+      "enabled": true,
+      "note": "Drivers\\BuiltIn\\Button, button.dll, button driver"
+    },
+    {
+      "guest": "LSD1:",
+      "type": "ioctl_device",
+      "backend": "stub",
+      "enabled": true,
+      "note": "Drivers\\BuiltIn\\light_sensor_drv, light_sensor_drv.dll, light sensor"
+    },
+    {
+      "guest": "MFS1:",
+      "type": "ioctl_device",
+      "backend": "stub",
+      "enabled": true,
+      "note": "Drivers\\BuiltIn\\YAS526B, YAS526B.dll, magnetic field sensor and e-compass candidate"
+    },
+    {
+      "guest": "SMB1:",
+      "type": "ioctl_device",
+      "backend": "stub",
+      "enabled": true,
+      "note": "Drivers\\BuiltIn\\SMB380, SMB380.dll, accelerometer candidate"
+    },
+    {
+      "guest": "CAM1:",
+      "type": "ioctl_device",
+      "backend": "stub",
+      "enabled": true,
+      "note": "Drivers\\BuiltIn\\Camera, camera.dll, camera"
+    },
+    {
+      "guest": "TWV1:",
+      "type": "ioctl_device",
+      "backend": "stub",
+      "enabled": true,
+      "note": "Drivers\\BuiltIn\\TW9900, TW9900.dll, video input/decoder candidate"
+    }
+  ]
+}

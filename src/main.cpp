@@ -659,7 +659,7 @@ static int runImage(PeImage &pe, const std::vector<fs::path> &dllSearchDirs,
                     const std::vector<fs::path> &fileSystemRoots,
                     const std::optional<fs::path> &registryPath,
                     Framebuffer &fb,
-                    const std::optional<std::string> &gpsCommPort,
+                    const std::optional<fs::path> &serialMapPath,
                     const std::string &sdmmcPath,
                     const std::wstring &guestCommandLine, bool headless,
                     uint64_t instructionLimit) {
@@ -681,8 +681,8 @@ static int runImage(PeImage &pe, const std::vector<fs::path> &dllSearchDirs,
     synthetic.setFramebuffer(fb.bgra.data(), fb.w, fb.h);
     if (registryPath)
       synthetic.setRegistryPath(*registryPath);
-    if (gpsCommPort)
-      synthetic.setGpsCommPort(*gpsCommPort);
+    if (serialMapPath)
+      synthetic.setSerialDeviceMapPath(*serialMapPath);
     uc_hook syntheticHook{};
     uc_hook_add(uc, &syntheticHook, UC_HOOK_CODE,
                 (void *)SyntheticDllRuntime::hookCode, &synthetic, 0x70000000,
@@ -750,13 +750,13 @@ int wmain(int argc, wchar_t **argv) {
       spdlog::error(
           "usage: iNavi_Unicorn_Emulator.exe <primary.exe> [--registry "
           "regs.json] [--fs-root data_dir] [--sdmmc-path \"\\\\SDMMC Disk\"] "
-          "[--gps-comm COM10] [--guest-command-line text] [--headless] "
+          "[--serial-map devices.json] [--guest-command-line text] [--headless] "
           "[dll_search_dir ...]");
       return 1;
     }
     fs::path exe = fs::path(argv[1]);
     std::optional<fs::path> registryPath;
-    std::optional<std::string> gpsCommPort;
+    std::optional<fs::path> serialMapPath;
     std::string sdmmcPath = "\\SDMMC Disk";
     std::wstring guestCommandLine;
     std::vector<fs::path> dllSearchDirs;
@@ -777,12 +777,12 @@ int wmain(int argc, wchar_t **argv) {
           return 1;
         }
         fileSystemRoots.emplace_back(argv[++i]);
-      } else if (arg == L"--gps-comm") {
+      } else if (arg == L"--serial-map") {
         if (i + 1 >= argc) {
-          spdlog::error("--gps-comm requires a host COM port such as COM10");
+          spdlog::error("--serial-map requires a JSON mapping path");
           return 1;
         }
-        gpsCommPort = narrowWideLossy(argv[++i]);
+        serialMapPath = fs::path(argv[++i]);
       } else if (arg == L"--sdmmc-path") {
         if (i + 1 >= argc) {
           spdlog::error(
@@ -812,8 +812,8 @@ int wmain(int argc, wchar_t **argv) {
     spdlog::info("target: {}", exe.string());
     if (registryPath)
       spdlog::info("registry: {}", registryPath->string());
-    if (gpsCommPort)
-      spdlog::info("gps comm: {}", *gpsCommPort);
+    if (serialMapPath)
+      spdlog::info("serial map: {}", serialMapPath->string());
     if (!guestCommandLine.empty())
       spdlog::info("guest command line: {}", narrowWideLossy(guestCommandLine));
     spdlog::info("sdmmc path: {}", sdmmcPath);
@@ -832,7 +832,7 @@ int wmain(int argc, wchar_t **argv) {
     if (writeFrameDumps)
       writePpm("frame_000_loader.ppm", fb, 0);
     int rc = runImage(pe, dllSearchDirs, fileSystemRoots, registryPath, fb,
-                      gpsCommPort, sdmmcPath, guestCommandLine, headless,
+                      serialMapPath, sdmmcPath, guestCommandLine, headless,
                       instructionLimit);
     if (writeFrameDumps)
       writePpm("frame_001_after_unicorn.ppm", fb, 1);

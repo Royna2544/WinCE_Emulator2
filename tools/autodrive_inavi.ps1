@@ -2,6 +2,7 @@ param(
     [string]$Emulator = ".\x64\Debug\iNavi_Unicorn_Emulator.exe",
     [string]$Target = "C:\Users\royna\Downloads\INAVI\INavi\INavi.exe",
     [string]$Registry = ".\regs.json",
+    [string]$SerialMap = ".\serial_devices.json",
     [string]$SdmmcPath = "\SDMMC Disk",
     [string[]]$FsRoot = @(
         "C:\Users\royna\Downloads\INAVI",
@@ -264,12 +265,14 @@ $stderrPath = Join-Path $runDir "emulator.stderr.log"
 $manifestPath = Join-Path $runDir "manifest.json"
 
 $argumentList = @($Target, "--registry", $Registry, "--sdmmc-path", $SdmmcPath)
+if ($SerialMap) {
+    $argumentList += @("--serial-map", $SerialMap)
+}
 foreach ($root in $FsRoot) {
     $argumentList += @("--fs-root", $root)
 }
 $argumentList += @("--instructions", [string]$Instructions)
 $argumentList += $DllSearchDir
-$argumentList += @("--gps-comm", "COM7")
 
 $emulatorPath = (Resolve-Path $Emulator).Path
 $workingDirectory = (Resolve-Path ".").Path

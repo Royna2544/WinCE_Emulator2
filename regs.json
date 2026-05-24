@@ -331,6 +331,230 @@
         }
       }
     },
+    "hklm\\drivers\\builtin\\button": {
+      "values": {
+        "dll": {
+          "data": "button.dll",
+          "type": "REG_SZ"
+        },
+        "index": {
+          "data": 1,
+          "type": "REG_DWORD"
+        },
+        "order": {
+          "data": 16,
+          "type": "REG_DWORD"
+        },
+        "prefix": {
+          "data": "BTN",
+          "type": "REG_SZ"
+        }
+      }
+    },
+    "hklm\\drivers\\builtin\\camera": {
+      "values": {
+        "dll": {
+          "data": "camera.dll",
+          "type": "REG_SZ"
+        },
+        "index": {
+          "data": 1,
+          "type": "REG_DWORD"
+        },
+        "order": {
+          "data": 16,
+          "type": "REG_DWORD"
+        },
+        "prefix": {
+          "data": "CAM",
+          "type": "REG_SZ"
+        }
+      }
+    },
+    "hklm\\drivers\\builtin\\light_sensor_drv": {
+      "values": {
+        "dll": {
+          "data": "light_sensor_drv.dll",
+          "type": "REG_SZ"
+        },
+        "index": {
+          "data": 1,
+          "type": "REG_DWORD"
+        },
+        "order": {
+          "data": 16,
+          "type": "REG_DWORD"
+        },
+        "prefix": {
+          "data": "LSD",
+          "type": "REG_SZ"
+        }
+      }
+    },
+    "hklm\\drivers\\builtin\\nanduuid": {
+      "values": {
+        "dll": {
+          "data": "NANDUUID.dll",
+          "type": "REG_SZ"
+        },
+        "index": {
+          "data": 1,
+          "type": "REG_DWORD"
+        },
+        "order": {
+          "data": 17,
+          "type": "REG_DWORD"
+        },
+        "prefix": {
+          "data": "UID",
+          "type": "REG_SZ"
+        }
+      }
+    },
+    "hklm\\drivers\\builtin\\pic_drv": {
+      "values": {
+        "dll": {
+          "data": "pic_drv.dll",
+          "type": "REG_SZ"
+        },
+        "index": {
+          "data": 1,
+          "type": "REG_DWORD"
+        },
+        "order": {
+          "data": 17,
+          "type": "REG_DWORD"
+        },
+        "prefix": {
+          "data": "PIC",
+          "type": "REG_SZ"
+        }
+      }
+    },
+    "hklm\\drivers\\builtin\\serial3": {
+      "values": {
+        "devicearrayindex": {
+          "data": 3,
+          "type": "REG_DWORD"
+        },
+        "dll": {
+          "data": "au16550.dll",
+          "type": "REG_SZ"
+        },
+        "index": {
+          "data": 3,
+          "type": "REG_DWORD"
+        },
+        "order": {
+          "data": 0,
+          "type": "REG_DWORD"
+        },
+        "prefix": {
+          "data": "COM",
+          "type": "REG_SZ"
+        }
+      }
+    },
+    "hklm\\drivers\\builtin\\smb380": {
+      "values": {
+        "dll": {
+          "data": "SMB380.dll",
+          "type": "REG_SZ"
+        },
+        "index": {
+          "data": 1,
+          "type": "REG_DWORD"
+        },
+        "order": {
+          "data": 1,
+          "type": "REG_DWORD"
+        },
+        "prefix": {
+          "data": "SMB",
+          "type": "REG_SZ"
+        }
+      }
+    },
+    "hklm\\drivers\\builtin\\tw9900": {
+      "values": {
+        "dll": {
+          "data": "TW9900.dll",
+          "type": "REG_SZ"
+        },
+        "index": {
+          "data": 1,
+          "type": "REG_DWORD"
+        },
+        "order": {
+          "data": 9,
+          "type": "REG_DWORD"
+        },
+        "prefix": {
+          "data": "TWV",
+          "type": "REG_SZ"
+        }
+      }
+    },
+    "hklm\\drivers\\builtin\\vsp": {
+      "values": {
+        "dll": {
+          "data": "VSP.dll",
+          "type": "REG_SZ"
+        },
+        "index": {
+          "data": 1,
+          "type": "REG_DWORD"
+        },
+        "order": {
+          "data": 130,
+          "type": "REG_DWORD"
+        },
+        "prefix": {
+          "data": "COM",
+          "type": "REG_SZ"
+        }
+      }
+    },
+    "hklm\\drivers\\builtin\\vsp2": {
+      "values": {
+        "dll": {
+          "data": "VSP.dll",
+          "type": "REG_SZ"
+        },
+        "index": {
+          "data": 2,
+          "type": "REG_DWORD"
+        },
+        "order": {
+          "data": 131,
+          "type": "REG_DWORD"
+        },
+        "prefix": {
+          "data": "COM",
+          "type": "REG_SZ"
+        }
+      }
+    },
+    "hklm\\drivers\\builtin\\yas526b": {
+      "values": {
+        "dll": {
+          "data": "YAS526B.dll",
+          "type": "REG_SZ"
+        },
+        "index": {
+          "data": 1,
+          "type": "REG_DWORD"
+        },
+        "order": {
+          "data": 1,
+          "type": "REG_DWORD"
+        },
+        "prefix": {
+          "data": "MFS",
+          "type": "REG_SZ"
+        }
+      }
+    },
     "hklm\\software": {
       "values": {}
     },

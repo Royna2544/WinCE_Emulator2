@@ -277,6 +277,14 @@ bool isGuestDevicePath(const std::string& guestPath) {
     return hasDigit;
 }
 
+std::string normalizeGuestDeviceName(std::string guestPath) {
+    while (!guestPath.empty() && std::isspace(static_cast<unsigned char>(guestPath.front()))) guestPath.erase(guestPath.begin());
+    while (!guestPath.empty() && std::isspace(static_cast<unsigned char>(guestPath.back()))) guestPath.pop_back();
+    if (guestPath.rfind("\\\\.\\", 0) == 0) guestPath.erase(0, 4);
+    if (!guestPath.empty() && guestPath.back() != ':') guestPath.push_back(':');
+    return lowerAscii(std::move(guestPath));
+}
+
 #if defined(_WIN32)
 std::wstring normalizeHostCommPort(std::string port) {
     while (!port.empty() && std::isspace(static_cast<unsigned char>(port.front()))) port.erase(port.begin());
@@ -292,6 +300,28 @@ std::wstring normalizeHostCommPort(std::string port) {
     std::wstring out = L"\\\\.\\";
     for (char ch : port) out.push_back(wchar_t(static_cast<unsigned char>(ch)));
     return out;
+}
+
+bool applySerialModeToDcb(DCB& dcb, uint32_t baud, const std::string& mode) {
+    if (!baud) return false;
+    std::string upper = mode.empty() ? "8N1" : mode;
+    for (char& ch : upper) ch = char(std::toupper(static_cast<unsigned char>(ch)));
+    if (upper.size() != 3 || upper[0] < '5' || upper[0] > '8') return false;
+    dcb.BaudRate = baud;
+    dcb.ByteSize = BYTE(upper[0] - '0');
+    switch (upper[1]) {
+    case 'N': dcb.Parity = NOPARITY; dcb.fParity = FALSE; break;
+    case 'O': dcb.Parity = ODDPARITY; dcb.fParity = TRUE; break;
+    case 'E': dcb.Parity = EVENPARITY; dcb.fParity = TRUE; break;
+    default: return false;
+    }
+    switch (upper[2]) {
+    case '1': dcb.StopBits = ONESTOPBIT; break;
+    case '2': dcb.StopBits = TWOSTOPBITS; break;
+    default: return false;
+    }
+    dcb.fBinary = TRUE;
+    return true;
 }
 
 std::string narrowAsciiLossy(const std::wstring& text) {
@@ -905,9 +935,104 @@ void SyntheticDllRuntime::setSdmmcPath(std::string path) {
     refreshGuestMainModulePath();
 }
 
-void SyntheticDllRuntime::setGpsCommPort(std::string port) {
-    gpsCommPort_ = std::move(port);
-    if (!gpsCommPort_.empty()) spdlog::info("gps comm requested: {}", gpsCommPort_);
+void SyntheticDllRuntime::setSerialDeviceMapPath(const std::filesystem::path& path) {
+    serialDeviceMapPath_ = path;
+    serialDevicesByGuest_.clear();
+    defaultSerialBaud_ = 9600;
+    defaultSerialMode_ = "8N1";
+    if (serialDeviceMapPath_.empty()) return;
+
+    std::ifstream input(serialDeviceMapPath_);
+    if (!input) {
+        throw std::runtime_error("failed to open serial device map: " + pathToUtf8(serialDeviceMapPath_));
+    }
+
+    nlohmann::json doc;
+    input >> doc;
+    if (!doc.is_object()) {
+        throw std::runtime_error("serial device map must be a JSON object: " + pathToUtf8(serialDeviceMapPath_));
+    }
+    if (!doc.contains("version") || !doc["version"].is_number_integer() || doc["version"].get<int>() != 1) {
+        throw std::runtime_error("unsupported serial device map version in " + pathToUtf8(serialDeviceMapPath_));
+    }
+
+    const std::set<std::string> rootFields{"version", "defaults", "devices"};
+    for (const auto& item : doc.items()) {
+        if (!rootFields.count(item.key())) {
+            throw std::runtime_error("unknown serial device map field: " + item.key());
+        }
+    }
+
+    if (doc.contains("defaults")) {
+        if (!doc["defaults"].is_object()) {
+            throw std::runtime_error("serial device map defaults must be an object");
+        }
+        const std::set<std::string> defaultFields{"baud", "mode"};
+        for (const auto& item : doc["defaults"].items()) {
+            if (!defaultFields.count(item.key())) {
+                throw std::runtime_error("unknown serial device map defaults field: " + item.key());
+            }
+        }
+        if (doc["defaults"].contains("baud")) defaultSerialBaud_ = doc["defaults"]["baud"].get<uint32_t>();
+        if (doc["defaults"].contains("mode")) defaultSerialMode_ = doc["defaults"]["mode"].get<std::string>();
+    }
+
+    if (!doc.contains("devices")) {
+        spdlog::info("serial device map: {} devices=0", pathToUtf8(serialDeviceMapPath_));
+        return;
+    }
+    if (!doc["devices"].is_array()) {
+        throw std::runtime_error("serial device map devices must be an array");
+    }
+
+    const std::set<std::string> deviceFields{"guest", "type", "backend", "host", "enabled", "note", "baud", "mode"};
+    for (const auto& device : doc["devices"]) {
+        if (!device.is_object()) {
+            throw std::runtime_error("serial device map devices entries must be objects");
+        }
+        for (const auto& item : device.items()) {
+            if (!deviceFields.count(item.key())) {
+                throw std::runtime_error("unknown serial device map device field: " + item.key());
+            }
+        }
+        if (!device.contains("guest") || !device["guest"].is_string()) {
+            throw std::runtime_error("serial device map device is missing string field: guest");
+        }
+        if (!device.contains("type") || !device["type"].is_string()) {
+            throw std::runtime_error("serial device map device is missing string field: type");
+        }
+
+        SerialDeviceConfig config;
+        config.guest = device["guest"].get<std::string>();
+        config.type = lowerAscii(device["type"].get<std::string>());
+        if (config.type == "ioctl") config.type = "ioctl_device";
+        config.backend = lowerAscii(device.value("backend", std::string("stub")));
+        config.host = device.value("host", std::string{});
+        config.enabled = device.value("enabled", false);
+        config.note = device.value("note", std::string{});
+        config.baud = device.value("baud", defaultSerialBaud_);
+        config.mode = device.value("mode", defaultSerialMode_);
+
+        if (config.type != "serial" && config.type != "ioctl_device") {
+            throw std::runtime_error("unsupported serial device map type for " + config.guest + ": " + config.type);
+        }
+        if (config.type == "serial") {
+            if (config.backend != "stub" && config.backend != "win32_com") {
+                throw std::runtime_error("unsupported serial backend for " + config.guest + ": " + config.backend);
+            }
+            if (config.enabled && config.backend == "win32_com" && config.host.empty()) {
+                throw std::runtime_error("enabled win32_com serial device requires host for " + config.guest);
+            }
+        } else if (config.backend != "stub") {
+            throw std::runtime_error("unsupported ioctl_device backend for " + config.guest + ": " + config.backend);
+        }
+
+        const std::string key = normalizeGuestDeviceName(config.guest);
+        serialDevicesByGuest_[key] = std::move(config);
+    }
+    spdlog::info("serial device map: {} devices={} defaults={} {}",
+                 pathToUtf8(serialDeviceMapPath_), serialDevicesByGuest_.size(),
+                 defaultSerialBaud_, defaultSerialMode_);
 }
 
 void SyntheticDllRuntime::setFramebuffer(uint32_t* bgra, int width, int height) {
@@ -2231,43 +2356,58 @@ uint32_t SyntheticDllRuntime::handleRegEnumValueW(uint32_t hkey, uint32_t index,
 }
 
 uint32_t SyntheticDllRuntime::openGuestSerialDevice(const std::string& guestPath, uint32_t access, uint32_t share) {
-#if defined(_WIN32)
-    const std::string lowerGuestPath = lowerAscii(guestPath);
-    bool guestIsCommPort = lowerGuestPath.size() >= 5 &&
-                           lowerGuestPath[0] == 'c' &&
-                           lowerGuestPath[1] == 'o' &&
-                           lowerGuestPath[2] == 'm' &&
-                           lowerGuestPath.back() == ':';
-    if (guestIsCommPort) {
-        for (size_t i = 3; i + 1 < lowerGuestPath.size(); ++i) {
-            if (lowerGuestPath[i] < '0' || lowerGuestPath[i] > '9') {
-                guestIsCommPort = false;
-                break;
-            }
+    const std::string deviceKey = normalizeGuestDeviceName(guestPath);
+    const auto mapped = serialDevicesByGuest_.find(deviceKey);
+    if (mapped != serialDevicesByGuest_.end()) {
+        const SerialDeviceConfig& config = mapped->second;
+        const std::string note = config.note.empty() ? std::string{} : " (" + config.note + ")";
+        if (!config.enabled || config.backend == "stub" || config.type == "ioctl_device") {
+            const uint32_t guest = makeGuestHandle({GuestHandle::Kind::GuestSerialDevice, 0, 0});
+            const char* state = config.enabled ? "stub" : "disabled";
+            fileHandleDebugNames_[guest] = guestPath + " -> " + config.type + " " + state + note;
+            lastError_ = 0;
+            spdlog::info("CreateFileW guest device=\"{}\" mapped type={} backend={} enabled={} guestHandle=0x{:08x} access=0x{:08x} share=0x{:08x}{}",
+                         guestPath, config.type, config.backend, config.enabled ? 1 : 0,
+                         guest, access, share, note);
+            return guest;
         }
-    }
-    if (!gpsCommPort_.empty() && guestIsCommPort) {
-        const std::wstring hostPort = normalizeHostCommPort(gpsCommPort_);
+
+#if defined(_WIN32)
+        const std::wstring hostPort = normalizeHostCommPort(config.host);
         const DWORD desiredAccess = access ? access : (GENERIC_READ | GENERIC_WRITE);
         HANDLE host = CreateFileW(hostPort.c_str(), desiredAccess, share, nullptr, OPEN_EXISTING,
                                   FILE_ATTRIBUTE_NORMAL, nullptr);
         const std::string displayName = narrowAsciiLossy(hostPort);
         if (host != INVALID_HANDLE_VALUE) {
+            DCB dcb{};
+            dcb.DCBlength = sizeof(dcb);
+            if (GetCommState(host, &dcb) && applySerialModeToDcb(dcb, config.baud, config.mode)) {
+                if (!SetCommState(host, &dcb)) {
+                    spdlog::warn("CreateFileW guest device=\"{}\" host=\"{}\" SetCommState failed lastError={} requested={} {}",
+                                 guestPath, displayName, GetLastError(), config.baud, config.mode);
+                }
+            }
+            COMMTIMEOUTS timeouts{};
+            timeouts.ReadIntervalTimeout = MAXDWORD;
+            SetCommTimeouts(host, &timeouts);
             const uint32_t guest = makeGuestHandle({GuestHandle::Kind::HostSerialDevice,
                                                     reinterpret_cast<uintptr_t>(host), 0});
-            fileHandleDebugNames_[guest] = guestPath + " -> " + displayName;
+            fileHandleDebugNames_[guest] = guestPath + " -> " + displayName + note;
             lastError_ = 0;
-            spdlog::info("CreateFileW guest device=\"{}\" host=\"{}\" guestHandle=0x{:08x} access=0x{:08x} share=0x{:08x}",
-                         guestPath, displayName, guest, desiredAccess, share);
+            spdlog::info("CreateFileW guest device=\"{}\" host=\"{}\" guestHandle=0x{:08x} access=0x{:08x} share=0x{:08x} serial={} {}{}",
+                         guestPath, displayName, guest, desiredAccess, share,
+                         config.baud, config.mode, note);
             return guest;
         }
-        spdlog::warn("CreateFileW guest device=\"{}\" host=\"{}\" unavailable lastError={}; using disconnected guest serial device",
-                     guestPath, displayName, GetLastError());
-    }
+        spdlog::warn("CreateFileW guest device=\"{}\" host=\"{}\" unavailable lastError={}; using stub guest device{}",
+                     guestPath, displayName, GetLastError(), note);
+#else
+        spdlog::warn("CreateFileW guest device=\"{}\" backend=win32_com unavailable on this host; using stub guest device{}",
+                     guestPath, note);
 #endif
+    }
     const uint32_t guest = makeGuestHandle({GuestHandle::Kind::GuestSerialDevice, 0, 0});
-    fileHandleDebugNames_[guest] = gpsCommPort_.empty() ? guestPath + " -> disconnected"
-                                                       : guestPath + " -> disconnected (" + gpsCommPort_ + ")";
+    fileHandleDebugNames_[guest] = guestPath + " -> disconnected";
     lastError_ = 0;
     spdlog::info("CreateFileW guest device=\"{}\" guestHandle=0x{:08x} disconnected access=0x{:08x} share=0x{:08x}",
                  guestPath, guest, access, share);
