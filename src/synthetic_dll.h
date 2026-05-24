@@ -5,6 +5,7 @@
 #include <nlohmann/json.hpp>
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <deque>
 #include <filesystem>
@@ -44,6 +45,7 @@ public:
     void queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t message, int32_t hostX, int32_t hostY);
     std::optional<SyntheticModule> createModule(const std::string& dllName);
     static void hookCode(uc_engine* uc, uint64_t address, uint32_t size, void* user);
+    static void hookBasicBlock(uc_engine* uc, uint64_t address, uint32_t size, void* user);
 
 private:
     enum class SyntheticModuleKind : uint8_t {
@@ -213,6 +215,7 @@ private:
         CoreDllReleaseMutex,
         CoreDllAtoi,
         CoreDllAtof,
+        CoreDllAtan,
         CoreDllCos,
         CoreDllHypot,
         CoreDllRand,
@@ -460,6 +463,7 @@ private:
         int32_t height{480};
         uintptr_t hostHwnd{};
         bool visible{};
+        bool enabled{true};
         bool destroyed{};
         bool paintBoundsValid{};
         int32_t paintLeft{};
@@ -628,6 +632,8 @@ private:
         uint32_t suspendCount{};
         uint32_t exitCode{};
         uint32_t waitHandle{};
+        std::vector<uint32_t> waitHandles;
+        bool waitAll{};
         GuestThreadRunState state{GuestThreadRunState::Suspended};
         GuestCpuContext context;
     };
@@ -646,6 +652,7 @@ private:
     uint32_t focusedWindow_ = 0;
     uint32_t capturedWindow_ = 0;
     uint32_t hostPointerCaptureWindow_ = 0;
+    uint32_t pendingSyntheticChildButtonUpWindow_ = 0;
     uint32_t strtokNext_ = 0;
     uint32_t comProxyVtable_ = 0;
     uint32_t comQueryInterfaceStub_ = 0;
@@ -675,6 +682,7 @@ private:
     std::map<uint32_t, GuestThreadState> guestThreads_;
     GuestCpuContext mainThreadContext_;
     uint32_t activeGuestThread_{};
+    uint32_t lastScheduledGuestThread_{};
     uint32_t nextGuestThreadId_{1};
     uint32_t mainThreadPseudoHandle_{0xfffffffeu};
     uint32_t mainProcessPseudoHandle_{0xffffffffu};
@@ -702,6 +710,12 @@ private:
     std::vector<PendingBlockingApi> pendingBlockingApis_;
     std::vector<PendingUpdateWindow> pendingUpdateWindows_;
     std::deque<GuestMessage> guestMessages_;
+    bool interactiveSliceActive_{};
+    bool interactiveSliceStopRequested_{};
+    uint32_t interactiveSliceBlockCounter_{};
+    uint64_t interactiveSliceInstructionBudget_{};
+    std::string interactiveSliceReason_;
+    std::chrono::steady_clock::time_point interactiveSliceDeadline_{};
     uint32_t lastMessagePos_{};
     uint32_t lastMessageTime_{};
     std::vector<uintptr_t> retainedHostWindows_;
@@ -918,6 +932,7 @@ private:
     bool handleReleaseMutex(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleAtoi(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleAtof(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleAtan(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleCos(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleHypot(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleRand(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
@@ -1076,6 +1091,7 @@ private:
     GuestHandle* lookupGuestHandle(uint32_t guestHandle);
     uint32_t closeGuestHandle(uint32_t guestHandle);
     uint32_t createPatternBrushFromBitmap(uint32_t bitmapHandle);
+    bool readGuestWaitHandles(uint32_t count, uint32_t handlesPtr, std::vector<uint32_t>& handles);
     uint32_t waitForMultipleGuestObjects(uint32_t count, uint32_t handlesPtr, bool waitAll);
     void initializeUserKData();
     void updateCurrentThreadKData(uint32_t currentThreadValue, uint32_t tlsBase);
@@ -1087,7 +1103,7 @@ private:
     void refreshCompletedHostWaveBuffers();
     void refreshSignaledGuestWaits();
     bool hasRunnableGuestThread();
-    bool switchToRunnableGuestThread(const char* reason, uint32_t returnAddress = 0);
+    bool switchToRunnableGuestThread(const char* reason, uint32_t returnAddress = 0, uint32_t preferredHandle = 0);
     bool yieldActiveGuestThread(const char* reason, uint32_t returnAddress = 0);
     bool finishActiveGuestThread(uint32_t exitCode);
     bool cooperateGuestThreadsAfterCall(const std::string& name, uint32_t returnAddress = 0);
@@ -1111,6 +1127,7 @@ private:
     void queueGuestPaint(uint32_t hwnd, bool erase);
     void prioritizeQueuedWindowMessages(uint32_t hwnd);
     void queueVisibleFullScreenPopupPaint(uint32_t hwnd);
+    void queueVisiblePopupPaint(uint32_t hwnd);
     std::pair<int32_t, int32_t> guestWindowOrigin(uint32_t hwnd) const;
     void noteGuestWindowPaint(uint32_t hwnd,
                               int32_t left,
@@ -1199,6 +1216,9 @@ private:
     const ResourceEntry* resourceFromHandle(uint32_t guestHandle) const;
     bool resourceNameMatches(const ResourceName& resourceName, uint32_t guestArg) const;
     bool writeGuestMessage(uint32_t address, const GuestMessage& message) const;
+    void beginInteractiveSlice(std::chrono::milliseconds wallBudget, const char* reason,
+                               uint64_t instructionBudget);
+    void endInteractiveSlice();
     uint32_t reg(int regId) const;
     void setReg(int regId, uint32_t value) const;
     uint32_t stackArg(uint32_t index) const;

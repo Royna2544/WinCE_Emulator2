@@ -19,6 +19,7 @@ param(
     [int]$StartupTimeoutMs = 45000,
     [int]$InitialSettleMs = 18000,
     [int]$AfterTapMs = 4500,
+    [AllowEmptyString()]
     [string]$Taps = "650,430,safety_ok;725,35,current_position;665,35,menu_grid;135,250,route_search;500,445,recent_destination",
     [string]$OutputRoot = ".\captures",
     [switch]$KeepAlive
@@ -70,6 +71,9 @@ public static class AutodriveNative {
 
     [DllImport("user32.dll", SetLastError=true)]
     public static extern bool ClientToScreen(IntPtr hwnd, ref POINT point);
+
+    [DllImport("user32.dll", SetLastError=true)]
+    public static extern bool PrintWindow(IntPtr hwnd, IntPtr hdcBlt, UInt32 flags);
 
     [DllImport("user32.dll")]
     public static extern bool SetForegroundWindow(IntPtr hwnd);
@@ -182,17 +186,32 @@ function Get-ClientInfo([IntPtr]$Hwnd) {
     }
 }
 
-function Save-ClientScreenshot([IntPtr]$Hwnd, [string]$Path) {
+function Save-WindowScreenshot([IntPtr]$Hwnd, [string]$Path) {
     [void][AutodriveNative]::ShowWindow($Hwnd, 9)
     [void][AutodriveNative]::SetForegroundWindow($Hwnd)
     Start-Sleep -Milliseconds 150
-    $info = Get-ClientInfo $Hwnd
-    $bitmap = New-Object Drawing.Bitmap $info.Width, $info.Height
+    $rect = New-Object AutodriveNative+RECT
+    if (-not [AutodriveNative]::GetWindowRect($Hwnd, [ref]$rect)) {
+        throw "GetWindowRect failed for HWND $Hwnd"
+    }
+    $width = [Math]::Max(1, $rect.Right - $rect.Left)
+    $height = [Math]::Max(1, $rect.Bottom - $rect.Top)
+    $bitmap = New-Object Drawing.Bitmap $width, $height
     $graphics = [Drawing.Graphics]::FromImage($bitmap)
+    $hdc = [IntPtr]::Zero
     try {
-        $graphics.CopyFromScreen($info.X, $info.Y, 0, 0, $bitmap.Size)
+        $hdc = $graphics.GetHdc()
+        $printed = [AutodriveNative]::PrintWindow($Hwnd, $hdc, 2)
+        $graphics.ReleaseHdc($hdc)
+        $hdc = [IntPtr]::Zero
+        if (-not $printed) {
+            $graphics.CopyFromScreen($rect.Left, $rect.Top, 0, 0, $bitmap.Size)
+        }
         $bitmap.Save($Path, [Drawing.Imaging.ImageFormat]::Png)
     } finally {
+        if ($hdc -ne [IntPtr]::Zero) {
+            $graphics.ReleaseHdc($hdc)
+        }
         $graphics.Dispose()
         $bitmap.Dispose()
     }
@@ -277,7 +296,7 @@ try {
         $events.Add([pscustomobject]@{ kind="window"; hwnd=$hwnd.ToInt64(); time=(Get-Date).ToString("o") })
         Start-Sleep -Milliseconds $InitialSettleMs
         $path = Join-Path $runDir "00_initial.png"
-        Save-ClientScreenshot $hwnd $path
+        Save-WindowScreenshot $hwnd $path
         $events.Add([pscustomobject]@{ kind="screenshot"; file=(Split-Path -Leaf $path); time=(Get-Date).ToString("o") })
 
         $index = 1
@@ -299,7 +318,7 @@ try {
             if (-not $process.HasExited) {
                 $safeLabel = ($tap.Label -replace '[^A-Za-z0-9_.-]', '_')
                 $path = Join-Path $runDir ("{0:00}_{1}.png" -f $index, $safeLabel)
-                Save-ClientScreenshot $hwnd $path
+                Save-WindowScreenshot $hwnd $path
                 $events.Add([pscustomobject]@{ kind="screenshot"; file=(Split-Path -Leaf $path); after=$tap.Label; time=(Get-Date).ToString("o") })
             }
             $index++

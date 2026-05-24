@@ -58,6 +58,13 @@ bool SyntheticDllRuntime::handleGetCommState(SyntheticExportCode code, const Gue
     }
     ret = ok ? 1 : 0;
     lastError_ = ok ? 0 : GetLastError();
+    auto debugName = fileHandleDebugNames_.find(args.a0);
+    const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+    spdlog::info("GetCommState host serial handle=0x{:08x} path=\"{}\" -> {} lastError={} baud={} byteSize={} parity={} stopBits={}",
+                 args.a0, debugPath, ret, lastError_, ok ? dcb.BaudRate : 0,
+                 ok ? static_cast<unsigned>(dcb.ByteSize) : 0,
+                 ok ? static_cast<unsigned>(dcb.Parity) : 0,
+                 ok ? static_cast<unsigned>(dcb.StopBits) : 0);
     return true;
 }
 
@@ -89,6 +96,13 @@ bool SyntheticDllRuntime::handleSetCommState(SyntheticExportCode code, const Gue
     }
     ret = ok ? 1 : 0;
     lastError_ = ok ? 0 : GetLastError();
+    auto debugName = fileHandleDebugNames_.find(args.a0);
+    const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+    spdlog::info("SetCommState host serial handle=0x{:08x} path=\"{}\" -> {} lastError={} baud={} byteSize={} parity={} stopBits={}",
+                 args.a0, debugPath, ret, lastError_, ok ? dcb.BaudRate : 0,
+                 ok ? static_cast<unsigned>(dcb.ByteSize) : 0,
+                 ok ? static_cast<unsigned>(dcb.Parity) : 0,
+                 ok ? static_cast<unsigned>(dcb.StopBits) : 0);
     return true;
 }
 
@@ -107,6 +121,12 @@ bool SyntheticDllRuntime::handleSetCommTimeouts(SyntheticExportCode code, const 
                     SetCommTimeouts(reinterpret_cast<HANDLE>(handle->hostValue), &timeouts);
     ret = ok ? 1 : 0;
     lastError_ = ok ? 0 : GetLastError();
+    auto debugName = fileHandleDebugNames_.find(args.a0);
+    const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+    spdlog::info("SetCommTimeouts host serial handle=0x{:08x} path=\"{}\" -> {} lastError={} interval={} readMultiplier={} readConstant={} writeMultiplier={} writeConstant={}",
+                 args.a0, debugPath, ret, lastError_, timeouts.ReadIntervalTimeout,
+                 timeouts.ReadTotalTimeoutMultiplier, timeouts.ReadTotalTimeoutConstant,
+                 timeouts.WriteTotalTimeoutMultiplier, timeouts.WriteTotalTimeoutConstant);
     return true;
 }
 

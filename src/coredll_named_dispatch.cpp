@@ -13,6 +13,7 @@
 #include <cwctype>
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <spdlog/spdlog.h>
@@ -158,6 +159,67 @@ std::string pathToUtf8(const std::filesystem::path& path) {
 std::string lowerAscii(std::string text) {
     for (char& ch : text) ch = char(std::tolower(static_cast<unsigned char>(ch)));
     return text;
+}
+
+std::wstring widenUtf8Lossy(const std::string& text) {
+    if (text.empty()) return {};
+    const int required = MultiByteToWideChar(CP_UTF8, 0, text.data(), int(text.size()), nullptr, 0);
+    if (required > 0) {
+        std::wstring wide(size_t(required), L'\0');
+        MultiByteToWideChar(CP_UTF8, 0, text.data(), int(text.size()), wide.data(), required);
+        return wide;
+    }
+    std::wstring wide;
+    wide.reserve(text.size());
+    for (unsigned char ch : text) wide.push_back(wchar_t(ch));
+    return wide;
+}
+
+std::wstring quoteCommandArg(std::wstring_view arg) {
+    if (arg.empty()) return L"\"\"";
+    const bool needsQuotes = arg.find_first_of(L" \t\n\v\"") != std::wstring_view::npos;
+    if (!needsQuotes) return std::wstring(arg);
+
+    std::wstring quoted = L"\"";
+    size_t backslashes = 0;
+    for (wchar_t ch : arg) {
+        if (ch == L'\\') {
+            ++backslashes;
+            continue;
+        }
+        if (ch == L'"') {
+            quoted.append(backslashes * 2 + 1, L'\\');
+            quoted.push_back(ch);
+            backslashes = 0;
+            continue;
+        }
+        quoted.append(backslashes, L'\\');
+        backslashes = 0;
+        quoted.push_back(ch);
+    }
+    quoted.append(backslashes * 2, L'\\');
+    quoted.push_back(L'"');
+    return quoted;
+}
+
+std::wstring buildCommandLine(const std::vector<std::wstring>& args) {
+    std::wstring commandLine;
+    for (const std::wstring& arg : args) {
+        if (!commandLine.empty()) commandLine.push_back(L' ');
+        commandLine += quoteCommandArg(arg);
+    }
+    return commandLine;
+}
+
+bool realChildProcessesEnabled() {
+    char value[32]{};
+    const DWORD chars = GetEnvironmentVariableA("INAVI_EMU_REAL_CHILD_PROCESS", value, DWORD(std::size(value)));
+    if (!chars) return true;
+    if (chars >= DWORD(std::size(value))) return true;
+    return std::strcmp(value, "0") != 0 &&
+           _stricmp(value, "false") != 0 &&
+           _stricmp(value, "no") != 0 &&
+           _stricmp(value, "off") != 0;
 }
 
 uint32_t guestAnsiCodePage(uint32_t codePage) {
@@ -782,7 +844,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
         if (!application.empty() && (hostApplication.empty() || !std::filesystem::exists(hostApplication))) {
             lastError_ = 2;
             ret = 0;
-        } else {
+        } else if (!realChildProcessesEnabled()) {
             const uint32_t processHandle = makeGuestHandle({GuestHandle::Kind::GuestProcess, 0, 0});
             const uint32_t threadHandle = makeGuestHandle({GuestHandle::Kind::GuestThread, 0, 0});
             if (processInfo) {
@@ -793,6 +855,97 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             }
             lastError_ = 0;
             ret = 1;
+            spdlog::info("CreateProcessW synthetic child placeholder app=\"{}\" process=0x{:08x} thread=0x{:08x}",
+                         application, processHandle, threadHandle);
+        } else {
+#if defined(_WIN32)
+            wchar_t emulatorPath[MAX_PATH]{};
+            const DWORD emulatorPathChars = GetModuleFileNameW(nullptr, emulatorPath, DWORD(std::size(emulatorPath)));
+            if (!emulatorPathChars || emulatorPathChars >= DWORD(std::size(emulatorPath))) {
+                lastError_ = GetLastError();
+                ret = 0;
+            } else {
+                std::vector<std::wstring> childArgs;
+                childArgs.emplace_back(emulatorPath);
+                childArgs.push_back(hostApplication.wstring());
+                childArgs.emplace_back(L"--sdmmc-path");
+                childArgs.push_back(widenUtf8Lossy(sdmmcGuestRoot_));
+                for (const auto& root : fileSystemRoots_) {
+                    childArgs.emplace_back(L"--fs-root");
+                    childArgs.push_back(root.wstring());
+                }
+                if (!registryPath_.empty()) {
+                    childArgs.emplace_back(L"--registry");
+                    childArgs.push_back(registryPath_.wstring());
+                }
+                if (!gpsCommPort_.empty()) {
+                    childArgs.emplace_back(L"--gps-comm");
+                    childArgs.push_back(widenUtf8Lossy(gpsCommPort_));
+                }
+                if (!commandLine.empty()) {
+                    childArgs.emplace_back(L"--guest-command-line");
+                    childArgs.push_back(widenUtf8Lossy(commandLine));
+                }
+                childArgs.emplace_back(L"--instructions");
+                childArgs.emplace_back(L"250000000");
+                childArgs.emplace_back(L"--headless");
+
+                std::wstring hostCommandLine = buildCommandLine(childArgs);
+                STARTUPINFOW startup{};
+                startup.cb = sizeof(startup);
+                PROCESS_INFORMATION hostPi{};
+                std::wstring workingDirectory = hostApplication.parent_path().wstring();
+                BOOL ok = CreateProcessW(emulatorPath,
+                                         hostCommandLine.data(),
+                                         nullptr,
+                                         nullptr,
+                                         TRUE,
+                                         CREATE_NO_WINDOW,
+                                         nullptr,
+                                         workingDirectory.empty() ? nullptr : workingDirectory.c_str(),
+                                         &startup,
+                                         &hostPi);
+                if (!ok) {
+                    lastError_ = GetLastError();
+                    ret = 0;
+                    spdlog::warn("CreateProcessW child emulator launch failed app=\"{}\" host=\"{}\" lastError={}",
+                                 application, pathToUtf8(hostApplication), lastError_);
+                } else {
+                    const uint32_t processHandle = makeGuestHandle({
+                        GuestHandle::Kind::GuestProcess,
+                        reinterpret_cast<uintptr_t>(hostPi.hProcess),
+                        hostPi.dwProcessId,
+                    });
+                    const uint32_t threadHandle = makeGuestHandle({
+                        GuestHandle::Kind::GuestThread,
+                        reinterpret_cast<uintptr_t>(hostPi.hThread),
+                        hostPi.dwThreadId,
+                    });
+                    if (processInfo) {
+                        writeU32(processInfo, processHandle);
+                        writeU32(processInfo + 4, threadHandle);
+                        writeU32(processInfo + 8, processHandle);
+                        writeU32(processInfo + 12, threadHandle);
+                    }
+                    lastError_ = 0;
+                    ret = 1;
+                    spdlog::info("CreateProcessW launched child emulator app=\"{}\" pid={} tid={} process=0x{:08x} thread=0x{:08x}",
+                                 application, hostPi.dwProcessId, hostPi.dwThreadId, processHandle, threadHandle);
+                }
+            }
+#else
+            lastError_ = 120;
+            ret = 0;
+#endif
+#if !defined(_WIN32)
+            (void)processInfo;
+#endif
+        }
+        if (!ret && processInfo) {
+            writeU32(processInfo, 0);
+            writeU32(processInfo + 4, 0);
+            writeU32(processInfo + 8, 0);
+            writeU32(processInfo + 12, 0);
         }
         spdlog::info("CreateProcessW app=\"{}\" host=\"{}\" cmd=\"{}\" pi=0x{:08x} -> {} lastError={}",
                      application, pathToUtf8(hostApplication), commandLine, processInfo, ret, lastError_);
@@ -1244,6 +1397,10 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             if (brush->second.colorRef != 0xffffffffu) {
                 fillDcRect(*dc, left, top, right, bottom, colorRefToPixel(brush->second.colorRef));
             }
+            if (std::abs(right - left) >= 200 && std::abs(bottom - top) >= 120) {
+                spdlog::info("FillRect large dc=0x{:08x} hwnd=0x{:08x} bitmap=0x{:08x} rect={},{}..{},{} color=0x{:08x}",
+                             a0, dc->hwnd, dc->selectedBitmap, left, top, right, bottom, brush->second.colorRef);
+            }
             lastError_ = 0;
             ret = 1;
         }
@@ -1260,6 +1417,11 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
                            int32_t(a1) + int32_t(a3),
                            int32_t(a2) + int32_t(stackArg(4)),
                            colorRefToPixel(brush->second.colorRef));
+            }
+            if (std::abs(int32_t(a3)) >= 200 && std::abs(int32_t(stackArg(4))) >= 120) {
+                spdlog::info("PatBlt large dc=0x{:08x} hwnd=0x{:08x} bitmap=0x{:08x} rect={},{} {}x{} color=0x{:08x} rop=0x{:08x}",
+                             a0, dc->hwnd, dc->selectedBitmap, int32_t(a1), int32_t(a2),
+                             int32_t(a3), int32_t(stackArg(4)), brush->second.colorRef, rop);
             }
             lastError_ = 0;
             ret = 1;
@@ -1338,6 +1500,13 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
                                           int32_t(stackArg(6)), int32_t(stackArg(7)),
                                           int32_t(stackArg(8)), stackArg(9), stackArg(10)));
             if (ok) {
+                if (std::abs(int32_t(a3)) >= 200 || std::abs(int32_t(stackArg(4))) >= 120 || dc->hwnd) {
+                    spdlog::info("StretchDIBits ok dst=0x{:08x} hwnd=0x{:08x} dstBitmap=0x{:08x} dst={},{} {}x{} srcOrigin={},{} src={}x{} bits=0x{:08x} info=0x{:08x}",
+                                 a0, dc->hwnd, dc->selectedBitmap, int32_t(a1), int32_t(a2),
+                                 int32_t(a3), int32_t(stackArg(4)), int32_t(stackArg(5)),
+                                 int32_t(stackArg(6)), int32_t(stackArg(7)), int32_t(stackArg(8)),
+                                 stackArg(9), stackArg(10));
+                }
                 ret = uint32_t(std::abs(int32_t(stackArg(8))));
                 lastError_ = 0;
             } else {
@@ -1370,6 +1539,9 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
                          srcW, srcH, srcX, srcY, transparentColor);
             lastError_ = dstDc && srcDc ? 120 : 6;
             ret = 0;
+        } else if (int32_t(a3) == 0 || dstH == 0 || srcW == 0 || srcH == 0) {
+            lastError_ = 0;
+            ret = 1;
         } else if (dstBitmap != bitmaps_.end()) {
             const bool ok = transparentImageToBitmap(dstBitmap->second, srcBitmap->second,
                                                      int32_t(a1), int32_t(a2), int32_t(a3), dstH,
@@ -1427,7 +1599,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
                 ++blitProbeLogCounter_;
                 const BitmapProbeStats srcStats =
                     bitmapProbeStats(srcBitmap->second, srcX, srcY, srcW, srcH);
-                spdlog::debug("TransparentImage probe#{} framebuffer dstDc=0x{:08x} dstHwnd=0x{:08x} "
+                spdlog::info("TransparentImage probe#{} framebuffer dstDc=0x{:08x} dstHwnd=0x{:08x} "
                              "dstRect={},{} {}x{} srcDc=0x{:08x} srcHwnd=0x{:08x} "
                              "srcBitmap=0x{:08x} srcSize={}x{} srcRect={},{} {}x{} "
                              "srcStats sampled={} nonBlack={} unique~{} first=0x{:08x} "
@@ -1527,7 +1699,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
                     bitmapProbeStats(srcBitmap->second, srcX, srcY, srcW, srcH);
                 const BitmapProbeStats dstStats =
                     bitmapProbeStats(dstBitmap->second, int32_t(a1), int32_t(a2), dstW, dstH);
-                spdlog::debug("{} probe#{} memory dstDc=0x{:08x} dstHwnd=0x{:08x} "
+                spdlog::info("{} probe#{} memory dstDc=0x{:08x} dstHwnd=0x{:08x} "
                              "dstBitmap=0x{:08x} dstSize={}x{} dstRect={},{} {}x{} "
                              "dstStats sampled={} nonBlack={} unique~{} first=0x{:08x} last=0x{:08x} "
                              "srcDc=0x{:08x} srcHwnd=0x{:08x} srcBitmap=0x{:08x} srcSize={}x{} "
@@ -1604,7 +1776,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
                 ++blitProbeLogCounter_;
                 const BitmapProbeStats srcStats =
                     bitmapProbeStats(srcBitmap->second, srcX, srcY, srcW, srcH);
-                spdlog::debug("{} probe#{} framebuffer dstDc=0x{:08x} dstHwnd=0x{:08x} "
+                spdlog::info("{} probe#{} framebuffer dstDc=0x{:08x} dstHwnd=0x{:08x} "
                              "dstRect={},{} {}x{} srcDc=0x{:08x} srcHwnd=0x{:08x} "
                              "srcBitmap=0x{:08x} srcSize={}x{} srcRect={},{} {}x{} "
                              "srcStats sampled={} nonBlack={} unique~{} first=0x{:08x} "
@@ -1786,7 +1958,7 @@ ensureHostWindow(a0, it->second);
                 it->second.visible = false; // SWP_HIDEWINDOW
                 it->second.paintBoundsValid = false;
             }
-ensureHostWindow(a0, it->second);
+            ensureHostWindow(a0, it->second);
             syncHostWindowPlacement(it->second, true);
             if (sizeChanged) {
                 GuestMessage message{};
@@ -2096,11 +2268,21 @@ ensureHostWindow(a0, it->second);
                 uc_emu_stop(uc_);
             }
         } else if (message.message == 0x0012) {
+            spdlog::info("{} retrieved input hwnd=0x{:08x} msg=0x{:08x} wparam=0x{:08x} lparam=0x{:08x} peek={} remove={} queued={}",
+                         name, message.hwnd, message.message, message.wParam, message.lParam,
+                         peek ? 1 : 0, (!peek || (removeFlags & 1)) ? 1 : 0, guestMessages_.size());
             lastMessagePos_ = uint32_t(uint16_t(message.x) | (uint32_t(uint16_t(message.y)) << 16));
             lastMessageTime_ = message.time;
             writeGuestMessage(a0, message);
             ret = 0;
         } else {
+            if (message.message == 0x0007 || message.message == 0x0008 ||
+                (message.message >= 0x0200 && message.message <= 0x0202) ||
+                (message.message >= 0x5700 && message.message <= 0x58ff)) {
+                spdlog::info("{} retrieved input hwnd=0x{:08x} msg=0x{:08x} wparam=0x{:08x} lparam=0x{:08x} peek={} remove={} queued={}",
+                             name, message.hwnd, message.message, message.wParam, message.lParam,
+                             peek ? 1 : 0, (!peek || (removeFlags & 1)) ? 1 : 0, guestMessages_.size());
+            }
             lastMessagePos_ = uint32_t(uint16_t(message.x) | (uint32_t(uint16_t(message.y)) << 16));
             lastMessageTime_ = message.time;
             writeGuestMessage(a0, message);

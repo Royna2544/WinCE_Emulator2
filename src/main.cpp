@@ -47,6 +47,16 @@ static std::string narrowWideLossy(const std::wstring &value) {
   return narrowValue;
 }
 
+static void writeGuestCommandLine(uc_engine *uc, uint32_t address,
+                                  const std::wstring &value) {
+  std::vector<uint16_t> units;
+  units.reserve(value.size() + 1);
+  for (wchar_t ch : value)
+    units.push_back(static_cast<uint16_t>(ch));
+  units.push_back(0);
+  uc_mem_write(uc, address, units.data(), units.size() * sizeof(uint16_t));
+}
+
 static void configureLogging() {
   char *rawValue = nullptr;
   size_t valueSize = 0;
@@ -650,7 +660,8 @@ static int runImage(PeImage &pe, const std::vector<fs::path> &dllSearchDirs,
                     const std::optional<fs::path> &registryPath,
                     Framebuffer &fb,
                     const std::optional<std::string> &gpsCommPort,
-                    const std::string &sdmmcPath, bool headless,
+                    const std::string &sdmmcPath,
+                    const std::wstring &guestCommandLine, bool headless,
                     uint64_t instructionLimit) {
   uc_engine *uc = nullptr;
   uc_err err = uc_open(
@@ -689,8 +700,7 @@ static int runImage(PeImage &pe, const std::vector<fs::path> &dllSearchDirs,
     uint32_t gp = main->loadBase + 0x8000;
     uc_reg_write(uc, UC_MIPS_REG_GP, &gp);
     const uint32_t commandLine = STACK_BASE + 0x800;
-    const uint16_t commandLineNul = 0;
-    uc_mem_write(uc, commandLine, &commandLineNul, sizeof(commandLineNul));
+    writeGuestCommandLine(uc, commandLine, guestCommandLine);
     const uint32_t hInstance = main->loadBase;
     const uint32_t hPrevInstance = 0;
     const uint32_t nCmdShow = 1;
@@ -728,13 +738,15 @@ int wmain(int argc, wchar_t **argv) {
       spdlog::error(
           "usage: iNavi_Unicorn_Emulator.exe <primary.exe> [--registry "
           "regs.json] [--fs-root data_dir] [--sdmmc-path \"\\\\SDMMC Disk\"] "
-          "[--gps-comm COM10] [--headless] [dll_search_dir ...]");
+          "[--gps-comm COM10] [--guest-command-line text] [--headless] "
+          "[dll_search_dir ...]");
       return 1;
     }
     fs::path exe = fs::path(argv[1]);
     std::optional<fs::path> registryPath;
     std::optional<std::string> gpsCommPort;
     std::string sdmmcPath = "\\SDMMC Disk";
+    std::wstring guestCommandLine;
     std::vector<fs::path> dllSearchDirs;
     std::vector<fs::path> fileSystemRoots;
     bool headless = false;
@@ -766,6 +778,12 @@ int wmain(int argc, wchar_t **argv) {
           return 1;
         }
         sdmmcPath = narrowWideLossy(argv[++i]);
+      } else if (arg == L"--guest-command-line") {
+        if (i + 1 >= argc) {
+          spdlog::error("--guest-command-line requires text");
+          return 1;
+        }
+        guestCommandLine = argv[++i];
       } else if (arg == L"--instructions") {
         if (i + 1 >= argc) {
           spdlog::error("--instructions requires a count");
@@ -784,6 +802,8 @@ int wmain(int argc, wchar_t **argv) {
       spdlog::info("registry: {}", registryPath->string());
     if (gpsCommPort)
       spdlog::info("gps comm: {}", *gpsCommPort);
+    if (!guestCommandLine.empty())
+      spdlog::info("guest command line: {}", narrowWideLossy(guestCommandLine));
     spdlog::info("sdmmc path: {}", sdmmcPath);
     for (const auto &root : fileSystemRoots)
       spdlog::info("fs root: {}", root.string());
@@ -800,7 +820,8 @@ int wmain(int argc, wchar_t **argv) {
     if (writeFrameDumps)
       writePpm("frame_000_loader.ppm", fb, 0);
     int rc = runImage(pe, dllSearchDirs, fileSystemRoots, registryPath, fb,
-                      gpsCommPort, sdmmcPath, headless, instructionLimit);
+                      gpsCommPort, sdmmcPath, guestCommandLine, headless,
+                      instructionLimit);
     if (writeFrameDumps)
       writePpm("frame_001_after_unicorn.ppm", fb, 1);
     return rc;

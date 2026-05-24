@@ -57,6 +57,8 @@ bool SyntheticDllRuntime::handleCreateEventW(SyntheticExportCode code, const Gue
         ret = 0;
         lastError_ = GetLastError();
     }
+    spdlog::info("CreateEventW manualReset={} initialState={} -> handle=0x{:08x} lastError={}",
+                 args.a1 != 0, args.a2 != 0, ret, lastError_);
     return true;
 }
 
@@ -79,29 +81,25 @@ bool SyntheticDllRuntime::handleEventModify(SyntheticExportCode code, const Gues
     ret = ok ? 1 : 0;
     if (!ret) lastError_ = GetLastError();
     else lastError_ = 0;
+    spdlog::info("EventModify handle=0x{:08x} op={} -> {} lastError={}",
+                 args.a0, args.a1, ret, lastError_);
 
-    if (ret && (args.a1 == 1 || args.a1 == 3)) {
-        for (auto& [threadHandle, thread] : guestThreads_) {
-            (void)threadHandle;
-            if (thread.state == GuestThreadRunState::Waiting && thread.waitHandle == args.a0) {
-                thread.state = GuestThreadRunState::Runnable;
-                thread.waitHandle = 0;
-                thread.context.registers[UC_MIPS_REG_V0] = 0;
-            }
-        }
-    }
+    if (ret && (args.a1 == 1 || args.a1 == 3)) refreshSignaledGuestWaits();
     return true;
 }
 
 bool SyntheticDllRuntime::handleWaitForMultipleObjects(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
     (void)code;
     ret = waitForMultipleGuestObjects(args.a0, args.a1, args.a2 != 0);
+    spdlog::info("WaitForMultipleObjects count={} handles=0x{:08x} waitAll={} timeout=0x{:08x} -> 0x{:08x} lastError={}",
+                 args.a0, args.a1, args.a2 != 0, args.a3, ret, lastError_);
     return true;
 }
 
 bool SyntheticDllRuntime::handleResumeThread(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
     (void)code;
     ret = resumeGuestThread(args.a0);
+    spdlog::info("ResumeThread handle=0x{:08x} -> 0x{:08x} lastError={}", args.a0, ret, lastError_);
     return true;
 }
 

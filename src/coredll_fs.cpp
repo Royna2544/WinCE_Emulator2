@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <regex>
@@ -48,6 +49,28 @@ bool isRootWildcardPattern(std::string path) {
     std::replace(path.begin(), path.end(), '/', '\\');
     while (!path.empty() && path.front() == '\\') path.erase(path.begin());
     return path == "*" || path == "*.*";
+}
+
+std::string serialAsciiPreview(const uint8_t* data, size_t size) {
+    const size_t limit = std::min<size_t>(size, 120);
+    std::string out;
+    out.reserve(limit);
+    for (size_t i = 0; i < limit; ++i) {
+        const uint8_t ch = data[i];
+        if (ch == '\r') {
+            out += "\\r";
+        } else if (ch == '\n') {
+            out += "\\n";
+        } else if (std::isprint(ch)) {
+            out.push_back(static_cast<char>(ch));
+        } else {
+            char buf[5]{};
+            std::snprintf(buf, sizeof(buf), "\\x%02x", ch);
+            out += buf;
+        }
+    }
+    if (size > limit) out += "...";
+    return out;
 }
 
 void writeGuestFileAttributeData(uc_engine* uc, uint32_t guestAddress, const WIN32_FILE_ATTRIBUTE_DATA& data) {
@@ -172,10 +195,20 @@ bool SyntheticDllRuntime::handleCreateFileW(SyntheticExportCode code, const Gues
                      guestPath, pathToUtf8(hostPath), args.a1, args.a2, stackArg(4), stackArg(5), lastError_);
     } else {
         ret = makeGuestHandle({GuestHandle::Kind::HostFile, reinterpret_cast<uintptr_t>(host), 0});
-        fileHandleDebugNames_[ret] = pathToUtf8(hostPath);
+        const std::string hostText = pathToUtf8(hostPath);
+        fileHandleDebugNames_[ret] = hostText;
         lastError_ = 0;
-        spdlog::info("CreateFileW hit guest=\"{}\" host=\"{}\" guestHandle=0x{:08x} access=0x{:08x} share=0x{:08x} creation=0x{:08x} flags=0x{:08x}",
-                     guestPath, pathToUtf8(hostPath), ret, args.a1, args.a2, stackArg(4), stackArg(5));
+        const std::string guestLower = lowerAscii(guestPath);
+        const std::string hostLower = lowerAscii(hostText);
+        const bool traceMapFile = guestLower.find("mapdata") != std::string::npos ||
+                                  hostLower.find("mapdata") != std::string::npos;
+        if (traceMapFile) {
+            spdlog::info("CreateFileW map hit guest=\"{}\" host=\"{}\" guestHandle=0x{:08x} access=0x{:08x} share=0x{:08x} creation=0x{:08x} flags=0x{:08x}",
+                         guestPath, hostText, ret, args.a1, args.a2, stackArg(4), stackArg(5));
+        } else {
+            spdlog::debug("CreateFileW hit guest=\"{}\" host=\"{}\" guestHandle=0x{:08x} access=0x{:08x} share=0x{:08x} creation=0x{:08x} flags=0x{:08x}",
+                          guestPath, hostText, ret, args.a1, args.a2, stackArg(4), stackArg(5));
+        }
     }
     return true;
 }
@@ -373,6 +406,11 @@ bool SyntheticDllRuntime::handleReadFile(SyntheticExportCode code, const GuestCa
         const uint32_t readCount = ++fileReadCounts_[args.a0];
         auto debugName = fileHandleDebugNames_.find(args.a0);
         const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+        if (handle->kind == GuestHandle::Kind::HostSerialDevice) {
+            const std::string preview = transferred ? serialAsciiPreview(bytes.data(), transferred) : std::string{};
+            spdlog::info("ReadFile host serial handle=0x{:08x} path=\"{}\" requested={} transferred={} ok={} lastError={} read#={} data=\"{}\"",
+                         args.a0, debugPath, args.a2, transferred, ok ? 1 : 0, lastError_, readCount, preview);
+        }
         if (readCount <= 32 || !ok || transferred != args.a2 || transferred == 0) {
             spdlog::debug("ReadFile handle=0x{:08x} path=\"{}\" requested={} transferred={} ok={} read#={}",
                           args.a0, debugPath, args.a2, transferred, ok ? 1 : 0, readCount);

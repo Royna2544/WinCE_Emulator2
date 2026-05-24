@@ -1,5 +1,7 @@
 #include "synthetic_dll.h"
 
+#include <spdlog/spdlog.h>
+
 void SyntheticDllRuntime::registerCoredllWindowExports(SyntheticModule& module) {
     struct CoreDllWindow {
         OrdinalHandlerGroup group() const {
@@ -105,9 +107,14 @@ bool SyntheticDllRuntime::handleReleaseCapture(SyntheticExportCode code, const G
 
 bool SyntheticDllRuntime::handleEnableWindow(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
     (void)code;
-    if (windows_.count(args.a0)) {
+    auto it = windows_.find(args.a0);
+    if (it != windows_.end()) {
+        const bool wasEnabled = it->second.enabled;
+        it->second.enabled = args.a1 != 0;
         lastError_ = 0;
-        ret = 1;
+        ret = wasEnabled ? 1 : 0;
+        spdlog::info("EnableWindow guest=0x{:08x} enable={} oldEnabled={}",
+                     args.a0, args.a1 != 0, wasEnabled);
     } else {
         lastError_ = 1400;
         ret = 0;
@@ -117,7 +124,13 @@ bool SyntheticDllRuntime::handleEnableWindow(SyntheticExportCode code, const Gue
 
 bool SyntheticDllRuntime::handleIsWindowEnabled(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
     (void)code;
-    ret = windows_.count(args.a0) ? 1 : 0;
-    lastError_ = ret ? 0 : 1400;
+    auto it = windows_.find(args.a0);
+    if (it != windows_.end()) {
+        ret = it->second.enabled ? 1 : 0;
+        lastError_ = 0;
+    } else {
+        ret = 0;
+        lastError_ = 1400;
+    }
     return true;
 }

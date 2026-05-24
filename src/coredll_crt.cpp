@@ -508,10 +508,10 @@ bool SyntheticDllRuntime::handleWideFormat(SyntheticExportCode code, const Guest
     ret = writeUtf16(args.a0, out, bounded ? args.a1 : uint32_t(out.size() + 1));
     if (out.find(".db") != std::string::npos || out.find(".bin") != std::string::npos ||
         out.find("\\") != std::string::npos || out.find("/") != std::string::npos) {
-        spdlog::info("synthetic coredll.dll!wide-crt formatted \"{}\" -> 0x{:08x}", out, args.a0);
+        spdlog::debug("synthetic coredll.dll!wide-crt formatted \"{}\" -> 0x{:08x}", out, args.a0);
     } else if (out.empty() && (code == SyntheticExportCode::CoreDllWsprintfW || code == SyntheticExportCode::CoreDllSwprintf)) {
-        spdlog::info("synthetic coredll.dll!wide-crt formatted empty format=\"{}\" a2w=\"{}\" a2a=\"{}\" a3=0x{:08x}",
-                     format, readUtf16(args.a2, 128), readAscii(args.a2, 128), args.a3);
+        spdlog::debug("synthetic coredll.dll!wide-crt formatted empty format=\"{}\" a2w=\"{}\" a2a=\"{}\" a3=0x{:08x}",
+                      format, readUtf16(args.a2, 128), readAscii(args.a2, 128), args.a3);
     }
     return true;
 }
@@ -611,7 +611,7 @@ bool SyntheticDllRuntime::handleNarrowFormat(SyntheticExportCode code, const Gue
         }
         if (out.find(".db") != std::string::npos || out.find(".bin") != std::string::npos ||
             out.find("\\") != std::string::npos || out.find("/") != std::string::npos) {
-            spdlog::info("synthetic coredll.dll!narrow-crt formatted \"{}\" -> 0x{:08x}", out, args.a0);
+            spdlog::debug("synthetic coredll.dll!narrow-crt formatted \"{}\" -> 0x{:08x}", out, args.a0);
         }
     } else if (!out.empty()) {
         spdlog::info("printf: {}", out);
@@ -719,8 +719,8 @@ bool SyntheticDllRuntime::handleFread(SyntheticExportCode code, const GuestCallA
         if (readCount <= 32 || readBytes != bytes.size()) {
             auto debugName = fileHandleDebugNames_.find(args.a3);
             const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
-            spdlog::info("fread handle=0x{:08x} path=\"{}\" size={} count={} bytes={} elements={} read#={}",
-                         args.a3, debugPath, args.a1, args.a2, readBytes, ret, readCount);
+            spdlog::debug("fread handle=0x{:08x} path=\"{}\" size={} count={} bytes={} elements={} read#={}",
+                          args.a3, debugPath, args.a1, args.a2, readBytes, ret, readCount);
         }
     }
     return true;

@@ -46,6 +46,7 @@ void SyntheticDllRuntime::registerCoredllMathExports(SyntheticModule& module) {
                 {
                     {0x03E1, {"atoi", Code::CoreDllAtoi, &SyntheticDllRuntime::handleAtoi}},
                     {0x03E3, {"atof", Code::CoreDllAtof, &SyntheticDllRuntime::handleAtof}},
+                    {0x03DF, {"atan", Code::CoreDllAtan, &SyntheticDllRuntime::handleAtan}},
                     {0x03EC, {"cos", Code::CoreDllCos, &SyntheticDllRuntime::handleCos}},
                     {0x03FF, {"_hypot", Code::CoreDllHypot, &SyntheticDllRuntime::handleHypot}},
                     {0x041D, {"rand", Code::CoreDllRand, &SyntheticDllRuntime::handleRand}},
@@ -109,6 +110,12 @@ bool SyntheticDllRuntime::handleAtof(SyntheticExportCode code, const GuestCallAr
     return true;
 }
 
+bool SyntheticDllRuntime::handleAtan(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
+    (void)code;
+    setGuestDoubleReturn(uc_, std::atan(doubleFromGuestPair(args.a0, args.a1)), ret);
+    return true;
+}
+
 bool SyntheticDllRuntime::handleCos(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
     (void)code;
     setGuestDoubleReturn(uc_, std::cos(doubleFromGuestPair(args.a0, args.a1)), ret);
@@ -165,7 +172,7 @@ bool SyntheticDllRuntime::handleStrtoul(SyntheticExportCode code, const GuestCal
     const unsigned long value = std::strtoul(source.c_str(), &end, int(args.a2));
     if (args.a1) writeU32(args.a1, args.a0 + uint32_t(end ? end - source.c_str() : 0));
     ret = uint32_t(value);
-    spdlog::info("strtoul source=\"{}\" base={} -> 0x{:08x}", source, args.a2, ret);
+    spdlog::debug("strtoul source=\"{}\" base={} -> 0x{:08x}", source, args.a2, ret);
     return true;
 }
 
@@ -176,7 +183,7 @@ bool SyntheticDllRuntime::handleWcstoul(SyntheticExportCode code, const GuestCal
     const unsigned long value = std::strtoul(source.c_str(), &end, int(args.a2 ? args.a2 : 10));
     if (args.a1) writeU32(args.a1, args.a0 + uint32_t(end ? (end - source.c_str()) * 2 : 0));
     ret = uint32_t(value);
-    spdlog::info("wcstoul source=\"{}\" base={} -> 0x{:08x}", source, args.a2, ret);
+    spdlog::debug("wcstoul source=\"{}\" base={} -> 0x{:08x}", source, args.a2, ret);
     return true;
 }
 
