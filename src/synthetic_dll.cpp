@@ -922,16 +922,8 @@ void SyntheticDllRuntime::setMainModuleBase(uint32_t base) {
     mainModuleBase_ = base;
 }
 
-void SyntheticDllRuntime::setFileSystemRoots(std::vector<std::filesystem::path> roots) {
-    fileSystemRoots_.clear();
-    for (auto& root : roots) {
-        if (!root.empty()) fileSystemRoots_.push_back(std::move(root));
-    }
-    refreshGuestMainModulePath();
-}
-
-void SyntheticDllRuntime::setSdmmcPath(std::string path) {
-    sdmmcGuestRoot_ = normalizeGuestRootPath(std::move(path));
+void SyntheticDllRuntime::setSdmmcHostPath(const std::filesystem::path& path) {
+    sdmmcHostRoot_ = path;
     refreshGuestMainModulePath();
 }
 
@@ -1160,11 +1152,11 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed() {
         // when a worker performs a long pure-guest loop between API calls.
         const bool servicingQueuedMessages = std::strcmp(reason, "queued-message") == 0;
         if (activeGuestThread_) {
-            instructionBudget = hasPendingUserInput() ? 8000u : std::min<uint64_t>(instructionBudget, 25000u);
+            instructionBudget = hasPendingUserInput() ? 16000u : std::min<uint64_t>(instructionBudget, 250000u);
         } else if (hasPendingUserInput()) {
             instructionBudget = std::min<uint64_t>(instructionBudget, 50000u);
         } else if (servicingQueuedMessages) {
-            instructionBudget = std::min<uint64_t>(instructionBudget, 200000u);
+            instructionBudget = std::min<uint64_t>(instructionBudget, 1000000u);
         }
         const auto wallBudget = hasPendingUserInput()
             ? std::chrono::milliseconds(40)
@@ -1202,7 +1194,7 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed() {
         enqueueDueTimers();
         if (!guestMessages_.empty() && hasHostWindows()) {
             compactQueuedPointerMotion();
-            const uint64_t budget = hasPendingUserInput() ? 50000u : 200000u;
+            const uint64_t budget = hasPendingUserInput() ? 100000u : 1000000u;
             spdlog::debug("resuming guest for queued message queued={} budget={}", guestMessages_.size(), budget);
             if (!resumeGuestSlice(budget, "queued-message")) {
                 return;
@@ -1217,10 +1209,12 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed() {
         if (guestMessages_.empty() && hasHostWindows() && !activeGuestThread_ && hasRunnableGuestThread()) {
             switchToRunnableGuestThread("idle-worker");
         }
-        if (guestMessages_.empty() && hasHostWindows() && !resumeGuestSlice(250000, "idle")) {
+        if (guestMessages_.empty() && hasHostWindows() && !resumeGuestSlice(5000000, "idle")) {
             return;
         }
-        if (guestMessages_.empty()) MsgWaitForMultipleObjects(0, nullptr, FALSE, waitMs, QS_ALLINPUT);
+        if (guestMessages_.empty() && !activeGuestThread_ && !hasRunnableGuestThread()) {
+            MsgWaitForMultipleObjects(0, nullptr, FALSE, waitMs, QS_ALLINPUT);
+        }
     }
 #endif
 }
@@ -3366,6 +3360,27 @@ uint32_t SyntheticDllRuntime::windowAtPoint(uint32_t rootGuestHwnd, int32_t x, i
         }
         return std::pair<int32_t, int32_t>{ox, oy};
     };
+    for (auto it = windows_.rbegin(); it != windows_.rend(); ++it) {
+        const uint32_t hwnd = it->first;
+        const GuestWindow& window = it->second;
+        if (hwnd == rootGuestHwnd || window.destroyed || !window.visible ||
+            !window.enabled || window.parent || !(window.style & 0x80000000u)) {
+            continue;
+        }
+        const auto [ox, oy] = originOf(hwnd);
+        rootGuestHwnd = hwnd;
+        best = hwnd;
+        bestX = ox;
+        bestY = oy;
+        const int32_t right = ox + window.width;
+        const int32_t bottom = oy + window.height;
+        if (x < ox || y < oy || x >= right || y >= bottom) {
+            clientX = x - ox;
+            clientY = y - oy;
+            return hwnd;
+        }
+        break;
+    }
     uint32_t modalPopup = 0;
     int32_t modalX = 0;
     int32_t modalY = 0;
@@ -3487,6 +3502,19 @@ void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t
         hwnd = windowAtPoint(rootGuestHwnd, hostX, hostY, clientX, clientY);
     }
     if (!hwnd) return;
+
+    auto targetWindow = windows_.find(hwnd);
+    if (targetWindow != windows_.end() && !targetWindow->second.parent &&
+        hwnd != rootGuestHwnd && (targetWindow->second.style & 0x80000000u) &&
+        (clientX < 0 || clientY < 0 || clientX >= targetWindow->second.width ||
+         clientY >= targetWindow->second.height)) {
+        if (message == 0x0202 && hostPointerCaptureWindow_ == hwnd) {
+            hostPointerCaptureWindow_ = 0;
+        }
+        spdlog::info("discarded host mouse msg=0x{:04x} outside modal popup hwnd=0x{:08x} point={},{} client={},{}",
+                     message, hwnd, hostX, hostY, clientX, clientY);
+        return;
+    }
 
     const uint32_t popupRoot = ownedPopupRootForInput(hwnd);
     bool abovePopupRoot = false;
@@ -5750,20 +5778,20 @@ void SyntheticDllRuntime::refreshGuestMainModulePath() {
     if (hostMainModulePath_.empty()) return;
 
     const std::string hostKey = normalizedPathKey(hostMainModulePath_);
-    for (const auto& root : fileSystemRoots_) {
-        const std::string rootKey = normalizedPathKey(root);
-        if (rootKey.empty() || !startsWithPathKey(hostKey, rootKey)) continue;
-
-        std::filesystem::path relative = hostMainModulePath_.lexically_relative(root);
-        std::string relativeText = pathWithBackslashes(relative);
-        if (relativeText.empty() || relativeText == ".") continue;
-
-        std::filesystem::path relativePath = pathFromUtf8(relativeText);
-        auto first = relativePath.begin();
-        const bool alreadyMounted = first != relativePath.end() && isStorageMountName(pathToUtf8(*first));
-        mainModulePath_ = alreadyMounted ? "\\" + relativeText : sdmmcGuestRoot_ + "\\" + relativeText;
-        spdlog::info("guest module path: {}", mainModulePath_);
-        return;
+    if (!sdmmcHostRoot_.empty()) {
+        const std::string rootKey = normalizedPathKey(sdmmcHostRoot_);
+        if (!rootKey.empty() && startsWithPathKey(hostKey, rootKey)) {
+            std::filesystem::path relative = hostMainModulePath_.lexically_relative(sdmmcHostRoot_);
+            std::string relativeText = pathWithBackslashes(relative);
+            if (!relativeText.empty() && relativeText != ".") {
+                std::filesystem::path relativePath = pathFromUtf8(relativeText);
+                auto first = relativePath.begin();
+                const bool alreadyMounted = first != relativePath.end() && isStorageMountName(pathToUtf8(*first));
+                mainModulePath_ = alreadyMounted ? "\\" + relativeText : sdmmcGuestRoot_ + "\\" + relativeText;
+                spdlog::info("guest module path: {}", mainModulePath_);
+                return;
+            }
+        }
     }
 
     std::string fileName = pathToUtf8(hostMainModulePath_.filename());
@@ -5787,21 +5815,21 @@ std::filesystem::path SyntheticDllRuntime::resolveGuestPath(const std::string& g
     }
 
     const std::filesystem::path relative = pathFromUtf8(normalized);
-    auto resolveFromRoots = [&](const std::filesystem::path& guestRelative) -> std::filesystem::path {
-        std::filesystem::path missingLeafCandidate;
-        for (const auto& root : fileSystemRoots_) {
-            const std::filesystem::path candidate = root / guestRelative;
-            if (pathExistsForLookup(candidate)) return candidate;
-            if (missingLeafCandidate.empty() && parentExistsForLookup(candidate)) {
-                missingLeafCandidate = candidate;
-            }
-        }
-        if (!missingLeafCandidate.empty()) return missingLeafCandidate;
-        return fileSystemRoots_.empty() ? std::filesystem::path{} : fileSystemRoots_.front() / guestRelative;
-    };
     auto resolveFromSdmmcRoot = [&](const std::filesystem::path& guestRelative) -> std::filesystem::path {
-        if (fileSystemRoots_.empty()) return {};
-        return guestRelative.empty() ? fileSystemRoots_.front() : fileSystemRoots_.front() / guestRelative;
+        if (sdmmcHostRoot_.empty()) return {};
+        const std::filesystem::path candidate =
+            guestRelative.empty() ? sdmmcHostRoot_ : sdmmcHostRoot_ / guestRelative;
+        if (pathExistsForLookup(candidate) || parentExistsForLookup(candidate)) return candidate;
+        return candidate;
+    };
+    auto resolveFromHostBase = [&](const std::filesystem::path& guestRelative) -> std::filesystem::path {
+        if (hostBaseDir_.empty()) return guestRelative;
+        auto first = guestRelative.begin();
+        if (first != guestRelative.end() &&
+            lowerAscii(pathToUtf8(*first)) == lowerAscii(pathToUtf8(hostBaseDir_.filename()))) {
+            return hostBaseDir_.parent_path() / guestRelative;
+        }
+        return hostBaseDir_ / guestRelative;
     };
     auto stripMountedStoragePrefix = [](const std::filesystem::path& guestRelative) -> std::filesystem::path {
         auto it = guestRelative.begin();
@@ -5811,7 +5839,7 @@ std::filesystem::path SyntheticDllRuntime::resolveGuestPath(const std::string& g
         for (++it; it != guestRelative.end(); ++it) withoutMount /= *it;
         return withoutMount;
     };
-    if (rootRelative && !fileSystemRoots_.empty()) {
+    if (rootRelative && !sdmmcHostRoot_.empty()) {
         const std::string relativeText = pathWithBackslashes(relative);
         std::string sdmmcRelative = sdmmcGuestRoot_;
         while (!sdmmcRelative.empty() && sdmmcRelative.front() == '\\') sdmmcRelative.erase(sdmmcRelative.begin());
@@ -5823,7 +5851,7 @@ std::filesystem::path SyntheticDllRuntime::resolveGuestPath(const std::string& g
             return resolveFromSdmmcRoot(pathFromUtf8(withoutRoot));
         }
 
-        const std::filesystem::path direct = resolveFromRoots(relative);
+        const std::filesystem::path direct = resolveFromSdmmcRoot(relative);
         if (pathExistsForLookup(direct) || parentExistsForLookup(direct)) return direct;
 
         const std::filesystem::path withoutMount = stripMountedStoragePrefix(relative);
@@ -5831,34 +5859,25 @@ std::filesystem::path SyntheticDllRuntime::resolveGuestPath(const std::string& g
 
         return direct;
     }
-    if (!fileSystemRoots_.empty()) {
+    if (!sdmmcHostRoot_.empty()) {
         const std::filesystem::path withoutMount = stripMountedStoragePrefix(relative);
         if (!withoutMount.empty() && withoutMount != relative) {
             return resolveFromSdmmcRoot(withoutMount);
         }
-        return resolveFromRoots(relative);
+        return resolveFromSdmmcRoot(relative);
     }
-    if (!hostBaseDir_.empty()) {
-        auto first = relative.begin();
-        if (first != relative.end() &&
-            lowerAscii(pathToUtf8(*first)) == lowerAscii(pathToUtf8(hostBaseDir_.filename()))) {
-            return hostBaseDir_.parent_path() / relative;
-        }
-        return hostBaseDir_ / relative;
-    }
-    return relative;
+    return resolveFromHostBase(relative);
 }
 
 bool SyntheticDllRuntime::isUnderFileSystemRoot(const std::filesystem::path& path) const {
+    if (sdmmcHostRoot_.empty()) return false;
     const std::string pathKey = normalizedPathKey(path);
-    for (const auto& root : fileSystemRoots_) {
-        const std::string rootKey = normalizedPathKey(root);
-        if (rootKey.empty()) continue;
-        if (pathKey == rootKey) return true;
-        if (pathKey.size() > rootKey.size() && pathKey.compare(0, rootKey.size(), rootKey) == 0 &&
-            pathKey[rootKey.size()] == '\\') {
-            return true;
-        }
+    const std::string rootKey = normalizedPathKey(sdmmcHostRoot_);
+    if (rootKey.empty()) return false;
+    if (pathKey == rootKey) return true;
+    if (pathKey.size() > rootKey.size() && pathKey.compare(0, rootKey.size(), rootKey) == 0 &&
+        pathKey[rootKey.size()] == '\\') {
+        return true;
     }
     return false;
 }

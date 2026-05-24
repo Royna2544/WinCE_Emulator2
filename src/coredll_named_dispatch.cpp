@@ -1017,11 +1017,9 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
                 std::vector<std::wstring> childArgs;
                 childArgs.emplace_back(emulatorPath);
                 childArgs.push_back(hostApplication.wstring());
-                childArgs.emplace_back(L"--sdmmc-path");
-                childArgs.push_back(widenUtf8Lossy(sdmmcGuestRoot_));
-                for (const auto& root : fileSystemRoots_) {
-                    childArgs.emplace_back(L"--fs-root");
-                    childArgs.push_back(root.wstring());
+                if (!sdmmcHostRoot_.empty()) {
+                    childArgs.emplace_back(L"--sdmmc-path");
+                    childArgs.push_back(sdmmcHostRoot_.wstring());
                 }
                 if (!registryPath_.empty()) {
                     childArgs.emplace_back(L"--registry");

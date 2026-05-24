@@ -45,8 +45,7 @@ public:
     void setMainModuleBase(uint32_t base);
     void setFramebuffer(uint32_t* bgra, int width, int height);
     void setRegistryPath(const std::filesystem::path& path);
-    void setFileSystemRoots(std::vector<std::filesystem::path> roots);
-    void setSdmmcPath(std::string path);
+    void setSdmmcHostPath(const std::filesystem::path& path);
     void setSerialDeviceMapPath(const std::filesystem::path& path);
     void registerLoadedModule(const std::string& moduleName, const std::filesystem::path& path, uint32_t base,
                               const std::map<std::string, uint32_t>& exportsByName = {},
@@ -729,10 +728,10 @@ private:
     uint32_t threadExitStub_ = 0;
     std::string mainModulePath_ = "\\INavi\\INavi.exe";
     std::string sdmmcGuestRoot_ = "\\SDMMC Disk";
+    std::filesystem::path sdmmcHostRoot_;
     std::filesystem::path hostMainModulePath_;
     uint32_t mainModuleBase_ = 0;
     std::filesystem::path hostBaseDir_;
-    std::vector<std::filesystem::path> fileSystemRoots_;
     uint16_t nextAtom_ = 0xc000;
     std::map<uint32_t, ExportEntry> exportsByAddress_;
     std::map<std::string, RegisteredSyntheticDll> registeredDllsByName_;

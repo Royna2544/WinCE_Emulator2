@@ -1,22 +1,15 @@
 param(
     [string]$Emulator = ".\x64\Debug\iNavi_Unicorn_Emulator.exe",
-    [string]$Target = "C:\Users\royna\Downloads\INAVI\INavi\INavi.exe",
+    [string]$Target = "D:\INAVI_Emulator\INAVI\INavi\INavi.exe",
     [string]$Registry = ".\regs.json",
     [string]$SerialMap = ".\serial_devices.json",
-    [string]$SdmmcPath = "\SDMMC Disk",
-    [string[]]$FsRoot = @(
-        "C:\Users\royna\Downloads\INAVI",
-        "C:\Users\royna\Downloads\DUMPPLZ\FILES",
-        "C:\Users\royna\Downloads",
-        "C:\Users\royna\Downloads\INAVI\mapdata",
-        "C:\Users\royna\Downloads\INAVI\iNaviData"
-    ),
+    [string]$SdmmcPath = "D:\INAVI_Emulator\INAVI",
     [string[]]$DllSearchDir = @(
         "C:\Program Files (x86)\Windows CE Tools\wce420\STANDARDSDK_420\Mfc\Lib\Mipsii",
         "C:\Program Files (x86)\Windows CE Tools\wce420\STANDARDSDK_420\Mfc\Lib\Mipsii\L.kor",
         "C:\Program Files (x86)\Windows CE Tools\wce420\STANDARDSDK_420\Atl\Lib\Mipsii"
     ),
-    [UInt64]$Instructions = 250000000,
+    [UInt64]$Instructions = 50000000000,
     [int]$StartupTimeoutMs = 45000,
     [int]$InitialSettleMs = 18000,
     [int]$AfterTapMs = 4500,
@@ -267,9 +260,6 @@ $manifestPath = Join-Path $runDir "manifest.json"
 $argumentList = @($Target, "--registry", $Registry, "--sdmmc-path", $SdmmcPath)
 if ($SerialMap) {
     $argumentList += @("--serial-map", $SerialMap)
-}
-foreach ($root in $FsRoot) {
-    $argumentList += @("--fs-root", $root)
 }
 $argumentList += @("--instructions", [string]$Instructions)
 $argumentList += $DllSearchDir

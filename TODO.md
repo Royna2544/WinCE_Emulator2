@@ -15,6 +15,9 @@ Current priority order after the 2026-05-24 serial/device cleanup.
 3. Serial and stream-device follow-up
    - Test `serial_devices.json` with a host NMEA feeder on `COM21`.
    - Capture logs for `CreateFileW("COM1:")`, `GetCommState`, `SetCommState`, and `ReadFile` to confirm NMEA reaches the app.
+   - Decide whether the SDMMC `iNaviData\config.bin` dump should be corrected
+     from GPS port `7` to `1`, or whether another device-profile config source
+     should override it.
    - Add real handlers only when a device protocol is understood; stubs must remain honest no-op devices.
 
 4. Performance work
@@ -24,4 +27,5 @@ Current priority order after the 2026-05-24 serial/device cleanup.
 
 5. Build hygiene
    - Keep `--serial-map` documented in scripts and examples.
+   - Keep `--sdmmc-path` documented as the host directory backing guest `\SDMMC Disk`.
    - Keep logs specific enough to diagnose routing without flooding every frame.

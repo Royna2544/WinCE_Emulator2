@@ -656,11 +656,10 @@ struct ModuleLoader {
 };
 
 static int runImage(PeImage &pe, const std::vector<fs::path> &dllSearchDirs,
-                    const std::vector<fs::path> &fileSystemRoots,
                     const std::optional<fs::path> &registryPath,
                     Framebuffer &fb,
                     const std::optional<fs::path> &serialMapPath,
-                    const std::string &sdmmcPath,
+                    const fs::path &sdmmcHostPath,
                     const std::wstring &guestCommandLine, bool headless,
                     uint64_t instructionLimit) {
   uc_engine *uc = nullptr;
@@ -675,9 +674,8 @@ static int runImage(PeImage &pe, const std::vector<fs::path> &dllSearchDirs,
   };
   try {
     SyntheticDllRuntime synthetic(uc);
-    synthetic.setSdmmcPath(sdmmcPath);
+    synthetic.setSdmmcHostPath(sdmmcHostPath);
     synthetic.setMainModulePath(pe.path.string());
-    synthetic.setFileSystemRoots(fileSystemRoots);
     synthetic.setFramebuffer(fb.bgra.data(), fb.w, fb.h);
     if (registryPath)
       synthetic.setRegistryPath(*registryPath);
@@ -749,7 +747,7 @@ int wmain(int argc, wchar_t **argv) {
     if (argc < 2) {
       spdlog::error(
           "usage: iNavi_Unicorn_Emulator.exe <primary.exe> [--registry "
-          "regs.json] [--fs-root data_dir] [--sdmmc-path \"\\\\SDMMC Disk\"] "
+          "regs.json] [--sdmmc-path host_sdmmc_dir] "
           "[--serial-map devices.json] [--guest-command-line text] [--headless] "
           "[dll_search_dir ...]");
       return 1;
@@ -757,12 +755,11 @@ int wmain(int argc, wchar_t **argv) {
     fs::path exe = fs::path(argv[1]);
     std::optional<fs::path> registryPath;
     std::optional<fs::path> serialMapPath;
-    std::string sdmmcPath = "\\SDMMC Disk";
+    std::optional<fs::path> sdmmcHostPath;
     std::wstring guestCommandLine;
     std::vector<fs::path> dllSearchDirs;
-    std::vector<fs::path> fileSystemRoots;
     bool headless = false;
-    uint64_t instructionLimit = 2500000;
+    uint64_t instructionLimit = 50000000000ULL;
     for (int i = 2; i < argc; ++i) {
       std::wstring arg = argv[i];
       if (arg == L"--registry") {
@@ -771,12 +768,6 @@ int wmain(int argc, wchar_t **argv) {
           return 1;
         }
         registryPath = fs::path(argv[++i]);
-      } else if (arg == L"--fs-root") {
-        if (i + 1 >= argc) {
-          spdlog::error("--fs-root requires a data directory");
-          return 1;
-        }
-        fileSystemRoots.emplace_back(argv[++i]);
       } else if (arg == L"--serial-map") {
         if (i + 1 >= argc) {
           spdlog::error("--serial-map requires a JSON mapping path");
@@ -785,11 +776,10 @@ int wmain(int argc, wchar_t **argv) {
         serialMapPath = fs::path(argv[++i]);
       } else if (arg == L"--sdmmc-path") {
         if (i + 1 >= argc) {
-          spdlog::error(
-              "--sdmmc-path requires a guest path such as \\\\SDMMC Disk");
+          spdlog::error("--sdmmc-path requires a host directory");
           return 1;
         }
-        sdmmcPath = narrowWideLossy(argv[++i]);
+        sdmmcHostPath = fs::path(argv[++i]);
       } else if (arg == L"--guest-command-line") {
         if (i + 1 >= argc) {
           spdlog::error("--guest-command-line requires text");
@@ -809,6 +799,8 @@ int wmain(int argc, wchar_t **argv) {
       }
     }
     spdlog::info("iNavi Unicorn Emulator v2 fresh project");
+    if (!sdmmcHostPath)
+      sdmmcHostPath = exe.parent_path().parent_path();
     spdlog::info("target: {}", exe.string());
     if (registryPath)
       spdlog::info("registry: {}", registryPath->string());
@@ -816,9 +808,7 @@ int wmain(int argc, wchar_t **argv) {
       spdlog::info("serial map: {}", serialMapPath->string());
     if (!guestCommandLine.empty())
       spdlog::info("guest command line: {}", narrowWideLossy(guestCommandLine));
-    spdlog::info("sdmmc path: {}", sdmmcPath);
-    for (const auto &root : fileSystemRoots)
-      spdlog::info("fs root: {}", root.string());
+    spdlog::info("sdmmc host path: {}", sdmmcHostPath->string());
     for (const auto &dir : dllSearchDirs)
       spdlog::info("dll search dir: {}", dir.string());
     auto pe = parsePe(exe);
@@ -831,8 +821,8 @@ int wmain(int argc, wchar_t **argv) {
     Framebuffer fb;
     if (writeFrameDumps)
       writePpm("frame_000_loader.ppm", fb, 0);
-    int rc = runImage(pe, dllSearchDirs, fileSystemRoots, registryPath, fb,
-                      serialMapPath, sdmmcPath, guestCommandLine, headless,
+    int rc = runImage(pe, dllSearchDirs, registryPath, fb,
+                      serialMapPath, *sdmmcHostPath, guestCommandLine, headless,
                       instructionLimit);
     if (writeFrameDumps)
       writePpm("frame_001_after_unicorn.ppm", fb, 1);

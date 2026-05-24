@@ -51,3 +51,19 @@ Affected devices:
 - `SMB1:` accelerometer candidate,
 - `CAM1:` camera,
 - `TWV1:` video decoder/input candidate.
+
+## GPS Port Selection Still Chooses COM7
+
+The real device report identifies GPS NMEA output as `COM1:` via `VSP.dll`, but
+the current app run can still open `COM7:`.
+
+Evidence:
+- Runtime launched `happyway_win.exe` with command line
+  `iNavi|SDMMC Disk\mapdata|SDMMC Disk\inavidata|11|7|0|1`.
+- The child opened `COM7:` immediately afterward.
+- `iNaviData\config.bin` contains the same GPS port value `7` as a dword at
+  offset `0x34`.
+
+Registry-based explanations are rejected. Next fix should come from correcting
+the SDMMC config/profile data or finding the real device-profile source that
+should override this value.
