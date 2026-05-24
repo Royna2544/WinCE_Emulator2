@@ -63,6 +63,9 @@ Evidence:
 - The child opened `COM7:` immediately afterward.
 - `iNaviData\config.bin` contains the same GPS port value `7` as a dword at
   offset `0x34`.
+- `DeviceParser.exe` runs earlier in startup, before the `happyway_win.exe`
+  command line is built, so the emulator may be missing the hardware/profile
+  detection path that should produce GPS port `1`.
 
 Registry-based explanations are rejected. Next fix should come from correcting
 the SDMMC config/profile data or finding the real device-profile source that
