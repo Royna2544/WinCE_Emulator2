@@ -9,7 +9,7 @@ Repository: `/mnt/d/GitHub/WinCE_Emulator`
 
 Main target:
 
-`.\x64\Debug\WinCE_Emulator.exe "C:\Users\royna\Downloads\INAVI\INavi\INavi.exe"`
+`.\x64\Debug\WinCE_Emulator.exe "D:\INAVI_Emulator\INAVI\INavi\INavi.exe"`
 
 Target app:
 
@@ -35,6 +35,8 @@ as an A/B comparison if floating-point behavior diverges; checked COREDLL and
 MFC ordinals matched for the inspected target surfaces.
 
 The Visual Studio installation is at: `C:\Program Files\Microsoft Visual Studio\18\Community`
+
+The application targets latest Windows-only with x86 target at Zen5. You can add CPU specific-optimizations.
 
 ---
 
@@ -171,37 +173,6 @@ If PC becomes `0x0`, treat it as a control-flow/resume/return-address bug unless
 
 ---
 
-## Registry / Device Context
-
-Do not brute-force registry model values as a final fix.
-
-Allowed:
-
-- log RegOpenKey / RegQueryValue / RegSetValue
-- record keys and values requested by the app
-- provide plausible CE/device answers only when backed by call evidence
-
-The real device registry is unknown unless dumped from hardware.
-
----
-
-## Audio Context
-
-Do not fabricate audio playback.
-
-The real milestone is first reaching calls such as:
-
-- sndPlaySound
-- PlaySound
-- waveOutOpen
-- waveOutPrepareHeader
-- waveOutWrite
-- mciSendString
-
-If no audio-capable APIs are called, the app probably has not passed the real startup gate yet.
-
----
-
 ## Running / Logging
 
 Prefer bounded runs.
@@ -209,36 +180,9 @@ Prefer bounded runs.
 Build:
 
 ```bash
-powershell.exe -NoProfile -Command "& 'C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe' WinCE_Emulator.vcxproj /p:Configuration=Debug /p:Platform=x64 /m"
+powershell.exe -NoProfile -Command "& 'C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe' iNavi_Unicorn_Emulator.vcxproj /p:Configuration=Debug /p:Platform=x64 /m"
 ```
-
-Convert framebuffer for inspection:
-
-```bash
-ffmpeg -y -loglevel error -i fakece_gui.ppm /tmp/fakece_gui.png
-```
-
-PowerShell output files may be UTF-16LE. Use `iconv -f UTF-16LE -t UTF-8`
-before searching if needed.
-
-Use targeted logs instead of massive all-trace logs.
-
-Environment-variable diagnostics are allowed, but keep them documented.
-
-Useful diagnostic scopes:
-
-- DIB / GDI
-- MFC file ordinals
-- PNG state / cleanup
-- branch-likely / delay-slot
-- audio calls
-- registry calls
-- private window messages
-- heap allocation
-
-Avoid broad hooks that perturb startup timing unless explicitly needed.
-
-If a trace changes behavior, mark it as perturbing.
+Or use the ps1 script at tools/
 
 ---
 
@@ -252,25 +196,7 @@ Expected pattern:
 
 Possible path forms:
 
-- Windows: `C:\Users\royna\Downloads\INAVI\INavi\INavi.exe`
-- WSL: `/mnt/c/Users/royna/Downloads/INAVI/INavi/INavi.exe`
+- Windows: `D:\INAVI_Emulator\INAVI\\INavi\INavi.exe`
+- WSL: `/mnt/d/INAVI_Emulator/INAVI/INavi/INavi.exe`
 
 Do not assume path spelling until verified in logs.
-
----
-
-## Definition of Progress
-
-Progress is not only “the screenshot looks better.”
-
-Real progress includes:
-
-- A crash moves later
-- A wrong dummy API becomes real-ish
-- A CPU semantic bug is fixed generally
-- A bad pointer source is narrowed
-- A diagnostic is separated from a production fix
-- A regression becomes reproducible
-- A false theory is explicitly retired
-
-Always prefer the smallest real emulator correction that explains the observed app behavior.
