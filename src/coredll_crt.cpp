@@ -75,6 +75,7 @@ void SyntheticDllRuntime::registerCoredllCrtExports(SyntheticModule& module) {
                     {0x046B, {"ftell", Code::CoreDllFtell, &SyntheticDllRuntime::handleFtell}},
                     {0x046C, {"_vsnwprintf", Code::CoreDllVsnwprintf, &SyntheticDllRuntime::handleWideFormat}},
                     {0x0479, {"_wfopen", Code::CoreDllWfopen, &SyntheticDllRuntime::handleWfopen}},
+                    {0x047A, {"vsprintf", Code::CoreDllVsprintf, &SyntheticDllRuntime::handleNarrowFormat}},
                     {0x04CB, {"GetCRTStorageEx", Code::CoreDllGetCrtStorageEx, &SyntheticDllRuntime::handleGetCrtStorageEx}},
                     {0x04CC, {"GetCRTFlags", Code::CoreDllGetCrtFlags, &SyntheticDllRuntime::handleGetCrtFlags}},
                     {0x0582, {"_stricmp", Code::CoreDllStricmp, &SyntheticDllRuntime::handleStricmp}},
@@ -517,17 +518,48 @@ bool SyntheticDllRuntime::handleWideFormat(SyntheticExportCode code, const Guest
 }
 
 bool SyntheticDllRuntime::handleNarrowFormat(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
-    std::vector<uint32_t> values = code == SyntheticExportCode::CoreDllSprintf
-        ? std::vector<uint32_t>{args.a2, args.a3}
-        : (code == SyntheticExportCode::CoreDllSnprintf ? std::vector<uint32_t>{args.a3} : std::vector<uint32_t>{args.a1, args.a2, args.a3});
-    for (uint32_t i = 4; i < 16; ++i) values.push_back(stackArg(i));
+    std::vector<uint32_t> values;
+    uint32_t formatPtr = args.a0;
+    uint32_t destPtr = 0;
+    uint32_t capacity = 0;
+    bool writesOutput = false;
+    bool bounded = false;
+    if (code == SyntheticExportCode::CoreDllSprintf) {
+        destPtr = args.a0;
+        formatPtr = args.a1;
+        writesOutput = true;
+        values = {args.a2, args.a3};
+        for (uint32_t i = 4; i < 16; ++i) values.push_back(stackArg(i));
+    } else if (code == SyntheticExportCode::CoreDllSnprintf) {
+        destPtr = args.a0;
+        capacity = args.a1;
+        formatPtr = args.a2;
+        writesOutput = true;
+        bounded = true;
+        values = {args.a3};
+        for (uint32_t i = 4; i < 16; ++i) values.push_back(stackArg(i));
+    } else if (code == SyntheticExportCode::CoreDllVsprintf) {
+        destPtr = args.a0;
+        formatPtr = args.a1;
+        writesOutput = true;
+        for (uint32_t i = 0; i < 64; ++i) values.push_back(readU32(args.a2 + i * 4));
+    } else {
+        values = {args.a1, args.a2, args.a3};
+        for (uint32_t i = 4; i < 16; ++i) values.push_back(stackArg(i));
+    }
     size_t argIndex = 0;
     auto nextArg = [&]() -> uint32_t {
         return argIndex < values.size() ? values[argIndex++] : 0;
     };
-    const std::string format = readAscii(code == SyntheticExportCode::CoreDllSprintf
-        ? args.a1
-        : (code == SyntheticExportCode::CoreDllSnprintf ? args.a2 : args.a0), 2048);
+    auto nextDouble = [&]() -> double {
+        const uint32_t low = nextArg();
+        const uint32_t high = nextArg();
+        const uint64_t bits = (uint64_t(high) << 32) | uint64_t(low);
+        double value = 0.0;
+        std::memcpy(&value, &bits, sizeof(value));
+        return value;
+    };
+    const std::string format = readAscii(formatPtr, 2048);
     std::string out;
     for (size_t i = 0; i < format.size(); ++i) {
         if (format[i] != '%' || i + 1 >= format.size()) {
@@ -591,27 +623,38 @@ bool SyntheticDllRuntime::handleNarrowFormat(SyntheticExportCode code, const Gue
             else std::snprintf(buffer, sizeof(buffer), "%x", value);
             out += buffer;
             break;
+        case 'e':
+        case 'E':
+        case 'f':
+        case 'g':
+        case 'G':
+            if (width) {
+                std::snprintf(buffer, sizeof(buffer), zeroPad ? "%0*.6g" : "%*.6g", width, nextDouble());
+            } else {
+                std::snprintf(buffer, sizeof(buffer), "%.6g", nextDouble());
+            }
+            out += buffer;
+            break;
         default:
             out.push_back('%');
             out.push_back(spec);
             break;
         }
     }
-    if (code == SyntheticExportCode::CoreDllSprintf || code == SyntheticExportCode::CoreDllSnprintf) {
-        if (code == SyntheticExportCode::CoreDllSnprintf) {
-            const uint32_t capacity = args.a1;
-            if (args.a0 && capacity) {
+    if (writesOutput) {
+        if (bounded) {
+            if (destPtr && capacity) {
                 const uint32_t copy = std::min<uint32_t>(capacity - 1, uint32_t(out.size()));
-                if (copy) uc_mem_write(uc_, args.a0, out.data(), copy);
+                if (copy) uc_mem_write(uc_, destPtr, out.data(), copy);
                 const char nul = 0;
-                uc_mem_write(uc_, args.a0 + copy, &nul, sizeof(nul));
+                uc_mem_write(uc_, destPtr + copy, &nul, sizeof(nul));
             }
         } else {
-            writeAscii(args.a0, out);
+            writeAscii(destPtr, out);
         }
         if (out.find(".db") != std::string::npos || out.find(".bin") != std::string::npos ||
             out.find("\\") != std::string::npos || out.find("/") != std::string::npos) {
-            spdlog::debug("synthetic coredll.dll!narrow-crt formatted \"{}\" -> 0x{:08x}", out, args.a0);
+            spdlog::debug("synthetic coredll.dll!narrow-crt formatted \"{}\" -> 0x{:08x}", out, destPtr);
         }
     } else if (!out.empty()) {
         spdlog::info("printf: {}", out);

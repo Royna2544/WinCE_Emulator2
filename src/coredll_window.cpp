@@ -111,10 +111,33 @@ bool SyntheticDllRuntime::handleEnableWindow(SyntheticExportCode code, const Gue
     if (it != windows_.end()) {
         const bool wasEnabled = it->second.enabled;
         it->second.enabled = args.a1 != 0;
+        size_t discardedInput = 0;
+        if (!it->second.enabled) {
+            auto isSameOrDescendant = [&](uint32_t hwnd) {
+                for (uint32_t current = hwnd; current;) {
+                    if (current == args.a0) return true;
+                    auto window = windows_.find(current);
+                    if (window == windows_.end()) break;
+                    current = window->second.parent;
+                }
+                return false;
+            };
+            const auto oldSize = guestMessages_.size();
+            std::erase_if(guestMessages_, [&](const GuestMessage& message) {
+                return message.message >= 0x0200 && message.message <= 0x0202 &&
+                       isSameOrDescendant(message.hwnd);
+            });
+            discardedInput = oldSize - guestMessages_.size();
+            if (isSameOrDescendant(capturedWindow_)) capturedWindow_ = 0;
+            if (isSameOrDescendant(hostPointerCaptureWindow_)) hostPointerCaptureWindow_ = 0;
+            if (isSameOrDescendant(pendingSyntheticChildButtonUpWindow_)) {
+                pendingSyntheticChildButtonUpWindow_ = 0;
+            }
+        }
         lastError_ = 0;
         ret = wasEnabled ? 1 : 0;
-        spdlog::info("EnableWindow guest=0x{:08x} enable={} oldEnabled={}",
-                     args.a0, args.a1 != 0, wasEnabled);
+        spdlog::info("EnableWindow guest=0x{:08x} enable={} oldEnabled={} discardedInput={}",
+                     args.a0, args.a1 != 0, wasEnabled, discardedInput);
     } else {
         lastError_ = 1400;
         ret = 0;

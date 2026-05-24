@@ -688,6 +688,18 @@ static int runImage(PeImage &pe, const std::vector<fs::path> &dllSearchDirs,
                 (void *)SyntheticDllRuntime::hookCode, &synthetic, 0x70000000,
                 0x70ffffff);
     ModuleLoader loader(uc, &synthetic, pe.path, dllSearchDirs);
+    synthetic.setGuestProcessLauncher([&](SyntheticDllRuntime::GuestProcessLaunch &launch) {
+      if (launch.hostApplication.empty())
+        return false;
+      PeImage *child = loader.loadModuleByPath(launch.hostApplication, false);
+      if (!child)
+        return false;
+      return synthetic.startGuestProcessImage(
+          launch.guestApplication, launch.hostApplication, child->loadBase,
+          child->loadBase + child->entryRva, launch.commandLine,
+          launch.processHandle, launch.threadHandle, launch.processId,
+          launch.threadId);
+    });
     PeImage *main = loader.loadModuleByPath(pe.path, true);
     if (!main)
       throw std::runtime_error("failed to load main module");

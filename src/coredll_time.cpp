@@ -1,6 +1,8 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
+#include <algorithm>
+
 #include "synthetic_dll.h"
 
 void SyntheticDllRuntime::registerCoredllTimeExports(SyntheticModule& module) {
@@ -81,7 +83,14 @@ bool SyntheticDllRuntime::handleGetTimeZoneInformation(SyntheticExportCode code,
 
 bool SyntheticDllRuntime::handleSleep(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
     (void)code;
-    ::Sleep(args.a0);
+    uint32_t remaining = args.a0;
+    do {
+        pumpHostMessages();
+        const uint32_t slice = remaining ? std::min<uint32_t>(remaining, 5) : 0;
+        ::Sleep(slice);
+        if (!remaining) break;
+        remaining -= slice;
+    } while (remaining);
     ret = 0;
     return true;
 }

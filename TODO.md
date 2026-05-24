@@ -30,6 +30,7 @@
 - COREDLL `#179=DeviceIoControl` is confirmed by Windows CE 4.2 Standard SDK MIPSII `coredll.lib` COFF import-object headers. Implemented as a real handle bridge for host file/serial handles and as an honest fail-closed result for disconnected guest devices such as `UID1:`.
 - COREDLL `#1023=_hypot`, `#2046=__gts`, and `#2052=__gtd` are confirmed by Windows CE 4.2 Standard SDK MIPSII `coredll.lib` COFF import-object headers and implemented for the route-search/map path.
 - COREDLL `#1083=wcstoul` and `#2018=__f_to_ll` are confirmed by Windows CE 4.2 Standard SDK MIPSII `coredll.lib` COFF import-object headers and implemented after the final auto-driver run reached them in map/route code.
+- COREDLL `#186=GetACP`, `#209=IsValidLocale`, `#838=TranslateAcceleratorW`, and `#1146=vsprintf` are confirmed by Windows CE 4.2 Standard SDK MIPSII `coredll.lib` COFF import-object headers and implemented after `happyway_win.exe` reached them during route-helper startup.
 
 ## Next
 

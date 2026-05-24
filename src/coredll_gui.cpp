@@ -23,6 +23,7 @@ void SyntheticDllRuntime::registerCoredllGuiExports(SyntheticModule& module) {
                     {0x02BF, {"SetActiveWindow", Code::CoreDllSetActiveWindow, &SyntheticDllRuntime::handleSetActiveWindow}},
                     {0x02C2, {"GetActiveWindow", Code::CoreDllGetActiveWindow, &SyntheticDllRuntime::handleGetActiveWindow}},
                     {0x02DE, {"GetCursorPos", Code::CoreDllGetCursorPos, &SyntheticDllRuntime::handleGetCursorPos}},
+                    {0x0346, {"TranslateAcceleratorW", Code::CoreDllTranslateAcceleratorW, &SyntheticDllRuntime::handleTranslateAcceleratorW}},
                     {0x035A, {"MessageBoxW", Code::CoreDllMessageBoxW, &SyntheticDllRuntime::handleMessageBoxW}},
                     {0x0375, {"GetSystemMetrics", Code::CoreDllGetSystemMetrics, &SyntheticDllRuntime::handleGetSystemMetrics}},
                     {0x0376, {"IsWindowVisible", Code::CoreDllIsWindowVisible, &SyntheticDllRuntime::handleIsWindowVisible}},
@@ -209,6 +210,13 @@ bool SyntheticDllRuntime::handleMessageBoxW(SyntheticExportCode, const GuestCall
     spdlog::info("MessageBoxW caption=\"{}\" text=\"{}\" flags=0x{:08x}",
                  readUtf16(args.a2), readUtf16(args.a1), args.a3);
     ret = 1;
+    lastError_ = 0;
+    return true;
+}
+
+bool SyntheticDllRuntime::handleTranslateAcceleratorW(SyntheticExportCode, const GuestCallArgs& args, uint32_t& ret) {
+    (void)args;
+    ret = 0;
     lastError_ = 0;
     return true;
 }

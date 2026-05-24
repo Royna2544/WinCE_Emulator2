@@ -930,6 +930,10 @@ void SyntheticDllRuntime::registerLoadedModule(const std::string& moduleName,
     loadedModulesByBase_[base] = info;
 }
 
+void SyntheticDllRuntime::setGuestProcessLauncher(GuestProcessLauncher launcher) {
+    guestProcessLauncher_ = std::move(launcher);
+}
+
 void SyntheticDllRuntime::setRegistryPath(const std::filesystem::path& path) {
     registryPath_ = path;
     registry_ = nlohmann::json::object();
@@ -1029,16 +1033,22 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed() {
         // Guest worker threads run cooperatively on the host UI thread.  Keep
         // their slices short so touch input and presenter paints stay live even
         // when a worker performs a long pure-guest loop between API calls.
+        const bool servicingQueuedMessages = std::strcmp(reason, "queued-message") == 0;
         if (activeGuestThread_) {
             instructionBudget = hasPendingUserInput() ? 8000u : std::min<uint64_t>(instructionBudget, 25000u);
         } else if (hasPendingUserInput()) {
             instructionBudget = std::min<uint64_t>(instructionBudget, 50000u);
+        } else if (servicingQueuedMessages) {
+            instructionBudget = std::min<uint64_t>(instructionBudget, 200000u);
         }
         const auto wallBudget = hasPendingUserInput()
             ? std::chrono::milliseconds(40)
-            : (activeGuestThread_ ? std::chrono::milliseconds(60) : std::chrono::milliseconds(120));
+            : (servicingQueuedMessages ? std::chrono::milliseconds(45)
+                                       : (activeGuestThread_ ? std::chrono::milliseconds(60)
+                                                            : std::chrono::milliseconds(120)));
         beginInteractiveSlice(wallBudget, reason, instructionBudget);
         const uc_err err = uc_emu_start(uc_, pc, 0, 0, instructionBudget);
+        const bool stoppedByWatchdog = interactiveSliceStopRequested_;
         endInteractiveSlice();
         uc_reg_read(uc_, UC_MIPS_REG_PC, &pc);
         uc_reg_read(uc_, UC_MIPS_REG_RA, &ra);
@@ -1053,6 +1063,11 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed() {
             spdlog::info("long guest slice reason={} activeThread=0x{:08x} budget={} startPc=0x{:08x} pc=0x{:08x} ra=0x{:08x} queued={}",
                          reason, activeGuestThread_, instructionBudget, startPc, pc, ra, guestMessages_.size());
         }
+        if (stoppedByWatchdog && activeGuestThread_) {
+            spdlog::info("guest thread timeslice yield handle=0x{:08x} reason={} pc=0x{:08x} queued={}",
+                         activeGuestThread_, reason, pc, guestMessages_.size());
+            yieldActiveGuestThread("timeslice");
+        }
         pumpHostMessages();
         compactQueuedPointerMotion();
         enqueueDueTimers();
@@ -1062,7 +1077,7 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed() {
         enqueueDueTimers();
         if (!guestMessages_.empty() && hasHostWindows()) {
             compactQueuedPointerMotion();
-            const uint64_t budget = hasPendingUserInput() ? 500000u : 1000000u;
+            const uint64_t budget = hasPendingUserInput() ? 50000u : 200000u;
             spdlog::debug("resuming guest for queued message queued={} budget={}", guestMessages_.size(), budget);
             if (!resumeGuestSlice(budget, "queued-message")) {
                 return;
@@ -1482,6 +1497,26 @@ void SyntheticDllRuntime::restoreGuestCpuContext(const GuestCpuContext& context)
     }
 }
 
+const SyntheticDllRuntime::GuestThreadState* SyntheticDllRuntime::activeGuestThreadState() const {
+    if (!activeGuestThread_) return nullptr;
+    auto it = guestThreads_.find(activeGuestThread_);
+    return it == guestThreads_.end() ? nullptr : &it->second;
+}
+
+std::string SyntheticDllRuntime::currentProcessModulePath() const {
+    if (const auto* thread = activeGuestThreadState()) {
+        if (!thread->modulePath.empty()) return thread->modulePath;
+    }
+    return mainModulePath_;
+}
+
+uint32_t SyntheticDllRuntime::currentProcessModuleBase() const {
+    if (const auto* thread = activeGuestThreadState()) {
+        if (thread->moduleBase) return thread->moduleBase;
+    }
+    return mainModuleBase_;
+}
+
 uint32_t SyntheticDllRuntime::createGuestThread(uint32_t startAddress, uint32_t parameter, uint32_t flags) {
     if (!startAddress || !threadExitStub_) {
         lastError_ = 87;
@@ -1510,10 +1545,97 @@ uint32_t SyntheticDllRuntime::createGuestThread(uint32_t startAddress, uint32_t 
     }
     thread.suspendCount = (flags & 0x00000004u) ? 1 : 0;
     thread.state = thread.suspendCount ? GuestThreadRunState::Suspended : GuestThreadRunState::Runnable;
+    if (const auto* active = activeGuestThreadState()) {
+        thread.processHandle = active->processHandle;
+        thread.processId = active->processId;
+        thread.moduleBase = active->moduleBase;
+        thread.modulePath = active->modulePath;
+    } else {
+        thread.processHandle = mainProcessPseudoHandle_;
+        thread.processId = mainProcessId_;
+        thread.moduleBase = mainModuleBase_;
+        thread.modulePath = mainModulePath_;
+    }
     thread.context = initialGuestThreadContext(startAddress, parameter, stackTop);
     guestThreads_[guestHandle] = std::move(thread);
     lastError_ = 0;
     return guestHandle;
+}
+
+bool SyntheticDllRuntime::startGuestProcessImage(const std::string& guestApplication,
+                                                 const std::filesystem::path& hostApplication,
+                                                 uint32_t moduleBase,
+                                                 uint32_t entryPoint,
+                                                 const std::string& commandLine,
+                                                 uint32_t& processHandle,
+                                                 uint32_t& threadHandle,
+                                                 uint32_t& processId,
+                                                 uint32_t& threadId) {
+    processHandle = 0;
+    threadHandle = 0;
+    processId = 0;
+    threadId = 0;
+    if (!moduleBase || !entryPoint || !threadExitStub_) {
+        lastError_ = 87;
+        return false;
+    }
+
+    constexpr uint32_t kGuestThreadStackSize = 0x10000;
+    const uint32_t stackBase = allocate(kGuestThreadStackSize, true);
+    if (!stackBase) {
+        lastError_ = 8;
+        return false;
+    }
+    const uint32_t commandLineChars = uint32_t(commandLine.size() + 1);
+    const uint32_t commandLinePtr = allocate(std::max<uint32_t>(2, commandLineChars * 2), true);
+    if (!commandLinePtr) {
+        releaseAllocation(stackBase);
+        lastError_ = 8;
+        return false;
+    }
+    writeUtf16(commandLinePtr, commandLine, commandLineChars);
+
+    processId = nextGuestProcessId_++;
+    processHandle = makeGuestHandle({GuestHandle::Kind::GuestProcess, 0, processId});
+    threadHandle = makeGuestHandle({GuestHandle::Kind::GuestThread, 0, 0});
+    const uint32_t stackTop = (stackBase + kGuestThreadStackSize - 0x100u) & ~0x0fu;
+
+    GuestThreadState thread;
+    thread.handle = threadHandle;
+    thread.threadId = nextGuestThreadId_++;
+    thread.startAddress = entryPoint;
+    thread.parameter = commandLinePtr;
+    thread.stackBase = stackBase;
+    thread.stackSize = kGuestThreadStackSize;
+    thread.tlsBase = allocate(64 * sizeof(uint32_t), true);
+    if (!thread.tlsBase) {
+        releaseAllocation(commandLinePtr);
+        releaseAllocation(stackBase);
+        lastError_ = 8;
+        return false;
+    }
+    thread.processHandle = processHandle;
+    thread.processId = processId;
+    thread.moduleBase = moduleBase;
+    thread.modulePath = guestApplication.empty()
+        ? ("\\" + pathToUtf8(hostApplication.filename()))
+        : guestApplication;
+    thread.state = GuestThreadRunState::Runnable;
+    thread.context = initialGuestThreadContext(entryPoint, 0, stackTop);
+    thread.context.registers[UC_MIPS_REG_GP] = moduleBase + 0x8000;
+    thread.context.registers[UC_MIPS_REG_A0] = moduleBase;
+    thread.context.registers[UC_MIPS_REG_A1] = 0;
+    thread.context.registers[UC_MIPS_REG_A2] = commandLinePtr;
+    thread.context.registers[UC_MIPS_REG_A3] = 1;
+    thread.context.registers[UC_MIPS_REG_T9] = entryPoint;
+
+    threadId = thread.threadId;
+    guestThreads_[threadHandle] = std::move(thread);
+    lastError_ = 0;
+    spdlog::info("CreateProcessW guest image scheduled app=\"{}\" host=\"{}\" base=0x{:08x} entry=0x{:08x} process=0x{:08x}/{} thread=0x{:08x}/{} cmd=\"{}\"",
+                 guestApplication, pathToUtf8(hostApplication), moduleBase, entryPoint,
+                 processHandle, processId, threadHandle, threadId, commandLine);
+    return true;
 }
 
 uint32_t SyntheticDllRuntime::resumeGuestThread(uint32_t guestHandle) {
@@ -1540,13 +1662,33 @@ uint32_t SyntheticDllRuntime::resumeGuestThread(uint32_t guestHandle) {
     return previousSuspendCount;
 }
 
+void SyntheticDllRuntime::wakeGuestThreadsWaitingForMessage() {
+    for (auto& [threadHandle, thread] : guestThreads_) {
+        if (thread.state != GuestThreadRunState::WaitingForMessage) continue;
+        thread.state = GuestThreadRunState::Runnable;
+        spdlog::info("guest thread message wait satisfied handle=0x{:08x}", threadHandle);
+    }
+}
+
 void SyntheticDllRuntime::refreshSignaledGuestWaits() {
     refreshCompletedHostWaveBuffers();
 #if defined(_WIN32)
     constexpr DWORD kWaitObject0 = WAIT_OBJECT_0;
     constexpr DWORD kWaitTimeout = WAIT_TIMEOUT;
+    const uint64_t now = hostTickMilliseconds();
     for (auto& [threadHandle, thread] : guestThreads_) {
         if (thread.state != GuestThreadRunState::Waiting) continue;
+        if (thread.sleepUntilMs) {
+            if (now < thread.sleepUntilMs) continue;
+            thread.sleepUntilMs = 0;
+            thread.state = GuestThreadRunState::Runnable;
+            thread.waitHandle = 0;
+            thread.waitHandles.clear();
+            thread.context.registers[UC_MIPS_REG_V0] = 0;
+            lastError_ = 0;
+            spdlog::info("guest thread sleep satisfied handle=0x{:08x}", threadHandle);
+            continue;
+        }
         std::vector<uint32_t> handles = thread.waitHandles;
         if (handles.empty() && thread.waitHandle) handles.push_back(thread.waitHandle);
         if (handles.empty()) continue;
@@ -1567,15 +1709,17 @@ void SyntheticDllRuntime::refreshSignaledGuestWaits() {
 
             bool ready = false;
             DWORD wait = kWaitObject0;
-            if (handle->kind == GuestHandle::Kind::GuestThread) {
+            if (handle->hostValue &&
+                (handle->kind == GuestHandle::Kind::HostEvent ||
+                 handle->kind == GuestHandle::Kind::HostMutex ||
+                 handle->kind == GuestHandle::Kind::GuestProcess ||
+                 handle->kind == GuestHandle::Kind::GuestThread)) {
+                wait = ::WaitForSingleObject(reinterpret_cast<HANDLE>(handle->hostValue), 0);
+                ready = wait == kWaitObject0;
+            } else if (handle->kind == GuestHandle::Kind::GuestThread) {
                 auto waitedThread = guestThreads_.find(handles[i]);
                 ready = waitedThread == guestThreads_.end() ||
                         waitedThread->second.state == GuestThreadRunState::Terminated;
-            } else if (handle->hostValue &&
-                       (handle->kind == GuestHandle::Kind::HostEvent ||
-                        handle->kind == GuestHandle::Kind::HostMutex)) {
-                wait = ::WaitForSingleObject(reinterpret_cast<HANDLE>(handle->hostValue), 0);
-                ready = wait == kWaitObject0;
             } else {
                 ready = true;
             }
@@ -1723,8 +1867,17 @@ bool SyntheticDllRuntime::cooperateGuestThreadsAfterCall(const std::string& name
     if (!returnAddress) returnAddress = reg(UC_MIPS_REG_RA);
     const bool yieldingCall = name == "Sleep" || name == "WaitForSingleObject" ||
                               name == "WaitForMultipleObjects";
-    if (activeGuestThread_ && yieldingCall) return yieldActiveGuestThread(name.c_str(), returnAddress);
-    const bool threadStarterCall = name == "CreateThread" || name == "ResumeThread";
+    const bool queuedUiWork = name == "PostMessageW" || name == "InvalidateRect" ||
+                              name == "SetTimer" || name == "ShowWindow";
+    if (activeGuestThread_ && (yieldingCall || (queuedUiWork && !guestMessages_.empty()))) {
+        return yieldActiveGuestThread(name.c_str(), returnAddress);
+    }
+    const bool processStarterCall = name == "CreateProcessW";
+    if (activeGuestThread_ && processStarterCall && hasRunnableGuestThread()) {
+        return yieldActiveGuestThread(name.c_str(), returnAddress);
+    }
+    const bool threadStarterCall = name == "CreateThread" || name == "ResumeThread" ||
+                                   processStarterCall;
     if (!activeGuestThread_ && threadStarterCall && hasRunnableGuestThread()) {
         return switchToRunnableGuestThread(name.c_str(), returnAddress);
     }
@@ -1855,16 +2008,20 @@ uint32_t SyntheticDllRuntime::waitForMultipleGuestObjects(uint32_t count,
             return kWaitFailed;
         }
         bool ready = false;
+#if defined(_WIN32)
+        if (handle->hostValue &&
+            (handle->kind == GuestHandle::Kind::HostEvent ||
+             handle->kind == GuestHandle::Kind::HostMutex ||
+             handle->kind == GuestHandle::Kind::GuestProcess ||
+             handle->kind == GuestHandle::Kind::GuestThread)) {
+            ready = ::WaitForSingleObject(reinterpret_cast<HANDLE>(handle->hostValue), 0) == kWaitObject0;
+        } else
+#endif
         if (handle->kind == GuestHandle::Kind::GuestThread) {
             auto thread = guestThreads_.find(handles[i]);
             ready = thread == guestThreads_.end() ||
                     thread->second.state == GuestThreadRunState::Terminated;
         }
-#if defined(_WIN32)
-        else if (handle->hostValue) {
-            ready = ::WaitForSingleObject(reinterpret_cast<HANDLE>(handle->hostValue), 0) == kWaitObject0;
-        }
-#endif
         else {
             ready = true;
         }
@@ -2584,6 +2741,31 @@ void SyntheticDllRuntime::queueVisiblePopupPaint(uint32_t hwnd) {
                  hwnd, discardedMouseMoves);
 }
 
+void SyntheticDllRuntime::queueVisiblePopupPaintsAbove(uint32_t hwnd) {
+    std::vector<uint32_t> popups;
+    for (const auto& [popupHwnd, window] : windows_) {
+        if (popupHwnd <= hwnd || window.destroyed || !window.visible ||
+            (window.style & kWindowStyleChild) || window.width <= 0 || window.height <= 0) {
+            continue;
+        }
+        constexpr uint32_t kWindowStylePopup = 0x80000000u;
+        const bool ownedPopup = isOwnedPopupWindow(popupHwnd);
+        const bool topLevelPopup = !window.parent && (window.style & kWindowStylePopup);
+        if (!ownedPopup && !topLevelPopup) continue;
+        popups.push_back(popupHwnd);
+    }
+
+    if (popups.empty()) return;
+    for (uint32_t popupHwnd : popups) {
+        queueGuestPaint(popupHwnd, true);
+    }
+    for (auto it = popups.rbegin(); it != popups.rend(); ++it) {
+        prioritizeQueuedWindowMessages(*it);
+    }
+    spdlog::info("queued {} visible popup repaint(s) above hwnd=0x{:08x}",
+                 popups.size(), hwnd);
+}
+
 std::pair<int32_t, int32_t> SyntheticDllRuntime::guestWindowOrigin(uint32_t hwnd) const {
     int32_t x = 0;
     int32_t y = 0;
@@ -2689,7 +2871,7 @@ uint32_t SyntheticDllRuntime::coveringFullScreenOwnedPopup(uint32_t hwnd) const 
     for (auto it = windows_.rbegin(); it != windows_.rend(); ++it) {
         const uint32_t popupHwnd = it->first;
         const GuestWindow& popup = it->second;
-        if (popupHwnd == hwnd || popup.destroyed || !popup.visible ||
+        if (popupHwnd <= hwnd || popup.destroyed || !popup.visible ||
             !isOwnedPopupWindow(popupHwnd) || !guestWindowCoversFramebuffer(popupHwnd)) {
             continue;
         }
@@ -2883,6 +3065,7 @@ bool SyntheticDllRuntime::hasCoveringRootPopup(uint32_t hwnd) const {
     const int32_t rootRight = rootX + rootWindow->second.width;
     const int32_t rootBottom = rootY + rootWindow->second.height;
     for (const auto& [popupHwnd, popup] : windows_) {
+        if (popupHwnd <= hwnd) continue;
         if (!popup.visible || popup.destroyed || popup.parent != root ||
             (popup.style & kWindowStyleChild)) {
             continue;
@@ -3122,17 +3305,66 @@ void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t
     int32_t clientX = hostX;
     int32_t clientY = hostY;
     uint32_t hwnd = 0;
+    auto ownedPopupRootForInput = [&](uint32_t target) {
+        for (uint32_t current = target; current;) {
+            if (isOwnedPopupWindow(current)) return current;
+            auto window = windows_.find(current);
+            if (window == windows_.end()) break;
+            current = window->second.parent;
+        }
+        return 0u;
+    };
+    auto canUseCapturedWindow = [&](uint32_t capturedHwnd) {
+        const uint32_t popupRoot = ownedPopupRootForInput(capturedHwnd);
+        bool abovePopupRoot = false;
+        for (uint32_t current = capturedHwnd; current;) {
+            auto window = windows_.find(current);
+            if (window == windows_.end() || window->second.destroyed ||
+                !window->second.visible || (!window->second.enabled && !abovePopupRoot)) {
+                return false;
+            }
+            if (current == popupRoot) abovePopupRoot = true;
+            current = window->second.parent;
+        }
+        return true;
+    };
     if (message == 0x0202 && hostPointerCaptureWindow_) {
         auto captured = windows_.find(hostPointerCaptureWindow_);
-        if (captured != windows_.end() && !captured->second.destroyed) hwnd = hostPointerCaptureWindow_;
+        if (captured != windows_.end() && canUseCapturedWindow(hostPointerCaptureWindow_)) {
+            hwnd = hostPointerCaptureWindow_;
+        } else {
+            hostPointerCaptureWindow_ = 0;
+        }
     } else if (message != 0x0201 && capturedWindow_) {
         auto captured = windows_.find(capturedWindow_);
-        if (captured != windows_.end() && !captured->second.destroyed) hwnd = capturedWindow_;
+        if (captured != windows_.end() && canUseCapturedWindow(capturedWindow_)) {
+            hwnd = capturedWindow_;
+        } else {
+            capturedWindow_ = 0;
+        }
     }
     if (!hwnd) {
         hwnd = windowAtPoint(rootGuestHwnd, hostX, hostY, clientX, clientY);
     }
     if (!hwnd) return;
+
+    const uint32_t popupRoot = ownedPopupRootForInput(hwnd);
+    bool abovePopupRoot = false;
+    for (uint32_t current = hwnd; current;) {
+        auto window = windows_.find(current);
+        if (window == windows_.end()) break;
+        if (!window->second.enabled && !abovePopupRoot) {
+            if (message == 0x0202 && hostPointerCaptureWindow_ == hwnd) {
+                hostPointerCaptureWindow_ = 0;
+            }
+            spdlog::info("discarded host mouse msg=0x{:04x} hwnd=0x{:08x} disabledAt=0x{:08x} point={},{}",
+                         message, hwnd, current, hostX, hostY);
+            return;
+        }
+        if (current == popupRoot) abovePopupRoot = true;
+        current = window->second.parent;
+    }
+
     auto originOf = [&](uint32_t target) {
         int32_t x = 0;
         int32_t y = 0;
@@ -5783,6 +6015,7 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         setReg(UC_MIPS_REG_PC, originalRa);
         spdlog::info("{} synchronous paint complete hwnd=0x{:08x} return=0x{:08x}",
                      sourceName, hwnd, originalRa);
+        queueVisiblePopupPaintsAbove(hwnd);
         presentHostWindows(true);
         pumpHostMessages();
         return;
@@ -5913,6 +6146,37 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         return;
     }
 
+    if (isCoredll && ordinal == 0x01F0 && activeGuestThread_) {
+        auto active = guestThreads_.find(activeGuestThread_);
+        if (active != guestThreads_.end()) {
+            active->second.context = captureGuestCpuContext();
+            active->second.context.registers[UC_MIPS_REG_PC] = ra;
+            active->second.context.registers[UC_MIPS_REG_RA] = ra;
+            active->second.context.registers[UC_MIPS_REG_V0] = 0;
+            if (a0 == 0) {
+                active->second.state = GuestThreadRunState::Runnable;
+                active->second.sleepUntilMs = 0;
+            } else {
+                active->second.state = GuestThreadRunState::Waiting;
+                active->second.waitHandle = 0;
+                active->second.waitHandles.clear();
+                active->second.waitAll = false;
+                active->second.sleepUntilMs = hostTickMilliseconds() + uint64_t(a0);
+            }
+            spdlog::info("guest thread sleep handle=0x{:08x} timeout={} return=0x{:08x}",
+                         activeGuestThread_, a0, ra);
+        }
+        activeGuestThread_ = 0;
+        if (mainThreadContext_.valid) {
+            updateCurrentThreadKData(mainThreadPseudoHandle_, mainThreadTls_);
+            restoreGuestCpuContext(mainThreadContext_);
+        } else {
+            switchToRunnableGuestThread(name.c_str());
+        }
+        pumpHostMessages();
+        return;
+    }
+
     if (isCoredll && ordinal == 0x01F2) {
         constexpr uint32_t kWaitTimeout = 0x00000102u;
         constexpr uint32_t kWaitFailed = 0xffffffffu;
@@ -5967,10 +6231,16 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
                     }
                 }
             }
-            setReg(UC_MIPS_REG_V0, kWaitTimeout);
-            spdlog::info("WaitForMultipleObjects cooperative guest-thread slice count={} handles=0x{:08x} waitAll={} timeout=0x{:08x} return=0x{:08x}",
-                         a0, a1, a2 != 0, a3, ra);
-            switchToRunnableGuestThread(name.c_str(), ra, preferredThread);
+            const uint32_t immediate = waitForMultipleGuestObjects(a0, a1, a2 != 0);
+            if (immediate != kWaitTimeout || a3 == 0) {
+                setReg(UC_MIPS_REG_V0, immediate);
+                setReg(UC_MIPS_REG_PC, ra);
+                pumpHostMessages();
+                return;
+            }
+            spdlog::info("WaitForMultipleObjects cooperative guest-thread slice count={} handles=0x{:08x} waitAll={} timeout=0x{:08x} retry=1",
+                         a0, a1, a2 != 0, a3);
+            switchToRunnableGuestThread(name.c_str(), 0, preferredThread);
             pumpHostMessages();
             return;
         }
@@ -6026,10 +6296,30 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
             uint32_t preferredThread = 0;
             auto* handle = lookupGuestHandle(a0);
             if (handle && handle->kind == GuestHandle::Kind::GuestThread) preferredThread = a0;
-            setReg(UC_MIPS_REG_V0, 0x00000102u); // WAIT_TIMEOUT after the cooperative slice.
-            spdlog::info("WaitForSingleObject cooperative guest-thread slice wait=0x{:08x} timeout=0x{:08x} return=0x{:08x}",
-                         a0, a1, ra);
-            switchToRunnableGuestThread(name.c_str(), ra, preferredThread);
+            bool ready = false;
+#if defined(_WIN32)
+            if (handle && handle->hostValue &&
+                (handle->kind == GuestHandle::Kind::HostEvent ||
+                 handle->kind == GuestHandle::Kind::HostMutex ||
+                 handle->kind == GuestHandle::Kind::GuestProcess ||
+                 handle->kind == GuestHandle::Kind::GuestThread)) {
+                ready = ::WaitForSingleObject(reinterpret_cast<HANDLE>(handle->hostValue), 0) == 0;
+            } else
+#endif
+            if (handle && handle->kind == GuestHandle::Kind::GuestThread) {
+                auto thread = guestThreads_.find(a0);
+                ready = thread == guestThreads_.end() ||
+                        thread->second.state == GuestThreadRunState::Terminated;
+            }
+            if (ready || a1 == 0) {
+                setReg(UC_MIPS_REG_V0, ready ? 0x00000000u : 0x00000102u);
+                setReg(UC_MIPS_REG_PC, ra);
+                pumpHostMessages();
+                return;
+            }
+            spdlog::info("WaitForSingleObject cooperative guest-thread slice wait=0x{:08x} timeout=0x{:08x} retry=1",
+                         a0, a1);
+            switchToRunnableGuestThread(name.c_str(), 0, preferredThread);
             pumpHostMessages();
             return;
         }
@@ -6086,6 +6376,26 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
             return;
         }
         pendingBlockingApis_.pop_back();
+    }
+
+    if (isCoredll && ordinal == 0x035D && activeGuestThread_ && guestMessages_.empty() && !quitPosted_) {
+        auto active = guestThreads_.find(activeGuestThread_);
+        if (active != guestThreads_.end()) {
+            active->second.context = captureGuestCpuContext();
+            active->second.context.registers[UC_MIPS_REG_PC] = pc;
+            active->second.state = GuestThreadRunState::WaitingForMessage;
+            spdlog::info("guest thread message wait handle=0x{:08x} return=0x{:08x} msgPtr=0x{:08x}",
+                         activeGuestThread_, ra, a0);
+        }
+        activeGuestThread_ = 0;
+        if (mainThreadContext_.valid) {
+            updateCurrentThreadKData(mainThreadPseudoHandle_, mainThreadTls_);
+            restoreGuestCpuContext(mainThreadContext_);
+        } else {
+            switchToRunnableGuestThread(name.c_str());
+        }
+        pumpHostMessages();
+        return;
     }
 
     uint32_t ret = 1;

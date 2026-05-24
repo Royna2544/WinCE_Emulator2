@@ -70,6 +70,7 @@ void SyntheticDllRuntime::registerCoredllMathExports(SyntheticModule& module) {
                     {0x07EE, {"__fptoli", Code::CoreDllFloatToLong, &SyntheticDllRuntime::handleFloatToLong}},
                     {0x07EF, {"__fptoul", Code::CoreDllFloatToUnsignedLong, &SyntheticDllRuntime::handleFloatToUnsignedLong}},
                     {0x07F0, {"__litofp", Code::CoreDllLongToFloat, &SyntheticDllRuntime::handleLongToFloat}},
+                    {0x07F1, {"__ultofp", Code::CoreDllUnsignedLongToFloat, &SyntheticDllRuntime::handleUnsignedLongToFloat}},
                     {0x07F2, {"__dptoli", Code::CoreDllDoubleToLong, &SyntheticDllRuntime::handleDoubleToLong}},
                     {0x07F3, {"__dptoul", Code::CoreDllDoubleToUnsignedLong, &SyntheticDllRuntime::handleDoubleToUnsignedLong}},
                     {0x07F4, {"__litodp", Code::CoreDllLongToDouble, &SyntheticDllRuntime::handleLongToDouble}},
@@ -87,6 +88,7 @@ void SyntheticDllRuntime::registerCoredllMathExports(SyntheticModule& module) {
                     {0x0802, {"__eqd", Code::CoreDllDoubleEqual, &SyntheticDllRuntime::handleDoubleEqual}},
                     {0x0803, {"__ged", Code::CoreDllDoubleGreaterEqual, &SyntheticDllRuntime::handleDoubleGreaterEqual}},
                     {0x0804, {"__gtd", Code::CoreDllDoubleGreaterThan, &SyntheticDllRuntime::handleDoubleGreaterThan}},
+                    {0x0805, {"__ned", Code::CoreDllDoubleNotEqual, &SyntheticDllRuntime::handleDoubleNotEqual}},
                 },
             };
         }
@@ -318,6 +320,12 @@ bool SyntheticDllRuntime::handleLongToFloat(SyntheticExportCode code, const Gues
     return true;
 }
 
+bool SyntheticDllRuntime::handleUnsignedLongToFloat(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
+    (void)code;
+    ret = guestFloatBits(static_cast<float>(args.a0));
+    return true;
+}
+
 bool SyntheticDllRuntime::handleFloatLessThan(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
     (void)code;
     ret = guestFloat(args.a0) < guestFloat(args.a1) ? 1 : 0;
@@ -381,5 +389,11 @@ bool SyntheticDllRuntime::handleDoubleGreaterEqual(SyntheticExportCode code, con
 bool SyntheticDllRuntime::handleDoubleGreaterThan(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
     (void)code;
     ret = doubleFromGuestPair(args.a0, args.a1) > doubleFromGuestPair(args.a2, args.a3) ? 1 : 0;
+    return true;
+}
+
+bool SyntheticDllRuntime::handleDoubleNotEqual(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
+    (void)code;
+    ret = doubleFromGuestPair(args.a0, args.a1) != doubleFromGuestPair(args.a2, args.a3) ? 1 : 0;
     return true;
 }

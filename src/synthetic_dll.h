@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <filesystem>
 #include <map>
 #include <memory>
@@ -27,6 +28,17 @@ struct SyntheticModule {
 
 class SyntheticDllRuntime {
 public:
+    struct GuestProcessLaunch {
+        std::filesystem::path hostApplication;
+        std::string guestApplication;
+        std::string commandLine;
+        uint32_t processHandle{};
+        uint32_t threadHandle{};
+        uint32_t processId{};
+        uint32_t threadId{};
+    };
+    using GuestProcessLauncher = std::function<bool(GuestProcessLaunch&)>;
+
     explicit SyntheticDllRuntime(uc_engine* uc);
 
     void setMainModulePath(std::string path);
@@ -39,6 +51,16 @@ public:
     void registerLoadedModule(const std::string& moduleName, const std::filesystem::path& path, uint32_t base,
                               const std::map<std::string, uint32_t>& exportsByName = {},
                               const std::map<uint16_t, uint32_t>& exportsByOrdinal = {});
+    void setGuestProcessLauncher(GuestProcessLauncher launcher);
+    bool startGuestProcessImage(const std::string& guestApplication,
+                                const std::filesystem::path& hostApplication,
+                                uint32_t moduleBase,
+                                uint32_t entryPoint,
+                                const std::string& commandLine,
+                                uint32_t& processHandle,
+                                uint32_t& threadHandle,
+                                uint32_t& processId,
+                                uint32_t& threadId);
     void flushRegistry();
     bool hasHostWindows() const;
     void runHostMessageLoopUntilClosed();
@@ -144,6 +166,8 @@ private:
         CoreDllQueryPerformanceCounter,
         CoreDllQueryPerformanceFrequency,
         CoreDllGetProcessIndexFromID,
+        CoreDllGetACP,
+        CoreDllIsValidLocale,
         CoreDllGetLastError,
         CoreDllSetLastError,
         CoreDllIsBadReadPtr,
@@ -245,6 +269,7 @@ private:
         CoreDllFloatToDouble,
         CoreDllDoubleToFloat,
         CoreDllLongToFloat,
+        CoreDllUnsignedLongToFloat,
         CoreDllFloatLessThan,
         CoreDllFloatLessEqual,
         CoreDllFloatEqual,
@@ -256,6 +281,7 @@ private:
         CoreDllDoubleEqual,
         CoreDllDoubleGreaterEqual,
         CoreDllDoubleGreaterThan,
+        CoreDllDoubleNotEqual,
         CoreDllFgetc,
         CoreDllFgets,
         CoreDllFopen,
@@ -287,6 +313,7 @@ private:
         CoreDllSwprintf,
         CoreDllVswprintf,
         CoreDllPrintf,
+        CoreDllVsprintf,
         CoreDllVsnwprintf,
         CoreDllGetCrtStorageEx,
         CoreDllGetCrtFlags,
@@ -362,6 +389,7 @@ private:
         CoreDllSetActiveWindow,
         CoreDllGetActiveWindow,
         CoreDllMessageBoxW,
+        CoreDllTranslateAcceleratorW,
         CoreDllIsWindowVisible,
     };
     struct GuestCallArgs {
@@ -535,6 +563,26 @@ private:
         uint32_t instance{};
         uint32_t flags{};
         uint32_t avgBytesPerSec{};
+        uint32_t deviceId{};
+        uint32_t hostFlags{};
+        uintptr_t hostCallback{};
+        uint16_t formatTag{};
+        uint16_t channels{};
+        uint32_t samplesPerSec{};
+        uint16_t blockAlign{};
+        uint16_t bitsPerSample{};
+    };
+    struct CachedWaveOutDevice {
+        uintptr_t hostValue{};
+        uint32_t deviceId{};
+        uint32_t hostFlags{};
+        uintptr_t hostCallback{};
+        uint16_t formatTag{};
+        uint16_t channels{};
+        uint32_t samplesPerSec{};
+        uint32_t avgBytesPerSec{};
+        uint16_t blockAlign{};
+        uint16_t bitsPerSample{};
     };
     struct GuestMessage {
         uint32_t hwnd{};
@@ -619,6 +667,7 @@ private:
         Runnable,
         Running,
         Waiting,
+        WaitingForMessage,
         Terminated,
     };
     struct GuestThreadState {
@@ -631,7 +680,12 @@ private:
         uint32_t tlsBase{};
         uint32_t suspendCount{};
         uint32_t exitCode{};
+        uint32_t processHandle{};
+        uint32_t processId{};
+        uint32_t moduleBase{};
+        std::string modulePath;
         uint32_t waitHandle{};
+        uint64_t sleepUntilMs{};
         std::vector<uint32_t> waitHandles;
         bool waitAll{};
         GuestThreadRunState state{GuestThreadRunState::Suspended};
@@ -686,6 +740,8 @@ private:
     uint32_t nextGuestThreadId_{1};
     uint32_t mainThreadPseudoHandle_{0xfffffffeu};
     uint32_t mainProcessPseudoHandle_{0xffffffffu};
+    uint32_t mainProcessId_{1};
+    uint32_t nextGuestProcessId_{2};
     uint32_t mainThreadTls_{};
     std::map<std::string, GuestWindowClass> windowClassesByName_;
     std::map<uint16_t, std::string> windowClassNamesByAtom_;
@@ -696,8 +752,10 @@ private:
     std::map<uint32_t, GuestFont> fonts_;
     std::map<uint32_t, GuestBitmap> bitmaps_;
     std::map<int32_t, uint32_t> stockObjects_;
+    GuestProcessLauncher guestProcessLauncher_;
     std::map<uint32_t, HostWaveBuffer> hostWaveBuffers_;
     std::map<uint32_t, GuestWaveOutState> waveOutStates_;
+    std::vector<CachedWaveOutDevice> cachedWaveOutDevices_;
     std::map<uint32_t, std::string> registryHandles_;
     std::map<uint32_t, std::string> fileHandleDebugNames_;
     std::map<uint32_t, uint32_t> fileReadCounts_;
@@ -861,6 +919,8 @@ private:
     bool handleQueryPerformanceCounter(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleQueryPerformanceFrequency(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleGetProcessIndexFromID(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleGetACP(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleIsValidLocale(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleGetLastError(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleSetLastError(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleIsBadReadPtr(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
@@ -962,6 +1022,7 @@ private:
     bool handleFloatToDouble(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleDoubleToFloat(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleLongToFloat(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleUnsignedLongToFloat(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleFloatLessThan(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleFloatLessEqual(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleFloatEqual(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
@@ -973,6 +1034,7 @@ private:
     bool handleDoubleEqual(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleDoubleGreaterEqual(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleDoubleGreaterThan(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleDoubleNotEqual(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleFgetc(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleFgets(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleFopen(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
@@ -1069,6 +1131,7 @@ private:
     bool handleSetActiveWindow(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleGetActiveWindow(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleMessageBoxW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleTranslateAcceleratorW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleIsWindowVisible(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     uint32_t handleWNetGetUserW(uint32_t providerName, uint32_t userName, uint32_t lengthPtr);
     uint32_t handleSystemParametersInfoW(uint32_t action, uint32_t uiParam, uint32_t pvParam, uint32_t flags);
@@ -1100,6 +1163,10 @@ private:
     void restoreGuestCpuContext(const GuestCpuContext& context) const;
     uint32_t createGuestThread(uint32_t startAddress, uint32_t parameter, uint32_t flags);
     uint32_t resumeGuestThread(uint32_t guestHandle);
+    void wakeGuestThreadsWaitingForMessage();
+    const GuestThreadState* activeGuestThreadState() const;
+    std::string currentProcessModulePath() const;
+    uint32_t currentProcessModuleBase() const;
     void refreshCompletedHostWaveBuffers();
     void refreshSignaledGuestWaits();
     bool hasRunnableGuestThread();
@@ -1128,6 +1195,7 @@ private:
     void prioritizeQueuedWindowMessages(uint32_t hwnd);
     void queueVisibleFullScreenPopupPaint(uint32_t hwnd);
     void queueVisiblePopupPaint(uint32_t hwnd);
+    void queueVisiblePopupPaintsAbove(uint32_t hwnd);
     std::pair<int32_t, int32_t> guestWindowOrigin(uint32_t hwnd) const;
     void noteGuestWindowPaint(uint32_t hwnd,
                               int32_t left,

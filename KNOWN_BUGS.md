@@ -67,6 +67,17 @@
 - Current interpretation: The map failure is not currently a missing filesystem-root problem. The strongest current suspect is missing guest-thread execution/cooperative scheduling, leaving route/map worker state uninitialized. Also continue checking any GDI operations that should transfer map surfaces into the framebuffer once the worker state exists.
 - Related fixes: The route/search path showed child windows created through `CreateWindowExW` with raw zero sizes but normalized to full-screen `800x480`, which could cause duplicate full-screen content and wrong hit/message targeting. The bridge now preserves zero-sized child windows while keeping top-level zero-size CE windows at framebuffer size. A later route-search run also showed a second top-level guest popup creating a second mirrored host presenter; host presenter creation is now pinned to the primary CE framebuffer presenter so additional top-level guest windows stay in the guest window model.
 
+### Route search helper can still leave parent waiting
+
+- Status: Open.
+- Evidence: User-driven route search on 2026-05-24 launched `happyway_win.exe` twice, showed transient popup/transparent route windows, then left the parent spinning in route/search worker messages. Standalone helper runs before the ordinal fix reported unsupported COREDLL `#1146`, `#209`, `#186`, and `#838`, then crashed at `pc=0x00000000`. After implementing SDK-confirmed `vsprintf`, `IsValidLocale`, `GetACP`, and `TranslateAcceleratorW`, standalone `happyway_win.exe` opens route/map `MRData` files and idles without those unsupported calls or the null-PC crash.
+- Current interpretation: The original helper crash is fixed, but the full-app handoff still needs verification. If the parent still waits forever, inspect which route-result file/event/shared state it expects after the child exits or idles.
+
+### Modal popup input was blocked by disabled owner
+
+- Status: Fixed; verify interactively.
+- Evidence: In `captures/inavi_autodrive_20260524_144740`, route-search popup `0x00015419` was visible and enabled, but clicks were discarded with `disabledAt=0x000140d4` because the popup's owner window had been disabled for modal operation. Host input routing now treats an enabled owned popup as the input root and ignores disabled owner ancestors above that popup.
+
 ### Possible remaining bitmap color-format mismatch
 
 - Status: Mostly fixed; keep watching specific assets.

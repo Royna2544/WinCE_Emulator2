@@ -211,6 +211,44 @@ std::wstring buildCommandLine(const std::vector<std::wstring>& args) {
     return commandLine;
 }
 
+std::vector<wchar_t> buildQuietChildEnvironmentBlock() {
+    std::vector<std::wstring> entries;
+#if defined(_WIN32)
+    LPWCH rawEnvironment = GetEnvironmentStringsW();
+    if (rawEnvironment) {
+        for (const wchar_t* entry = rawEnvironment; *entry;) {
+            const std::wstring value(entry);
+            entry += value.size() + 1;
+            const size_t equals = value.find(L'=');
+            if (equals == std::wstring::npos || equals == 0) {
+                entries.push_back(value);
+                continue;
+            }
+            const std::wstring name = value.substr(0, equals);
+            if (_wcsicmp(name.c_str(), L"INAVI_EMU_LOG") == 0 ||
+                _wcsicmp(name.c_str(), L"INAVI_EMU_DUMPS") == 0) {
+                continue;
+            }
+            entries.push_back(value);
+        }
+        FreeEnvironmentStringsW(rawEnvironment);
+    }
+#endif
+    entries.emplace_back(L"INAVI_EMU_LOG=error");
+    entries.emplace_back(L"INAVI_EMU_DUMPS=0");
+    std::sort(entries.begin(), entries.end(), [](const std::wstring& lhs, const std::wstring& rhs) {
+        return _wcsicmp(lhs.c_str(), rhs.c_str()) < 0;
+    });
+
+    std::vector<wchar_t> block;
+    for (const std::wstring& entry : entries) {
+        block.insert(block.end(), entry.begin(), entry.end());
+        block.push_back(L'\0');
+    }
+    block.push_back(L'\0');
+    return block;
+}
+
 bool realChildProcessesEnabled() {
     char value[32]{};
     const DWORD chars = GetEnvironmentVariableA("INAVI_EMU_REAL_CHILD_PROCESS", value, DWORD(std::size(value)));
@@ -220,6 +258,16 @@ bool realChildProcessesEnabled() {
            _stricmp(value, "false") != 0 &&
            _stricmp(value, "no") != 0 &&
            _stricmp(value, "off") != 0;
+}
+
+bool inRuntimeChildProcessesEnabled() {
+    char value[32]{};
+    const DWORD chars = GetEnvironmentVariableA("INAVI_EMU_INPROC_CHILD_PROCESS", value, DWORD(std::size(value)));
+    if (!chars || chars >= DWORD(std::size(value))) return false;
+    return std::strcmp(value, "1") == 0 ||
+           _stricmp(value, "true") == 0 ||
+           _stricmp(value, "yes") == 0 ||
+           _stricmp(value, "on") == 0;
 }
 
 uint32_t guestAnsiCodePage(uint32_t codePage) {
@@ -815,6 +863,62 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
         ret = closeGuestHandle(a0);
     } else if (ordinal == ord(CoredllOrdinal::WaitForSingleObject)) {
         auto* handle = lookupGuestHandle(a0);
+        const auto isHostWaitable = [](const GuestHandle& guestHandle) {
+            if (!guestHandle.hostValue) return false;
+            return guestHandle.kind == GuestHandle::Kind::HostEvent ||
+                   guestHandle.kind == GuestHandle::Kind::HostMutex ||
+                   guestHandle.kind == GuestHandle::Kind::GuestProcess ||
+                   guestHandle.kind == GuestHandle::Kind::GuestThread;
+        };
+        const auto handleKindName = [](GuestHandle::Kind kind) -> const char* {
+            switch (kind) {
+            case GuestHandle::Kind::HostEvent: return "event";
+            case GuestHandle::Kind::HostMutex: return "mutex";
+            case GuestHandle::Kind::GuestProcess: return "process";
+            case GuestHandle::Kind::GuestThread: return "thread";
+            default: return "handle";
+            }
+        };
+#if defined(_WIN32)
+        if (handle && isHostWaitable(*handle) && a1 != 0) {
+            constexpr uint32_t kWaitObject0 = WAIT_OBJECT_0;
+            constexpr uint32_t kWaitTimeout = WAIT_TIMEOUT;
+            constexpr uint32_t kWaitFailed = WAIT_FAILED;
+            const uint64_t start = hostTickMilliseconds();
+            const bool infinite = a1 == INFINITE;
+            const HANDLE host = reinterpret_cast<HANDLE>(handle->hostValue);
+            for (;;) {
+                refreshCompletedHostWaveBuffers();
+                const DWORD wait = ::WaitForSingleObject(host, 0);
+                if (wait == WAIT_OBJECT_0) {
+                    ret = kWaitObject0;
+                    lastError_ = 0;
+                    break;
+                }
+                if (wait == WAIT_FAILED) {
+                    ret = kWaitFailed;
+                    lastError_ = GetLastError();
+                    break;
+                }
+                const uint64_t elapsed = hostTickMilliseconds() - start;
+                if (!infinite && elapsed >= a1) {
+                    ret = kWaitTimeout;
+                    lastError_ = 0;
+                    break;
+                }
+                pumpHostMessages();
+                const DWORD sleepMs = infinite
+                    ? 5u
+                    : DWORD(std::max<uint64_t>(1, std::min<uint64_t>(5, a1 - elapsed)));
+                ::Sleep(sleepMs);
+            }
+            const uint64_t elapsed = hostTickMilliseconds() - start;
+            if (elapsed >= 250) {
+                spdlog::info("WaitForSingleObject cooperative host wait handle=0x{:08x} kind={} timeout=0x{:08x} -> 0x{:08x} elapsedMs={}",
+                             a0, handleKindName(handle->kind), a1, ret, elapsed);
+            }
+        } else
+#endif
         if (handle && handle->kind == GuestHandle::Kind::GuestThread) {
             auto thread = guestThreads_.find(a0);
             if (thread == guestThreads_.end() || thread->second.state == GuestThreadRunState::Terminated) {
@@ -841,9 +945,54 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
         const std::filesystem::path hostApplication = application.empty()
             ? std::filesystem::path{}
             : resolveGuestPath(application);
+        const std::string childFileName = lowerAscii(pathToUtf8(hostApplication.filename()));
+        const bool needsSharedGuestWindowNamespace = childFileName == "happyway_win.exe";
+        auto ensureExternalWindowProxy = [&]() {
+            if (!needsSharedGuestWindowNamespace) return uint32_t{};
+            for (const auto& [hwnd, window] : windows_) {
+                if (!window.destroyed &&
+                    lowerAscii(window.className) == "happyway_win" &&
+                    window.title == "happyway_win") {
+                    return hwnd;
+                }
+            }
+            const uint32_t hwnd = makeGuestHandle({GuestHandle::Kind::GuestWindow, 0, 0});
+            GuestWindow window;
+            window.hwnd = hwnd;
+            window.className = "happyway_win";
+            window.title = "happyway_win";
+            window.width = 150;
+            window.height = 50;
+            window.visible = false;
+            window.enabled = true;
+            windows_[hwnd] = window;
+            spdlog::info("CreateProcessW registered external guest window proxy hwnd=0x{:08x} class=\"happyway_win\" title=\"happyway_win\"",
+                         hwnd);
+            return hwnd;
+        };
         if (!application.empty() && (hostApplication.empty() || !std::filesystem::exists(hostApplication))) {
             lastError_ = 2;
             ret = 0;
+        } else if (guestProcessLauncher_ && needsSharedGuestWindowNamespace && inRuntimeChildProcessesEnabled()) {
+            GuestProcessLaunch launch;
+            launch.hostApplication = hostApplication;
+            launch.guestApplication = application;
+            launch.commandLine = commandLine;
+            if (guestProcessLauncher_(launch)) {
+                if (processInfo) {
+                    writeU32(processInfo, launch.processHandle);
+                    writeU32(processInfo + 4, launch.threadHandle);
+                    writeU32(processInfo + 8, launch.processId);
+                    writeU32(processInfo + 12, launch.threadId);
+                }
+                lastError_ = 0;
+                ret = 1;
+            } else {
+                lastError_ = lastError_ ? lastError_ : 8;
+                ret = 0;
+                spdlog::warn("CreateProcessW guest image launch failed app=\"{}\" host=\"{}\" lastError={}",
+                             application, pathToUtf8(hostApplication), lastError_);
+            }
         } else if (!realChildProcessesEnabled()) {
             const uint32_t processHandle = makeGuestHandle({GuestHandle::Kind::GuestProcess, 0, 0});
             const uint32_t threadHandle = makeGuestHandle({GuestHandle::Kind::GuestThread, 0, 0});
@@ -891,6 +1040,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
                 childArgs.emplace_back(L"--headless");
 
                 std::wstring hostCommandLine = buildCommandLine(childArgs);
+                std::vector<wchar_t> childEnvironment = buildQuietChildEnvironmentBlock();
                 STARTUPINFOW startup{};
                 startup.cb = sizeof(startup);
                 PROCESS_INFORMATION hostPi{};
@@ -899,9 +1049,9 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
                                          hostCommandLine.data(),
                                          nullptr,
                                          nullptr,
-                                         TRUE,
-                                         CREATE_NO_WINDOW,
-                                         nullptr,
+                                         FALSE,
+                                         CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
+                                         childEnvironment.empty() ? nullptr : childEnvironment.data(),
                                          workingDirectory.empty() ? nullptr : workingDirectory.c_str(),
                                          &startup,
                                          &hostPi);
@@ -929,6 +1079,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
                     }
                     lastError_ = 0;
                     ret = 1;
+                    ensureExternalWindowProxy();
                     spdlog::info("CreateProcessW launched child emulator app=\"{}\" pid={} tid={} process=0x{:08x} thread=0x{:08x}",
                                  application, hostPi.dwProcessId, hostPi.dwThreadId, processHandle, threadHandle);
                 }
@@ -950,10 +1101,11 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
         spdlog::info("CreateProcessW app=\"{}\" host=\"{}\" cmd=\"{}\" pi=0x{:08x} -> {} lastError={}",
                      application, pathToUtf8(hostApplication), commandLine, processInfo, ret, lastError_);
     } else if (ordinal == ord(CoredllOrdinal::GetModuleFileNameW)) {
-        ret = writeUtf16(a1, mainModulePath_, a2);
+        const std::string modulePath = a0 ? mainModulePath_ : currentProcessModulePath();
+        ret = writeUtf16(a1, modulePath, a2);
         lastError_ = ret ? 0 : 122;
         spdlog::info("GetModuleFileNameW module=0x{:08x} path=\"{}\" chars={} lastError={}",
-                     a0, mainModulePath_, ret, lastError_);
+                     a0, modulePath, ret, lastError_);
     } else if (ordinal == ord(CoredllOrdinal::OutputDebugStringW)) {
         spdlog::info("OutputDebugStringW: {}", readUtf16(a0));
         ret = 0;
@@ -985,7 +1137,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
         const std::string pathKey = lowerAscii(requested);
         const std::string nameKey = lowerAscii(pathToUtf8(pathFromUtf8(requested).filename()));
         if (requested.empty()) {
-            ret = mainModuleBase_;
+            ret = currentProcessModuleBase();
         } else if (auto it = loadedModulesByPath_.find(pathKey); it != loadedModulesByPath_.end()) {
             ret = it->second.base;
         } else if (auto it = loadedModulesByName_.find(nameKey); it != loadedModulesByName_.end()) {
@@ -1081,6 +1233,8 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             }
         }
         lastError_ = ret ? 0 : 1400;
+        spdlog::info("FindWindowW class=\"{}\" title=\"{}\" -> 0x{:08x} lastError={}",
+                     a0 ? className : std::string{}, a1 ? title : std::string{}, ret, lastError_);
     } else if (ordinal == ord(CoredllOrdinal::CreateWindowExW)) {
         std::string className;
         if (a1 < 0x10000) {
@@ -1558,7 +1712,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
                     bitmapProbeStats(srcBitmap->second, srcX, srcY, srcW, srcH);
                 const BitmapProbeStats dstStats =
                     bitmapProbeStats(dstBitmap->second, int32_t(a1), int32_t(a2), int32_t(a3), dstH);
-                spdlog::info("TransparentImage probe#{} memory dstDc=0x{:08x} dstHwnd=0x{:08x} "
+                spdlog::debug("TransparentImage probe#{} memory dstDc=0x{:08x} dstHwnd=0x{:08x} "
                              "dstBitmap=0x{:08x} dstSize={}x{} dstRect={},{} {}x{} "
                              "dstStats sampled={} nonBlack={} unique~{} first=0x{:08x} last=0x{:08x} "
                              "srcDc=0x{:08x} srcHwnd=0x{:08x} srcBitmap=0x{:08x} srcSize={}x{} "
@@ -1599,7 +1753,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
                 ++blitProbeLogCounter_;
                 const BitmapProbeStats srcStats =
                     bitmapProbeStats(srcBitmap->second, srcX, srcY, srcW, srcH);
-                spdlog::info("TransparentImage probe#{} framebuffer dstDc=0x{:08x} dstHwnd=0x{:08x} "
+                spdlog::debug("TransparentImage probe#{} framebuffer dstDc=0x{:08x} dstHwnd=0x{:08x} "
                              "dstRect={},{} {}x{} srcDc=0x{:08x} srcHwnd=0x{:08x} "
                              "srcBitmap=0x{:08x} srcSize={}x{} srcRect={},{} {}x{} "
                              "srcStats sampled={} nonBlack={} unique~{} first=0x{:08x} "
@@ -1699,7 +1853,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
                     bitmapProbeStats(srcBitmap->second, srcX, srcY, srcW, srcH);
                 const BitmapProbeStats dstStats =
                     bitmapProbeStats(dstBitmap->second, int32_t(a1), int32_t(a2), dstW, dstH);
-                spdlog::info("{} probe#{} memory dstDc=0x{:08x} dstHwnd=0x{:08x} "
+                spdlog::debug("{} probe#{} memory dstDc=0x{:08x} dstHwnd=0x{:08x} "
                              "dstBitmap=0x{:08x} dstSize={}x{} dstRect={},{} {}x{} "
                              "dstStats sampled={} nonBlack={} unique~{} first=0x{:08x} last=0x{:08x} "
                              "srcDc=0x{:08x} srcHwnd=0x{:08x} srcBitmap=0x{:08x} srcSize={}x{} "
@@ -1743,7 +1897,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
                 splashCompositeBitmap_ = dstDc->selectedBitmap;
                 dumpGuestBitmapPpm(srcDc->selectedBitmap, srcBitmap->second, splashTag + "_source");
                 dumpGuestBitmapPpm(dstDc->selectedBitmap, dstBitmap->second, splashTag + "_result");
-                spdlog::info("{} splash probe dstDc=0x{:08x} dstBitmap=0x{:08x} dstSize={}x{} "
+                spdlog::debug("{} splash probe dstDc=0x{:08x} dstBitmap=0x{:08x} dstSize={}x{} "
                              "srcDc=0x{:08x} srcBitmap=0x{:08x} srcSize={}x{} dst={}x{} "
                              "src={}x{} srcOrigin={},{} rop=0x{:08x}",
                              name, a0, dstDc->selectedBitmap, dstBitmap->second.width,
@@ -1776,7 +1930,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
                 ++blitProbeLogCounter_;
                 const BitmapProbeStats srcStats =
                     bitmapProbeStats(srcBitmap->second, srcX, srcY, srcW, srcH);
-                spdlog::info("{} probe#{} framebuffer dstDc=0x{:08x} dstHwnd=0x{:08x} "
+                spdlog::debug("{} probe#{} framebuffer dstDc=0x{:08x} dstHwnd=0x{:08x} "
                              "dstRect={},{} {}x{} srcDc=0x{:08x} srcHwnd=0x{:08x} "
                              "srcBitmap=0x{:08x} srcSize={}x{} srcRect={},{} {}x{} "
                              "srcStats sampled={} nonBlack={} unique~{} first=0x{:08x} "
@@ -1804,7 +1958,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
                 const std::string tag = name + "_splash_framebuffer";
                 dumpGuestBitmapPpm(srcDc->selectedBitmap, srcBitmap->second, tag + "_source");
                 dumpFramebufferPpm(tag);
-                spdlog::info("{} splash probe dstDc=0x{:08x} framebuffer srcDc=0x{:08x} "
+                spdlog::debug("{} splash probe dstDc=0x{:08x} framebuffer srcDc=0x{:08x} "
                              "srcBitmap=0x{:08x} srcSize={}x{} dst={}x{} src={}x{} "
                              "srcOrigin={},{} rop=0x{:08x}",
                              name, a0, stackArg(5), srcDc->selectedBitmap,
@@ -2085,9 +2239,36 @@ ensureHostWindow(a0, it->second);
         } else {
             const bool wasVisible = it->second.visible;
             it->second.visible = a1 != 0;
-            if (!it->second.visible) it->second.paintBoundsValid = false;
+            size_t discardedInput = 0;
+            if (!it->second.visible) {
+                it->second.paintBoundsValid = false;
+                auto isSameOrDescendant = [&](uint32_t hwnd) {
+                    for (uint32_t current = hwnd; current;) {
+                        if (current == a0) return true;
+                        auto window = windows_.find(current);
+                        if (window == windows_.end()) break;
+                        current = window->second.parent;
+                    }
+                    return false;
+                };
+                const auto oldSize = guestMessages_.size();
+                std::erase_if(guestMessages_, [&](const GuestMessage& message) {
+                    return message.message >= 0x0200 && message.message <= 0x0202 &&
+                           isSameOrDescendant(message.hwnd);
+                });
+                discardedInput = oldSize - guestMessages_.size();
+                if (isSameOrDescendant(capturedWindow_)) capturedWindow_ = 0;
+                if (isSameOrDescendant(hostPointerCaptureWindow_)) hostPointerCaptureWindow_ = 0;
+                if (isSameOrDescendant(pendingSyntheticChildButtonUpWindow_)) {
+                    pendingSyntheticChildButtonUpWindow_ = 0;
+                }
+            }
             spdlog::info("ShowWindow guest=0x{:08x} cmd={} oldVisible={} newVisible={}",
                          a0, int32_t(a1), wasVisible ? 1 : 0, it->second.visible ? 1 : 0);
+            if (discardedInput) {
+                spdlog::info("ShowWindow discarded {} queued pointer messages for hidden guest=0x{:08x}",
+                             discardedInput, a0);
+            }
             ensureHostWindow(a0, it->second);
 #if defined(_WIN32)
             if (it->second.hostHwnd) {
@@ -2104,10 +2285,22 @@ ensureHostWindow(a0, it->second);
                 message.time = uint32_t(++tick_ * 16);
                 guestMessages_.push_back(message);
                 if (!it->second.visible && it->second.parent) {
+                    const bool exposesCoveredWindows =
+                        wasVisible && isOwnedPopupWindow(a0) && guestWindowCoversFramebuffer(a0);
                     eraseGuestWindowArea(a0, it->second);
                     spdlog::info("ShowWindow invalidating parent=0x{:08x} after hiding child=0x{:08x}",
                                  it->second.parent, a0);
                     queueGuestPaint(it->second.parent, true);
+                    if (exposesCoveredWindows) {
+                        size_t exposed = 0;
+                        for (const auto& [otherHwnd, window] : windows_) {
+                            if (otherHwnd == a0 || window.destroyed || !window.visible) continue;
+                            queueGuestPaint(otherHwnd, true);
+                            ++exposed;
+                        }
+                        spdlog::info("ShowWindow exposed full-screen popup hwnd=0x{:08x}; queued repaint for {} visible windows",
+                                     a0, exposed);
+                    }
                 }
             }
             lastError_ = 0;
@@ -2168,6 +2361,7 @@ ensureHostWindow(a0, it->second);
         message.wParam = a0;
         message.time = uint32_t(++tick_ * 16);
         guestMessages_.push_back(message);
+        wakeGuestThreadsWaitingForMessage();
         ret = 0;
     } else if (ordinal == ord(CoredllOrdinal::PostMessageW)) {
         if (a0 == 0xffff) {
@@ -2210,7 +2404,14 @@ ensureHostWindow(a0, it->second);
             guestMessages_.push_back(message);
             lastError_ = 0;
             ret = 1;
+            auto postedWindow = windows_.find(a0);
+            if (postedWindow != windows_.end() &&
+                postedWindow->second.className == "happyway_win") {
+                spdlog::info("PostMessageW target=happyway hwnd=0x{:08x} msg=0x{:08x} wparam=0x{:08x} lparam=0x{:08x} queued={}",
+                             a0, a1, a2, a3, guestMessages_.size());
+            }
         }
+        if (ret) wakeGuestThreadsWaitingForMessage();
     } else if (ordinal == ord(CoredllOrdinal::GetMessageW) ||
                ordinal == ord(CoredllOrdinal::GetMessageWNoWait) ||
                ordinal == ord(CoredllOrdinal::PeekMessageW)) {

@@ -178,6 +178,7 @@ void SyntheticDllRuntime::registerCoredllFsExports(SyntheticModule& module) {
 bool SyntheticDllRuntime::handleCreateFileW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
     (void)code;
     const std::string guestPath = readUtf16(args.a0);
+    const std::string guestLowerForTrace = lowerAscii(guestPath);
     if (isGuestDevicePath(guestPath)) {
         ret = openGuestSerialDevice(guestPath, args.a1, args.a2);
         return true;
@@ -198,13 +199,20 @@ bool SyntheticDllRuntime::handleCreateFileW(SyntheticExportCode code, const Gues
         const std::string hostText = pathToUtf8(hostPath);
         fileHandleDebugNames_[ret] = hostText;
         lastError_ = 0;
-        const std::string guestLower = lowerAscii(guestPath);
+        const std::string guestLower = guestLowerForTrace;
         const std::string hostLower = lowerAscii(hostText);
         const bool traceMapFile = guestLower.find("mapdata") != std::string::npos ||
                                   hostLower.find("mapdata") != std::string::npos;
-        if (traceMapFile) {
-            spdlog::info("CreateFileW map hit guest=\"{}\" host=\"{}\" guestHandle=0x{:08x} access=0x{:08x} share=0x{:08x} creation=0x{:08x} flags=0x{:08x}",
+        const bool traceRouteFile = guestLower.find("route") != std::string::npos ||
+                                    guestLower.find("routetest") != std::string::npos ||
+                                    hostLower.find("route") != std::string::npos ||
+                                    hostLower.find("routetest") != std::string::npos;
+        if (traceRouteFile) {
+            spdlog::info("CreateFileW route hit guest=\"{}\" host=\"{}\" guestHandle=0x{:08x} access=0x{:08x} share=0x{:08x} creation=0x{:08x} flags=0x{:08x}",
                          guestPath, hostText, ret, args.a1, args.a2, stackArg(4), stackArg(5));
+        } else if (traceMapFile) {
+            spdlog::debug("CreateFileW map hit guest=\"{}\" host=\"{}\" guestHandle=0x{:08x} access=0x{:08x} share=0x{:08x} creation=0x{:08x} flags=0x{:08x}",
+                          guestPath, hostText, ret, args.a1, args.a2, stackArg(4), stackArg(5));
         } else {
             spdlog::debug("CreateFileW hit guest=\"{}\" host=\"{}\" guestHandle=0x{:08x} access=0x{:08x} share=0x{:08x} creation=0x{:08x} flags=0x{:08x}",
                           guestPath, hostText, ret, args.a1, args.a2, stackArg(4), stackArg(5));
@@ -445,6 +453,14 @@ bool SyntheticDllRuntime::handleWriteFile(SyntheticExportCode code, const GuestC
         ret = ok ? 1 : 0;
         writeU32(args.a3, transferred);
         lastError_ = ret ? 0 : GetLastError();
+        auto debugName = fileHandleDebugNames_.find(args.a0);
+        const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+        const std::string debugLower = lowerAscii(debugPath);
+        if (debugLower.find("route") != std::string::npos ||
+            debugLower.find("routetest") != std::string::npos) {
+            spdlog::info("WriteFile route handle=0x{:08x} path=\"{}\" requested={} transferred={} ok={} lastError={}",
+                         args.a0, debugPath, args.a2, transferred, ok ? 1 : 0, lastError_);
+        }
     }
     return true;
 }

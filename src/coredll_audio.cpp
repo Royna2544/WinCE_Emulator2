@@ -343,10 +343,10 @@ bool SyntheticDllRuntime::handleWaveOutOpen(SyntheticExportCode code, const Gues
     HWAVEOUT host{};
     const DWORD_PTR instance = DWORD_PTR(stackArg(4));
     const DWORD flags = stackArg(5);
-    spdlog::debug("waveOutOpen format tag={} channels={} samplesPerSec={} avgBytesPerSec={} blockAlign={} bitsPerSample={} callback=0x{:08x} instance=0x{:08x} flags=0x{:08x}",
-                  format.wFormatTag, format.nChannels, format.nSamplesPerSec,
-                  format.nAvgBytesPerSec, format.nBlockAlign, format.wBitsPerSample,
-                  args.a3, uint32_t(instance), flags);
+    spdlog::info("waveOutOpen format tag={} channels={} samplesPerSec={} avgBytesPerSec={} blockAlign={} bitsPerSample={} callback=0x{:08x} instance=0x{:08x} flags=0x{:08x}",
+                 format.wFormatTag, format.nChannels, format.nSamplesPerSec,
+                 format.nAvgBytesPerSec, format.nBlockAlign, format.wBitsPerSample,
+                 args.a3, uint32_t(instance), flags);
     const DWORD callbackFlags = flags & CALLBACK_TYPEMASK;
     DWORD_PTR hostCallback = 0;
     DWORD hostFlags = flags;
@@ -364,10 +364,45 @@ bool SyntheticDllRuntime::handleWaveOutOpen(SyntheticExportCode code, const Gues
         hostFlags = (flags & ~CALLBACK_TYPEMASK) | CALLBACK_NULL;
     }
     const UINT hostDeviceId = args.a1 == 0 ? WAVE_MAPPER : UINT(args.a1);
-    ret = winmm.waveOutOpen(&host, hostDeviceId, &format, hostCallback, instance, hostFlags);
+    auto cached = std::find_if(cachedWaveOutDevices_.begin(), cachedWaveOutDevices_.end(),
+                               [&](const CachedWaveOutDevice& candidate) {
+                                   return candidate.hostValue &&
+                                          candidate.deviceId == hostDeviceId &&
+                                          candidate.hostFlags == hostFlags &&
+                                          candidate.hostCallback == hostCallback &&
+                                          candidate.formatTag == format.wFormatTag &&
+                                          candidate.channels == format.nChannels &&
+                                          candidate.samplesPerSec == format.nSamplesPerSec &&
+                                          candidate.avgBytesPerSec == format.nAvgBytesPerSec &&
+                                          candidate.blockAlign == format.nBlockAlign &&
+                                          candidate.bitsPerSample == format.wBitsPerSample;
+                               });
+    const bool reused = cached != cachedWaveOutDevices_.end();
+    if (reused) {
+        host = reinterpret_cast<HWAVEOUT>(cached->hostValue);
+        cachedWaveOutDevices_.erase(cached);
+        ret = MMSYSERR_NOERROR;
+    } else {
+        ret = winmm.waveOutOpen(&host, hostDeviceId, &format, hostCallback, instance, hostFlags);
+    }
+    spdlog::info("waveOutOpen hostDevice={} hostFlags=0x{:08x} reused={} -> {}",
+                 hostDeviceId, hostFlags, reused, ret);
     if (ret == MMSYSERR_NOERROR) {
         const uint32_t guest = makeGuestHandle({GuestHandle::Kind::HostWaveOut, reinterpret_cast<uintptr_t>(host), 0});
-        waveOutStates_[guest] = {args.a3, uint32_t(instance), flags, format.nAvgBytesPerSec};
+        waveOutStates_[guest] = {
+            args.a3,
+            uint32_t(instance),
+            flags,
+            format.nAvgBytesPerSec,
+            hostDeviceId,
+            hostFlags,
+            hostCallback,
+            format.wFormatTag,
+            format.nChannels,
+            format.nSamplesPerSec,
+            format.nBlockAlign,
+            format.wBitsPerSample,
+        };
         writeU32(args.a0, guest);
     }
     return true;
@@ -378,7 +413,35 @@ bool SyntheticDllRuntime::handleWaveOutClose(SyntheticExportCode code, const Gue
     auto* handle = lookupGuestHandle(args.a0);
     auto& winmm = winmmBridge();
     if (handle && handle->kind == GuestHandle::Kind::HostWaveOut && handle->hostValue && winmm.waveOutClose) {
-        ret = winmm.waveOutClose(reinterpret_cast<HWAVEOUT>(handle->hostValue));
+        const uint64_t start = GetTickCount64();
+        auto state = waveOutStates_.find(args.a0);
+        HWAVEOUT host = reinterpret_cast<HWAVEOUT>(handle->hostValue);
+        if (winmm.waveOutReset) winmm.waveOutReset(host);
+        if (state != waveOutStates_.end()) {
+            CachedWaveOutDevice cached{};
+            cached.hostValue = handle->hostValue;
+            cached.deviceId = state->second.deviceId;
+            cached.hostFlags = state->second.hostFlags;
+            cached.hostCallback = state->second.hostCallback;
+            cached.formatTag = state->second.formatTag;
+            cached.channels = state->second.channels;
+            cached.samplesPerSec = state->second.samplesPerSec;
+            cached.avgBytesPerSec = state->second.avgBytesPerSec;
+            cached.blockAlign = state->second.blockAlign;
+            cached.bitsPerSample = state->second.bitsPerSample;
+            cachedWaveOutDevices_.push_back(cached);
+            while (cachedWaveOutDevices_.size() > 4) {
+                CachedWaveOutDevice old = cachedWaveOutDevices_.front();
+                cachedWaveOutDevices_.erase(cachedWaveOutDevices_.begin());
+                if (old.hostValue) winmm.waveOutClose(reinterpret_cast<HWAVEOUT>(old.hostValue));
+            }
+            ret = MMSYSERR_NOERROR;
+        } else {
+            ret = winmm.waveOutClose(host);
+        }
+        const uint64_t elapsed = GetTickCount64() - start;
+        spdlog::info("waveOutClose handle=0x{:08x} cached={} cacheSize={} -> {} elapsedMs={}",
+                     args.a0, state != waveOutStates_.end(), cachedWaveOutDevices_.size(), ret, elapsed);
         if (ret == MMSYSERR_NOERROR) {
             handle->hostValue = 0;
             waveOutStates_.erase(args.a0);
@@ -453,8 +516,12 @@ bool SyntheticDllRuntime::handleWaveOutUnprepareHeader(SyntheticExportCode code,
         return true;
     }
     auto* header = reinterpret_cast<WAVEHDR*>(it->second.header.data());
+    const uint64_t start = GetTickCount64();
     ret = winmm.waveOutUnprepareHeader(reinterpret_cast<HWAVEOUT>(handle->hostValue), header, sizeof(*header));
+    const uint64_t elapsed = GetTickCount64() - start;
     writeU32(args.a1 + 16, uint32_t(header->dwFlags));
+    spdlog::info("waveOutUnprepareHeader hdr=0x{:08x} flags=0x{:08x} -> {} elapsedMs={}",
+                 args.a1, uint32_t(header->dwFlags), ret, elapsed);
     if (ret == MMSYSERR_NOERROR) hostWaveBuffers_.erase(it);
     return true;
 }
@@ -475,8 +542,8 @@ bool SyntheticDllRuntime::handleWaveOutWrite(SyntheticExportCode code, const Gue
         return true;
     }
     const uint32_t guestUser = readU32(args.a1 + 12);
-    spdlog::debug("waveOutWrite hdr=0x{:08x} data=0x{:08x} length={} user=0x{:08x} flags=0x{:08x}",
-                  args.a1, guestData, guestLength, guestUser, guestFlags);
+    spdlog::info("waveOutWrite hdr=0x{:08x} data=0x{:08x} length={} user=0x{:08x} flags=0x{:08x}",
+                 args.a1, guestData, guestLength, guestUser, guestFlags);
     const bool hadStoredHeader = hostWaveBuffers_.find(args.a1) != hostWaveBuffers_.end();
     auto& stored = hostWaveBuffers_[args.a1];
     if (stored.data.size() != guestLength) stored.data.assign(guestLength, 0);
@@ -521,15 +588,24 @@ bool SyntheticDllRuntime::handleWaveOutWrite(SyntheticExportCode code, const Gue
     }
     header->dwFlags = (header->dwFlags & WHDR_PREPARED) | (guestFlags & ~(WHDR_DONE | WHDR_PREPARED));
     const uint32_t doneBefore = g_waveOutDoneCallbacks.load(std::memory_order_relaxed);
+    const uint64_t start = GetTickCount64();
     ret = winmm.waveOutWrite
         ? winmm.waveOutWrite(reinterpret_cast<HWAVEOUT>(handle->hostValue), header, sizeof(*header))
         : MMSYSERR_ERROR;
-    spdlog::debug("waveOutWrite host ret={} flags=0x{:08x} doneCallbacksBefore={} doneCallbacksAfter={} lastDoneTick={}",
-                  ret,
-                  uint32_t(header->dwFlags),
-                  doneBefore,
-                  g_waveOutDoneCallbacks.load(std::memory_order_relaxed),
-                  g_waveOutDoneTick.load(std::memory_order_relaxed));
+    const uint64_t elapsed = GetTickCount64() - start;
+    const uint32_t callbackMode = state == waveOutStates_.end() ? CALLBACK_NULL : (state->second.flags & CALLBACK_TYPEMASK);
+    const uint32_t durationMs = state != waveOutStates_.end() && state->second.avgBytesPerSec
+        ? uint32_t((uint64_t(guestLength) * 1000u) / state->second.avgBytesPerSec)
+        : 0;
+    spdlog::info("waveOutWrite host ret={} callbackMode=0x{:08x} durationMs={} flags=0x{:08x} doneCallbacksBefore={} doneCallbacksAfter={} lastDoneTick={} elapsedMs={}",
+                 ret,
+                 callbackMode,
+                 durationMs,
+                 uint32_t(header->dwFlags),
+                 doneBefore,
+                 g_waveOutDoneCallbacks.load(std::memory_order_relaxed),
+                 g_waveOutDoneTick.load(std::memory_order_relaxed),
+                 elapsed);
     if (ret == MMSYSERR_NOERROR && (header->dwFlags & WHDR_DONE)) {
         writeU32(args.a1 + 16, uint32_t(header->dwFlags));
     }
