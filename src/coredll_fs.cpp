@@ -361,8 +361,11 @@ bool SyntheticDllRuntime::handleReadFile(SyntheticExportCode code, const GuestCa
         ret = 0;
     } else {
         DWORD transferred = 0;
-        std::vector<uint8_t> bytes(args.a2);
-        const BOOL ok = ReadFile(reinterpret_cast<HANDLE>(handle->hostValue), bytes.data(), args.a2, &transferred, nullptr);
+        static thread_local std::vector<uint8_t> bytes;
+        bytes.resize(args.a2);
+        const BOOL ok = ReadFile(reinterpret_cast<HANDLE>(handle->hostValue),
+                                 bytes.empty() ? nullptr : bytes.data(),
+                                 args.a2, &transferred, nullptr);
         if (ok && transferred) uc_mem_write(uc_, args.a1, bytes.data(), transferred);
         ret = ok ? 1 : 0;
         writeU32(args.a3, transferred);
@@ -371,8 +374,8 @@ bool SyntheticDllRuntime::handleReadFile(SyntheticExportCode code, const GuestCa
         auto debugName = fileHandleDebugNames_.find(args.a0);
         const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
         if (readCount <= 32 || !ok || transferred != args.a2 || transferred == 0) {
-            spdlog::info("ReadFile handle=0x{:08x} path=\"{}\" requested={} transferred={} ok={} read#={}",
-                         args.a0, debugPath, args.a2, transferred, ok ? 1 : 0, readCount);
+            spdlog::debug("ReadFile handle=0x{:08x} path=\"{}\" requested={} transferred={} ok={} read#={}",
+                          args.a0, debugPath, args.a2, transferred, ok ? 1 : 0, readCount);
         }
     }
     return true;
@@ -395,9 +398,12 @@ bool SyntheticDllRuntime::handleWriteFile(SyntheticExportCode code, const GuestC
         ret = 0;
     } else {
         DWORD transferred = 0;
-        std::vector<uint8_t> bytes(args.a2);
+        static thread_local std::vector<uint8_t> bytes;
+        bytes.resize(args.a2);
         if (args.a2) uc_mem_read(uc_, args.a1, bytes.data(), bytes.size());
-        const BOOL ok = WriteFile(reinterpret_cast<HANDLE>(handle->hostValue), bytes.data(), args.a2, &transferred, nullptr);
+        const BOOL ok = WriteFile(reinterpret_cast<HANDLE>(handle->hostValue),
+                                  bytes.empty() ? nullptr : bytes.data(),
+                                  args.a2, &transferred, nullptr);
         ret = ok ? 1 : 0;
         writeU32(args.a3, transferred);
         lastError_ = ret ? 0 : GetLastError();
@@ -417,9 +423,9 @@ bool SyntheticDllRuntime::handleGetFileSize(SyntheticExportCode code, const Gues
         if (args.a1) writeU32(args.a1, high);
         lastError_ = ret == 0xffffffffu ? GetLastError() : 0;
         auto debugName = fileHandleDebugNames_.find(args.a0);
-        spdlog::info("GetFileSize handle=0x{:08x} path=\"{}\" size={} high={} lastError={}",
-                     args.a0, debugName == fileHandleDebugNames_.end() ? "" : debugName->second,
-                     ret, high, lastError_);
+        spdlog::debug("GetFileSize handle=0x{:08x} path=\"{}\" size={} high={} lastError={}",
+                      args.a0, debugName == fileHandleDebugNames_.end() ? "" : debugName->second,
+                      ret, high, lastError_);
     }
     return true;
 }
@@ -439,9 +445,9 @@ bool SyntheticDllRuntime::handleSetFilePointer(SyntheticExportCode code, const G
         const uint32_t seekCount = ++fileSeekCounts_[args.a0];
         if (seekCount <= 32 || ret == 0xffffffffu) {
             auto debugName = fileHandleDebugNames_.find(args.a0);
-            spdlog::info("SetFilePointer handle=0x{:08x} path=\"{}\" distance={} method={} -> low={} high={} lastError={} seek#={}",
-                         args.a0, debugName == fileHandleDebugNames_.end() ? "" : debugName->second,
-                         int32_t(args.a1), args.a3, ret, uint32_t(high), lastError_, seekCount);
+            spdlog::debug("SetFilePointer handle=0x{:08x} path=\"{}\" distance={} method={} -> low={} high={} lastError={} seek#={}",
+                          args.a0, debugName == fileHandleDebugNames_.end() ? "" : debugName->second,
+                          int32_t(args.a1), args.a3, ret, uint32_t(high), lastError_, seekCount);
         }
     }
     return true;

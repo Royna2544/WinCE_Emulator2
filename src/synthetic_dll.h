@@ -1136,6 +1136,7 @@ private:
     void enqueueDueTimers();
     uint32_t timerWaitMilliseconds() const;
     uint32_t windowAtPoint(uint32_t rootGuestHwnd, int32_t x, int32_t y, int32_t& clientX, int32_t& clientY) const;
+    void compactQueuedPointerMotion(size_t maxMotionPerWindow = 2);
     uint32_t colorRefToPixel(uint32_t colorRef) const;
     bool readGuestRect(uint32_t address, int32_t& left, int32_t& top, int32_t& right, int32_t& bottom) const;
     void writeGuestRect(uint32_t address, int32_t left, int32_t top, int32_t right, int32_t bottom) const;

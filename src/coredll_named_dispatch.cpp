@@ -293,12 +293,12 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(uint16_t ordinal,
                 }
                 bitmaps_[ret] = std::move(bitmap);
             }
-            spdlog::info("CreateDIBSection {}x{} bpp={} compression={} masks={:08x}/{:08x}/{:08x} stride={} bits=0x{:08x} bitmap=0x{:08x}",
-                         width, heightRaw, bitsPerPixel, compression,
-                         ret && bitmaps_.count(ret) ? bitmaps_[ret].redMask : 0,
-                         ret && bitmaps_.count(ret) ? bitmaps_[ret].greenMask : 0,
-                         ret && bitmaps_.count(ret) ? bitmaps_[ret].blueMask : 0,
-                         stride, bits, ret);
+            spdlog::debug("CreateDIBSection {}x{} bpp={} compression={} masks={:08x}/{:08x}/{:08x} stride={} bits=0x{:08x} bitmap=0x{:08x}",
+                          width, heightRaw, bitsPerPixel, compression,
+                          ret && bitmaps_.count(ret) ? bitmaps_[ret].redMask : 0,
+                          ret && bitmaps_.count(ret) ? bitmaps_[ret].greenMask : 0,
+                          ret && bitmaps_.count(ret) ? bitmaps_[ret].blueMask : 0,
+                          stride, bits, ret);
         }
     } else if (ordinal == ord(CoredllOrdinal::CreateCompatibleBitmap)) {
         const uint32_t width = std::max<uint32_t>(a1, 1);
@@ -2079,10 +2079,20 @@ ensureHostWindow(a0, it->second);
                 haveMessage = takeMessage();
             }
         }
+        if (!haveMessage && !peek && !quitPosted_ && hasHostWindows()) {
+            pumpHostMessages();
+#if defined(_WIN32)
+            const DWORD waitMs = std::max<DWORD>(1, std::min<DWORD>(16, timerWaitMilliseconds()));
+            MsgWaitForMultipleObjects(0, nullptr, FALSE, waitMs, QS_ALLINPUT);
+#endif
+            pumpHostMessages();
+            enqueueDueTimers();
+            haveMessage = takeMessage();
+        }
         if (!haveMessage) {
             ret = 0;
             if (!peek && !quitPosted_) {
-                spdlog::info("synthetic coredll.dll!GetMessageW blocking with empty guest queue");
+                spdlog::debug("synthetic coredll.dll!GetMessageW blocking with empty guest queue");
                 uc_emu_stop(uc_);
             }
         } else if (message.message == 0x0012) {

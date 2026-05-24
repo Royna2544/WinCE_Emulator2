@@ -1000,11 +1000,23 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed() {
     }
     spdlog::info("entering host GUI message loop; close the presenter window to exit");
     MSG message{};
+    auto hasPendingUserInput = [&]() {
+        return std::any_of(guestMessages_.begin(), guestMessages_.end(), [](const GuestMessage& message) {
+            return message.message == 0x0007 || message.message == 0x0008 ||
+                   (message.message >= 0x0200 && message.message <= 0x0202);
+        });
+    };
     auto resumeGuestSlice = [&](uint64_t instructionBudget, const char* reason) -> bool {
         uint32_t pc = 0;
         uint32_t ra = 0;
         uc_reg_read(uc_, UC_MIPS_REG_PC, &pc);
         uc_reg_read(uc_, UC_MIPS_REG_RA, &ra);
+        // Guest worker threads run cooperatively on the host UI thread.  Keep
+        // their slices short so touch input and presenter paints stay live even
+        // when a worker performs a long pure-guest loop between API calls.
+        if (activeGuestThread_) {
+            instructionBudget = hasPendingUserInput() ? 8000u : std::min<uint64_t>(instructionBudget, 25000u);
+        }
         const uc_err err = uc_emu_start(uc_, pc, 0, 0, instructionBudget);
         uc_reg_read(uc_, UC_MIPS_REG_PC, &pc);
         uc_reg_read(uc_, UC_MIPS_REG_RA, &ra);
@@ -1014,14 +1026,17 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed() {
             return false;
         }
         pumpHostMessages();
+        compactQueuedPointerMotion();
         enqueueDueTimers();
         return true;
     };
     while (hasHostWindows()) {
         enqueueDueTimers();
         if (!guestMessages_.empty() && hasHostWindows()) {
-            spdlog::info("resuming guest for queued message queued={}", guestMessages_.size());
-            if (!resumeGuestSlice(5000000, "queued-message")) {
+            compactQueuedPointerMotion();
+            const uint64_t budget = hasPendingUserInput() ? 500000u : 1000000u;
+            spdlog::debug("resuming guest for queued message queued={} budget={}", guestMessages_.size(), budget);
+            if (!resumeGuestSlice(budget, "queued-message")) {
                 return;
             }
         }
@@ -1031,7 +1046,7 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed() {
             TranslateMessage(&message);
             DispatchMessageW(&message);
         }
-        if (guestMessages_.empty() && hasHostWindows() && !resumeGuestSlice(5000000, "idle")) {
+        if (guestMessages_.empty() && hasHostWindows() && !resumeGuestSlice(250000, "idle")) {
             return;
         }
         if (guestMessages_.empty()) MsgWaitForMultipleObjects(0, nullptr, FALSE, waitMs, QS_ALLINPUT);
@@ -2868,6 +2883,22 @@ uint32_t SyntheticDllRuntime::windowAtPoint(uint32_t rootGuestHwnd, int32_t x, i
     return best;
 }
 
+void SyntheticDllRuntime::compactQueuedPointerMotion(size_t maxMotionPerWindow) {
+    std::map<uint32_t, size_t> keptMotion;
+    for (auto it = guestMessages_.rbegin(); it != guestMessages_.rend();) {
+        if (it->message == 0x0200) {
+            size_t& kept = keptMotion[it->hwnd];
+            if (kept >= maxMotionPerWindow) {
+                auto eraseIt = std::next(it).base();
+                it = std::make_reverse_iterator(guestMessages_.erase(eraseIt));
+                continue;
+            }
+            ++kept;
+        }
+        ++it;
+    }
+}
+
 void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t message,
                                                 int32_t hostX, int32_t hostY) {
     auto root = windows_.find(rootGuestHwnd);
@@ -2921,6 +2952,7 @@ void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t
             ++insertAt;
         }
         guestMessages_.insert(insertAt, input);
+        compactQueuedPointerMotion();
     };
     if (message == 0x0201) {
         hostPointerCaptureWindow_ = hwnd;
@@ -2941,8 +2973,9 @@ void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t
     guest.wParam = message == 0x0201 ? 1 : 0;
     guest.lParam = uint32_t(uint16_t(clientX) | (uint32_t(uint16_t(clientY)) << 16));
     guest.time = uint32_t(++tick_ * 16);
-    guest.x = uint32_t(clientX);
-    guest.y = uint32_t(clientY);
+    // MSG.pt/GetMessagePos are screen/root coordinates; lParam remains client.
+    guest.x = uint32_t(hostX);
+    guest.y = uint32_t(hostY);
     queueInputMessage(guest);
     spdlog::info("queued host mouse msg=0x{:04x} root=0x{:08x} hwnd=0x{:08x} point={},{} client={},{} queued={}",
                  message, rootGuestHwnd, hwnd, hostX, hostY, clientX, clientY, guestMessages_.size());
@@ -5290,9 +5323,22 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         }
     };
     auto dispatchQueuedPaintForBlockingApi = [&](PendingBlockingApi& pending, const char* reason) {
-        if (pending.paintDispatches >= 32) return false;
+        // Only dispatch paint/timer maintenance from a synthetic blocking wait
+        // boundary.  Posted private messages and pointer input must stay in the
+        // normal GetMessage/DispatchMessage path; reentering them from an
+        // unrelated Sleep/Wait hook can leave MFC/iNavi state transitions
+        // half-applied, which shows up as buttons painting pressed but not
+        // switching views.
+        if (pending.paintDispatches >= 64) return false;
+        auto isPaintish = [](uint32_t msg) {
+            return msg == 0x000f || // WM_PAINT
+                   msg == 0x0014 || // WM_ERASEBKGND
+                   msg == 0x0018 || // WM_SHOWWINDOW
+                   msg == 0x0113;   // WM_TIMER
+        };
         auto queued = std::find_if(guestMessages_.begin(), guestMessages_.end(),
                                    [&](const GuestMessage& message) {
+                                       if (!isPaintish(message.message)) return false;
                                        auto window = windows_.find(message.hwnd);
                                        if (window == windows_.end() || window->second.destroyed || !window->second.wndProc) {
                                            return false;
@@ -5306,8 +5352,8 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         auto window = windows_.find(message.hwnd);
         uint32_t wndProc = translatedWndProc(window->second.wndProc, pending.name.c_str());
         ++pending.paintDispatches;
-        spdlog::info("{} cooperative dispatch {} hwnd=0x{:08x} msg=0x{:08x} wndproc=0x{:08x} count={}",
-                     pending.name, reason, message.hwnd, message.message, wndProc, pending.paintDispatches);
+        spdlog::debug("{} cooperative paint dispatch {} hwnd=0x{:08x} msg=0x{:08x} wndproc=0x{:08x} count={}",
+                      pending.name, reason, message.hwnd, message.message, wndProc, pending.paintDispatches);
         setReg(UC_MIPS_REG_A0, message.hwnd);
         setReg(UC_MIPS_REG_A1, message.message);
         setReg(UC_MIPS_REG_A2, message.wParam);
@@ -5528,7 +5574,7 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         if (!ret || window == windows_.end() || !window->second.wndProc ||
             !window->second.createStruct || !createWindowContinuationStub_) {
             if (mutableEntry.calls <= 128) {
-                spdlog::info("synthetic {}!{} -> 0x{:08x}", mutableEntry.moduleName, name, ret);
+                spdlog::debug("synthetic {}!{} -> 0x{:08x}", mutableEntry.moduleName, name, ret);
             }
             setReg(UC_MIPS_REG_V0, ret);
             pumpHostMessages();
@@ -5583,64 +5629,6 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         setReg(UC_MIPS_REG_RA, updateWindowContinuationStub_);
         setReg(UC_MIPS_REG_PC, wndProc);
         return;
-    }
-
-    if (isCoredll && ordinal == 0x00FA) {
-        uint32_t target = a0;
-        if (!target) {
-            for (const auto& [hwnd, window] : windows_) {
-                if (!window.destroyed && !window.parent) {
-                    target = hwnd;
-                    break;
-                }
-            }
-        }
-        auto it = windows_.find(target);
-        bool dispatchNow = false;
-        const bool pendingMouseInput = std::any_of(
-            guestMessages_.begin(), guestMessages_.end(), [](const GuestMessage& message) {
-                return message.message >= 0x0200 && message.message <= 0x0202;
-            });
-        if (it != windows_.end() && !it->second.destroyed && it->second.visible &&
-            (it->second.style & kWindowStyleChild) && it->second.parent &&
-            it->second.width > 1 && it->second.height > 1 && updateWindowContinuationStub_ &&
-            pendingUpdateWindows_.empty() && !pendingMouseInput) {
-            auto parent = windows_.find(it->second.parent);
-            const int64_t area = int64_t(it->second.width) * int64_t(it->second.height);
-            const int64_t framebufferArea = int64_t(framebufferWidth_) * int64_t(framebufferHeight_);
-            dispatchNow = parent != windows_.end() && parent->second.parent &&
-                          area > 0 && framebufferArea > 0 && area <= framebufferArea / 2 &&
-                          !hasCoveringRootPopup(target);
-        }
-        if (dispatchNow) {
-            queueGuestPaint(target, a2 != 0);
-            const auto oldSize = guestMessages_.size();
-            std::erase_if(guestMessages_, [&](const GuestMessage& message) {
-                return message.hwnd == target &&
-                       (message.message == 0x0014 || message.message == 0x000f);
-            });
-            const uint32_t wndProc = translatedWndProc(it->second.wndProc, "InvalidateRect");
-            if (!wndProc) {
-                lastError_ = 0;
-                setReg(UC_MIPS_REG_V0, 1);
-                pumpHostMessages();
-                return;
-            }
-            const bool erase = a2 != 0;
-            const uint32_t eraseDc = erase ? makeGuestDc(target) : 0;
-            pendingUpdateWindows_.push_back(PendingUpdateWindow{
-                target, wndProc, ra, eraseDc, erase ? 0u : 1u, "InvalidateRect",
-            });
-            spdlog::info("InvalidateRect immediate child paint hwnd=0x{:08x} erase={} removedQueued={} wndproc=0x{:08x}",
-                         target, erase ? 1 : 0, oldSize - guestMessages_.size(), wndProc);
-            setReg(UC_MIPS_REG_A0, target);
-            setReg(UC_MIPS_REG_A1, erase ? 0x0014 : 0x000f);
-            setReg(UC_MIPS_REG_A2, erase ? eraseDc : 0);
-            setReg(UC_MIPS_REG_A3, 0);
-            setReg(UC_MIPS_REG_RA, updateWindowContinuationStub_);
-            setReg(UC_MIPS_REG_PC, wndProc);
-            return;
-        }
     }
 
     if (isCoredll && ordinal == 0x0109) {
@@ -5768,7 +5756,7 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
             }
         }
         if (mutableEntry.calls <= 128) {
-            spdlog::info("synthetic {}!{} -> 0x{:08x}", mutableEntry.moduleName, name, ret);
+            spdlog::debug("synthetic {}!{} -> 0x{:08x}", mutableEntry.moduleName, name, ret);
         }
         setReg(UC_MIPS_REG_V0, ret);
         pumpHostMessages();
@@ -5836,7 +5824,7 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         bool handled = (this->*ordinalHandler->handler)(ordinalHandler->code, args, ret);
         if (handled) {
             if (mutableEntry.calls <= 128) {
-                spdlog::info("synthetic {}!{} -> 0x{:08x}", mutableEntry.moduleName, name, ret);
+                spdlog::debug("synthetic {}!{} -> 0x{:08x}", mutableEntry.moduleName, name, ret);
             }
             setReg(UC_MIPS_REG_V0, ret);
             pumpHostMessages();
@@ -5847,7 +5835,7 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
     if (isCoredll &&
         (dispatchHostWin32(ordinal, args, ret) || dispatchGuestMemoryApi(ordinal, args, ret))) {
         if (mutableEntry.calls <= 128) {
-            spdlog::info("synthetic {}!{} -> 0x{:08x}", mutableEntry.moduleName, name, ret);
+            spdlog::debug("synthetic {}!{} -> 0x{:08x}", mutableEntry.moduleName, name, ret);
         }
         setReg(UC_MIPS_REG_V0, ret);
         pumpHostMessages();
@@ -5882,7 +5870,7 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
     }
 
     if (mutableEntry.calls <= 128) {
-        spdlog::info("synthetic {}!{} -> 0x{:08x}", mutableEntry.moduleName, name, ret);
+        spdlog::debug("synthetic {}!{} -> 0x{:08x}", mutableEntry.moduleName, name, ret);
     }
     setReg(UC_MIPS_REG_V0, ret);
     pumpHostMessages();

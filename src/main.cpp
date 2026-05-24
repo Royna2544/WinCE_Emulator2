@@ -48,16 +48,17 @@ static std::string narrowWideLossy(const std::wstring &value) {
 }
 
 static void configureLogging() {
-#if defined(NDEBUG)
-  spdlog::set_level(spdlog::level::err);
-#else
   char *rawValue = nullptr;
   size_t valueSize = 0;
   if (_dupenv_s(&rawValue, &valueSize, "INAVI_EMU_LOG") != 0 || !rawValue ||
       !*rawValue) {
     if (rawValue)
       std::free(rawValue);
+#if defined(NDEBUG)
+    spdlog::set_level(spdlog::level::err);
+#else
     spdlog::set_level(spdlog::level::info);
+#endif
     return;
   }
   std::string value(rawValue);
@@ -77,7 +78,6 @@ static void configureLogging() {
     spdlog::set_level(spdlog::level::off);
   else
     spdlog::set_level(spdlog::level::info);
-#endif
 }
 
 static uint16_t u16(const std::vector<uint8_t> &b, size_t o) {
