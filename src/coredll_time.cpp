@@ -5,6 +5,8 @@
 
 #include "synthetic_dll.h"
 
+#include <spdlog/spdlog.h>
+
 void SyntheticDllRuntime::registerCoredllTimeExports(SyntheticModule& module) {
     struct CoreDllTime {
         OrdinalHandlerGroup group() const {
@@ -16,6 +18,7 @@ void SyntheticDllRuntime::registerCoredllTimeExports(SyntheticModule& module) {
                     {0x0014, {"FileTimeToSystemTime", Code::CoreDllFileTimeToSystemTime, &SyntheticDllRuntime::handleFileTimeToSystemTime}},
                     {0x0017, {"GetLocalTime", Code::CoreDllGetLocalTime, &SyntheticDllRuntime::handleGetLocalTime}},
                     {0x0019, {"GetSystemTime", Code::CoreDllGetSystemTime, &SyntheticDllRuntime::handleGetSystemTime}},
+                    {0x001A, {"SetSystemTime", Code::CoreDllSetSystemTime, &SyntheticDllRuntime::handleSetSystemTime}},
                     {0x001B, {"GetTimeZoneInformation", Code::CoreDllGetTimeZoneInformation, &SyntheticDllRuntime::handleGetTimeZoneInformation}},
                     {0x0025, {"GetSystemTime", Code::CoreDllGetSystemTime, &SyntheticDllRuntime::handleGetSystemTime}},
                     {0x01F0, {"Sleep", Code::CoreDllSleep, &SyntheticDllRuntime::handleSleep}},
@@ -70,6 +73,19 @@ bool SyntheticDllRuntime::handleGetSystemTime(SyntheticExportCode code, const Gu
     ::GetSystemTime(&systemTime);
     if (args.a0) uc_mem_write(uc_, args.a0, &systemTime, sizeof(systemTime));
     ret = 0;
+    return true;
+}
+
+bool SyntheticDllRuntime::handleSetSystemTime(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
+    (void)code;
+    SYSTEMTIME systemTime{};
+    if (args.a0) uc_mem_read(uc_, args.a0, &systemTime, sizeof(systemTime));
+    ret = args.a0 ? 1 : 0;
+    lastError_ = ret ? 0 : 87;
+    spdlog::info("SetSystemTime virtualized -> {} {:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03}",
+                 ret, systemTime.wYear, systemTime.wMonth, systemTime.wDay,
+                 systemTime.wHour, systemTime.wMinute, systemTime.wSecond,
+                 systemTime.wMilliseconds);
     return true;
 }
 

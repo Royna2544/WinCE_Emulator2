@@ -1015,7 +1015,7 @@ void SyntheticDllRuntime::setSerialDeviceMapPath(const std::filesystem::path& pa
             if (config.enabled && config.backend == "win32_com" && config.host.empty()) {
                 throw std::runtime_error("enabled win32_com serial device requires host for " + config.guest);
             }
-        } else if (config.backend != "stub") {
+        } else if (config.backend != "stub" && config.backend != "nanduuid_return") {
             throw std::runtime_error("unsupported ioctl_device backend for " + config.guest + ": " + config.backend);
         }
 
@@ -1804,6 +1804,7 @@ void SyntheticDllRuntime::refreshSignaledGuestWaits() {
             thread.waitHandle = 0;
             thread.waitHandles.clear();
             thread.context.registers[UC_MIPS_REG_V0] = 0;
+            thread.context.registers[UC_MIPS_REG_PC] = thread.context.registers[UC_MIPS_REG_RA];
             lastError_ = 0;
             spdlog::info("guest thread sleep satisfied handle=0x{:08x}", threadHandle);
             continue;
@@ -1860,6 +1861,7 @@ void SyntheticDllRuntime::refreshSignaledGuestWaits() {
                 thread.waitHandle = 0;
                 thread.waitHandles.clear();
                 thread.context.registers[UC_MIPS_REG_V0] = uint32_t(i);
+                thread.context.registers[UC_MIPS_REG_PC] = thread.context.registers[UC_MIPS_REG_RA];
                 lastError_ = 0;
                 spdlog::info("guest thread wait satisfied handle=0x{:08x} waitHandle=0x{:08x} index={}",
                              threadHandle, handles[i], i);
@@ -1871,6 +1873,7 @@ void SyntheticDllRuntime::refreshSignaledGuestWaits() {
             thread.waitHandle = 0;
             thread.waitHandles.clear();
             thread.context.registers[UC_MIPS_REG_V0] = 0;
+            thread.context.registers[UC_MIPS_REG_PC] = thread.context.registers[UC_MIPS_REG_RA];
             lastError_ = 0;
             spdlog::info("guest thread wait-all satisfied handle=0x{:08x} count={}",
                          threadHandle, handles.size());
@@ -2025,6 +2028,7 @@ uint32_t SyntheticDllRuntime::closeGuestHandle(uint32_t guestHandle) {
                it->second.kind == GuestHandle::Kind::HostSerialDevice ||
                it->second.kind == GuestHandle::Kind::GuestSerialDevice) {
         fileHandleDebugNames_.erase(guestHandle);
+        guestDeviceConfigsByHandle_.erase(guestHandle);
         fileReadCounts_.erase(guestHandle);
         fileSeekCounts_.erase(guestHandle);
     } else if (it->second.kind == GuestHandle::Kind::HostCrtFile) {
@@ -2350,6 +2354,7 @@ uint32_t SyntheticDllRuntime::handleRegEnumValueW(uint32_t hkey, uint32_t index,
 }
 
 uint32_t SyntheticDllRuntime::openGuestSerialDevice(const std::string& guestPath, uint32_t access, uint32_t share) {
+    const uint32_t ra = reg(UC_MIPS_REG_RA);
     const std::string deviceKey = normalizeGuestDeviceName(guestPath);
     const auto mapped = serialDevicesByGuest_.find(deviceKey);
     if (mapped != serialDevicesByGuest_.end()) {
@@ -2357,12 +2362,13 @@ uint32_t SyntheticDllRuntime::openGuestSerialDevice(const std::string& guestPath
         const std::string note = config.note.empty() ? std::string{} : " (" + config.note + ")";
         if (!config.enabled || config.backend == "stub" || config.type == "ioctl_device") {
             const uint32_t guest = makeGuestHandle({GuestHandle::Kind::GuestSerialDevice, 0, 0});
-            const char* state = config.enabled ? "stub" : "disabled";
+            const std::string state = config.enabled ? config.backend : std::string("disabled");
             fileHandleDebugNames_[guest] = guestPath + " -> " + config.type + " " + state + note;
+            guestDeviceConfigsByHandle_[guest] = config;
             lastError_ = 0;
-            spdlog::info("CreateFileW guest device=\"{}\" mapped type={} backend={} enabled={} guestHandle=0x{:08x} access=0x{:08x} share=0x{:08x}{}",
+            spdlog::info("CreateFileW guest device=\"{}\" mapped type={} backend={} enabled={} guestHandle=0x{:08x} access=0x{:08x} share=0x{:08x} ra=0x{:08x}{}",
                          guestPath, config.type, config.backend, config.enabled ? 1 : 0,
-                         guest, access, share, note);
+                         guest, access, share, ra, note);
             return guest;
         }
 
@@ -2388,23 +2394,23 @@ uint32_t SyntheticDllRuntime::openGuestSerialDevice(const std::string& guestPath
                                                     reinterpret_cast<uintptr_t>(host), 0});
             fileHandleDebugNames_[guest] = guestPath + " -> " + displayName + note;
             lastError_ = 0;
-            spdlog::info("CreateFileW guest device=\"{}\" host=\"{}\" guestHandle=0x{:08x} access=0x{:08x} share=0x{:08x} serial={} {}{}",
+            spdlog::info("CreateFileW guest device=\"{}\" host=\"{}\" guestHandle=0x{:08x} access=0x{:08x} share=0x{:08x} ra=0x{:08x} serial={} {}{}",
                          guestPath, displayName, guest, desiredAccess, share,
-                         config.baud, config.mode, note);
+                         ra, config.baud, config.mode, note);
             return guest;
         }
-        spdlog::warn("CreateFileW guest device=\"{}\" host=\"{}\" unavailable lastError={}; using stub guest device{}",
-                     guestPath, displayName, GetLastError(), note);
+        spdlog::warn("CreateFileW guest device=\"{}\" host=\"{}\" unavailable lastError={} ra=0x{:08x}; using stub guest device{}",
+                     guestPath, displayName, GetLastError(), ra, note);
 #else
-        spdlog::warn("CreateFileW guest device=\"{}\" backend=win32_com unavailable on this host; using stub guest device{}",
-                     guestPath, note);
+        spdlog::warn("CreateFileW guest device=\"{}\" backend=win32_com unavailable on this host ra=0x{:08x}; using stub guest device{}",
+                     guestPath, ra, note);
 #endif
     }
     const uint32_t guest = makeGuestHandle({GuestHandle::Kind::GuestSerialDevice, 0, 0});
     fileHandleDebugNames_[guest] = guestPath + " -> disconnected";
     lastError_ = 0;
-    spdlog::info("CreateFileW guest device=\"{}\" guestHandle=0x{:08x} disconnected access=0x{:08x} share=0x{:08x}",
-                 guestPath, guest, access, share);
+    spdlog::info("CreateFileW guest device=\"{}\" guestHandle=0x{:08x} disconnected access=0x{:08x} share=0x{:08x} ra=0x{:08x}",
+                 guestPath, guest, access, share, ra);
     return guest;
 }
 
@@ -2421,10 +2427,59 @@ uint32_t SyntheticDllRuntime::dispatchDeviceIoControl(uint32_t handleValue, uint
         return 0;
     }
     if (handle->kind == GuestHandle::Kind::GuestSerialDevice) {
-        lastError_ = 120;
         auto debugName = fileHandleDebugNames_.find(handleValue);
+        const std::string name = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+        auto configIt = guestDeviceConfigsByHandle_.find(handleValue);
+        if (configIt != guestDeviceConfigsByHandle_.end() &&
+            configIt->second.enabled &&
+            configIt->second.type == "ioctl_device" &&
+            configIt->second.backend == "nanduuid_return" &&
+            (controlCode == 0xa00100ccu || controlCode == 0xa00100d0u) &&
+            outPtr && outSize) {
+            std::array<uint8_t, 16> uid{};
+            std::ifstream file(sdmmcHostRoot_ / "Device.uid", std::ios::binary);
+            file.read(reinterpret_cast<char*>(uid.data()), uid.size());
+            const std::streamsize available = file.gcount();
+            if (available > 0) {
+                if (controlCode == 0xa00100ccu) {
+                    uint32_t compactId = 0;
+                    uint32_t digits = 0;
+                    for (uint8_t ch : uid) {
+                        if (!std::isdigit(ch) || digits >= 8) break;
+                        compactId = compactId * 10u + uint32_t(ch - '0');
+                        ++digits;
+                    }
+                    if (outSize < sizeof(compactId)) {
+                        lastError_ = 122;
+                        return 0;
+                    }
+                    writeU32(outPtr, compactId);
+                    if (bytesReturnedPtr) writeU32(bytesReturnedPtr, sizeof(compactId));
+                    lastError_ = 0;
+                    spdlog::info("DeviceIoControl ioctl backend=NANDUUID_RETURN guest=\"{}\" code=0x{:08x} outSize={} transferred=4 source=\"{}\" compactId={:08}",
+                                 configIt->second.guest, controlCode, outSize,
+                                 pathToUtf8(sdmmcHostRoot_ / "Device.uid"), compactId);
+                    return 1;
+                }
+                const uint32_t transferred = std::min<uint32_t>(outSize, uint32_t(uid.size()));
+                uc_mem_write(uc_, outPtr, uid.data(), transferred);
+                if (bytesReturnedPtr) writeU32(bytesReturnedPtr, transferred);
+                lastError_ = 0;
+                spdlog::info("DeviceIoControl ioctl backend=NANDUUID_RETURN guest=\"{}\" code=0x{:08x} outSize={} transferred={} source=\"{}\" value=\"{}\"",
+                             configIt->second.guest, controlCode, outSize, transferred,
+                             pathToUtf8(sdmmcHostRoot_ / "Device.uid"),
+                             std::string(reinterpret_cast<const char*>(uid.data()),
+                                         reinterpret_cast<const char*>(uid.data()) + std::min<std::streamsize>(available, uid.size())));
+                return 1;
+            }
+            lastError_ = 2;
+            spdlog::warn("DeviceIoControl ioctl backend=NANDUUID_RETURN guest=\"{}\" code=0x{:08x} missing source=\"{}\"",
+                         configIt->second.guest, controlCode, pathToUtf8(sdmmcHostRoot_ / "Device.uid"));
+            return 0;
+        }
+        lastError_ = 120;
         spdlog::info("DeviceIoControl guest device handle=0x{:08x} name=\"{}\" code=0x{:08x} inSize={} outSize={} -> 0 lastError={}",
-                     handleValue, debugName == fileHandleDebugNames_.end() ? "" : debugName->second,
+                     handleValue, name,
                      controlCode, inSize, outSize, lastError_);
         return 0;
     }
@@ -2612,6 +2667,7 @@ uint32_t SyntheticDllRuntime::makeGuestWindow(const std::string& className, cons
     window.instance = instance;
     window.param = param;
     window.wndProc = wndProc;
+    window.ownerThread = activeGuestThread_ ? activeGuestThread_ : mainThreadPseudoHandle_;
     window.x = x;
     window.y = y;
     window.width = std::max<int32_t>(1, width);
@@ -6589,6 +6645,27 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         if (!wndProc) {
             ret = 0;
             setReg(UC_MIPS_REG_V0, ret);
+            pumpHostMessages();
+            return;
+        }
+        auto targetWindow = windows_.find(hwnd);
+        if (ordinal == 0x0364 && activeGuestThread_ &&
+            targetWindow != windows_.end() &&
+            targetWindow->second.ownerThread == mainThreadPseudoHandle_ &&
+            targetWindow->second.ownerThread != activeGuestThread_) {
+            GuestMessage message{};
+            message.hwnd = hwnd;
+            message.message = msg;
+            message.wParam = wParam;
+            message.lParam = lParam;
+            message.time = uint32_t(++tick_ * 16);
+            message.synchronousSender = activeGuestThread_;
+            guestMessages_.push_back(message);
+            lastError_ = 0;
+            setReg(UC_MIPS_REG_V0, 1);
+            spdlog::info("SendMessageW cross-thread queued hwnd=0x{:08x} msg=0x{:08x} sender=0x{:08x} owner=0x{:08x} queued={}",
+                         hwnd, msg, activeGuestThread_, targetWindow->second.ownerThread, guestMessages_.size());
+            yieldActiveGuestThread("SendMessageW-cross-thread", ra);
             pumpHostMessages();
             return;
         }

@@ -3,6 +3,10 @@
 Current priority order after the 2026-05-24 serial/device cleanup.
 
 1. Route-search UI/process behavior
+   - Update the route harness preset so it first dismisses or handles the
+     `TGNaviDlg` destination/current-position modal seen in
+     `captures/inavi_autodrive_20260525_094818`; the current preset keeps
+     tapping that modal instead of exercising the underlying route-search flow.
    - Verify the real `CreateProcessW` path for route helper processes.
    - Replace any remaining placeholder child-process behavior with faithful guest process execution or a clearly failing unsupported path.
    - Confirm the full-screen "searching route" UI is raised before long helper work begins.
@@ -13,11 +17,39 @@ Current priority order after the 2026-05-24 serial/device cleanup.
    - Keep the bottom bar and right-side controls in their guest z-order without host-layer leaks.
 
 3. Serial and stream-device follow-up
-   - Test `serial_devices.json` with a host NMEA feeder on `COM21`.
+   - Re-test `serial_devices.json` with a live host NMEA feeder on `COM21`
+     after the `__ll_to_d`, `SetSystemTime`, `pow`, cross-thread
+     `SendMessageW`, and wait-resume fixes. The 09:48 verification run opened
+     COM7 successfully but read zero bytes, so GPS status UI behavior was
+     inconclusive.
+   - During GPS retests, keep the NMEA feeder continuously writing after the
+     emulator opens the port. The guest calls `PurgeComm(..., 0x0f)` after
+     setup, so pre-open bursts can be cleared before the first `ReadFile`.
+   - Use `tools/autodrive_inavi.ps1 -NoTaps -KeepAlive` for human-driven
+     logging runs so scripted taps do not accidentally drive the wrong modal.
+   - Decide whether the serial read cap of 128 bytes should remain as a
+     faithful UART-style behavior or become a configurable diagnostic limit.
    - Capture logs for `CreateFileW("COM1:")`, `GetCommState`, `SetCommState`, and `ReadFile` to confirm NMEA reaches the app.
-   - Decide whether the SDMMC `iNaviData\config.bin` dump should be corrected
-     from GPS port `7` to `1`, or whether another device-profile config source
-     should override it.
+   - Continue tracing the device-profile source that makes `iNavi.exe` choose
+     profile code `4`, which produces `happyway_win.exe ...|11|7|0|1`.
+     Disassembly shows this comes from setting key `0xc3`; the full UID ioctl
+     `0xa00100d0` succeeds, and the compact ioctl `0xa00100cc` is now
+     implemented but was not exercised in the latest harness run.
+   - Decide the non-fake COM1 path from evidence: either correct the external
+     SDMMC profile/config data to the real-device COM1 profile, or identify the
+     missing real hardware/config probe that should rewrite/select those files.
+     Do not add runtime byte rewriting in the emulator.
+   - Temporary diagnostic hook: `main.cpp` logs entry/return of the
+     `iNavi.exe` key `0xc3` getter at `0x1d13c..0x1d170`, plus config load
+     entry at `0x6bd18` and key `0xc3` insertions at `0x6c1a8`. Remove it
+     after the profile source is identified.
+   - Temporary diagnostic file trace: `coredll_fs.cpp` logs opens/reads/writes
+     for `INavi\res\values.dat` and `iNaviData\config.bin`, including caller
+     RA and file offsets. Remove or demote after the COM profile source is
+     settled.
+   - Temporary diagnostic serial mapping: `serial_devices.json` maps guest
+     `COM7:` to host `COM21` while this dump selects COM7. Restore the real
+     `COM1:` map after the profile/config source is settled.
    - Add real handlers only when a device protocol is understood; stubs must remain honest no-op devices.
 
 4. Performance work

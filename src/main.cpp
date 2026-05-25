@@ -57,6 +57,47 @@ static void writeGuestCommandLine(uc_engine *uc, uint32_t address,
   uc_mem_write(uc, address, units.data(), units.size() * sizeof(uint16_t));
 }
 
+static bool readGuestU16(uc_engine *uc, uint32_t address, uint16_t &value) {
+  return address && uc_mem_read(uc, address, &value, sizeof(value)) == UC_ERR_OK;
+}
+
+static bool readGuestU32(uc_engine *uc, uint32_t address, uint32_t &value) {
+  return address && uc_mem_read(uc, address, &value, sizeof(value)) == UC_ERR_OK;
+}
+
+static std::string readGuestHex(uc_engine *uc, uint32_t address, size_t size) {
+  if (!address || !size) return {};
+  std::vector<uint8_t> bytes(size);
+  if (uc_mem_read(uc, address, bytes.data(), bytes.size()) != UC_ERR_OK)
+    return {};
+  std::ostringstream out;
+  out << std::hex << std::setfill('0');
+  for (size_t i = 0; i < bytes.size(); ++i) {
+    if (i) out << ' ';
+    out << std::setw(2) << unsigned(bytes[i]);
+  }
+  return out.str();
+}
+
+static std::string readGuestWideLossy(uc_engine *uc, uint32_t address,
+                                      size_t maxChars = 260) {
+  std::string out;
+  if (!address) return out;
+  out.reserve(maxChars);
+  for (size_t i = 0; i < maxChars; ++i) {
+    uint16_t ch = 0;
+    if (uc_mem_read(uc, address + uint32_t(i * 2), &ch, sizeof(ch)) != UC_ERR_OK || !ch)
+      break;
+    out.push_back(ch <= 0x7f ? char(ch) : '?');
+  }
+  return out;
+}
+
+struct ProfileDiagState {
+  std::string currentConfigPath;
+  uint32_t currentConfigKind{};
+};
+
 static void configureLogging() {
   char *rawValue = nullptr;
   size_t valueSize = 0;
@@ -365,6 +406,103 @@ static void hookInvalid(uc_engine *uc, uc_mem_type type, uint64_t addr,
   spdlog::warn("unmapped memory type={} addr=0x{:08x} size={} pc=0x{:08x} "
                "ra=0x{:08x} sp=0x{:08x} v0=0x{:08x} a0=0x{:08x} s7=0x{:08x}",
                int(type), uint32_t(addr), size, pc, ra, sp, v0, a0, s7);
+}
+
+static void hookProfileSettingC3(uc_engine *uc, uint64_t address, uint32_t,
+                                 void *user) {
+  if (address == 0x0001d13c) {
+    uint32_t ra = 0, sp = 0;
+    uc_reg_read(uc, UC_MIPS_REG_RA, &ra);
+    uc_reg_read(uc, UC_MIPS_REG_SP, &sp);
+    spdlog::info("diag profile key 0xc3 getter enter pc=0x{:08x} ra=0x{:08x} sp=0x{:08x}",
+                 uint32_t(address), ra, sp);
+    return;
+  }
+  if (address == 0x0001d170) {
+    uint32_t value = 0, ra = 0;
+    uc_reg_read(uc, UC_MIPS_REG_V0, &value);
+    uc_reg_read(uc, UC_MIPS_REG_RA, &ra);
+    spdlog::info("diag profile key 0xc3 getter return value={} (0x{:08x}) ra=0x{:08x}",
+                 value, value, ra);
+    return;
+  }
+  auto *state = static_cast<ProfileDiagState *>(user);
+  if (!state) return;
+  if (address == 0x0006bd18) {
+    uint32_t kind = 0, pathPtr = 0, ra = 0;
+    uc_reg_read(uc, UC_MIPS_REG_A1, &kind);
+    uc_reg_read(uc, UC_MIPS_REG_A2, &pathPtr);
+    uc_reg_read(uc, UC_MIPS_REG_RA, &ra);
+    state->currentConfigKind = kind;
+    state->currentConfigPath = readGuestWideLossy(uc, pathPtr);
+    spdlog::info("diag config load enter kind={} path=\"{}\" ra=0x{:08x}",
+                 int16_t(kind & 0xffffu), state->currentConfigPath, ra);
+    return;
+  }
+  if (address == 0x0006c1a8) {
+    uint32_t keyPtr = 0, dataPtr = 0, ra = 0;
+    uc_reg_read(uc, UC_MIPS_REG_A2, &keyPtr);
+    uc_reg_read(uc, UC_MIPS_REG_RA, &ra);
+    uint16_t key = 0;
+    if (!readGuestU16(uc, keyPtr, key) || key != 0x00c3) return;
+    uint16_t recordType = 0;
+    uint32_t value = 0;
+    readGuestU32(uc, keyPtr + 4, dataPtr);
+    readGuestU16(uc, dataPtr, recordType);
+    if (recordType == 3 && dataPtr) {
+      readGuestU32(uc, dataPtr + 4, value);
+    } else if (recordType == 4 && dataPtr) {
+      readGuestU32(uc, dataPtr + 2, value);
+    }
+    spdlog::info("diag config insert key=0x{:04x} type={} value={} data=0x{:08x} kind={} path=\"{}\" ra=0x{:08x}",
+                 key, int16_t(recordType), value, dataPtr,
+                 int16_t(state->currentConfigKind & 0xffffu),
+                 state->currentConfigPath, ra);
+    spdlog::info("diag config insert key=0x00c3 keyobj[0..31]={} data[-16..47]={}",
+                 readGuestHex(uc, keyPtr, 32),
+                 dataPtr >= 16 ? readGuestHex(uc, dataPtr - 16, 64)
+                               : readGuestHex(uc, dataPtr, 48));
+    return;
+  }
+  if (address == 0x0006c084 && !state->currentConfigPath.empty()) {
+    uint32_t ret = 0;
+    uc_reg_read(uc, UC_MIPS_REG_V0, &ret);
+    spdlog::info("diag config load exit ret={} kind={} path=\"{}\"",
+                 ret, int16_t(state->currentConfigKind & 0xffffu),
+                 state->currentConfigPath);
+    state->currentConfigPath.clear();
+    state->currentConfigKind = 0;
+  }
+}
+
+static void hookSerialOpenWrapper(uc_engine *uc, uint64_t address, uint32_t,
+                                  void *) {
+  uint32_t ra = 0, sp = 0, a0 = 0, a1 = 0, a2 = 0, a3 = 0, flags = 0, extra = 0;
+  uc_reg_read(uc, UC_MIPS_REG_RA, &ra);
+  uc_reg_read(uc, UC_MIPS_REG_SP, &sp);
+  uc_reg_read(uc, UC_MIPS_REG_A0, &a0);
+  uc_reg_read(uc, UC_MIPS_REG_A1, &a1);
+  uc_reg_read(uc, UC_MIPS_REG_A2, &a2);
+  uc_reg_read(uc, UC_MIPS_REG_A3, &a3);
+  if (address == 0x000e8ca8) {
+    spdlog::info("diag serial port-name setter enter ra=0x{:08x} obj=0x{:08x} name=0x{:08x} \"{}\"",
+                 ra, a0, a1, readGuestWideLossy(uc, a1, 64));
+    return;
+  }
+  if (address == 0x000319b0) {
+    uint32_t v0 = 0, a0 = 0, ra = 0;
+    uc_reg_read(uc, UC_MIPS_REG_V0, &v0);
+    uc_reg_read(uc, UC_MIPS_REG_A0, &a0);
+    uc_reg_read(uc, UC_MIPS_REG_RA, &ra);
+    spdlog::info("diag gps-port table lookup return index=0x1d value={} base=0x{:08x} slot=0x{:08x} ra=0x{:08x}",
+                 int16_t(v0 & 0xffffu), a0, a0 + ((0x240u + 0x1du) * 4u), ra);
+    return;
+  }
+  if (address != 0x0022f4f8) return;
+  readGuestU32(uc, sp + 0x10, flags);
+  readGuestU32(uc, sp + 0x14, extra);
+  spdlog::info("diag serial open wrapper enter ra=0x{:08x} obj=0x{:08x} name=0x{:08x} \"{}\" access=0x{:08x} share=0x{:08x} flags=0x{:08x} extra=0x{:08x}",
+               ra, a0, a1, readGuestWideLossy(uc, a1, 64), a2, a3, flags, extra);
 }
 
 struct ModuleLoader {
@@ -702,6 +840,42 @@ static int runImage(PeImage &pe, const std::vector<fs::path> &dllSearchDirs,
     if (!main)
       throw std::runtime_error("failed to load main module");
     synthetic.setMainModuleBase(main->loadBase);
+    ProfileDiagState profileDiag;
+    uc_hook profileSettingHook{};
+    uc_hook profileConfigLoadHook{};
+    uc_hook profileConfigInsertHook{};
+    uc_hook profileConfigExitHook{};
+    uc_hook serialOpenWrapperHook{};
+    uc_hook serialPortSetterHook{};
+    uc_hook gpsPortLookupHook{};
+    if (lowerAscii(main->path.filename().string()) == "inavi.exe") {
+      const uc_err hookErr =
+          uc_hook_add(uc, &profileSettingHook, UC_HOOK_CODE,
+                      (void *)hookProfileSettingC3, &profileDiag, 0x0001d13c,
+                      0x0001d170);
+      if (hookErr != UC_ERR_OK) {
+        spdlog::warn("diag profile key 0xc3 hook failed: {} ({})",
+                     int(hookErr), uc_strerror(hookErr));
+      }
+      uc_hook_add(uc, &profileConfigLoadHook, UC_HOOK_CODE,
+                  (void *)hookProfileSettingC3, &profileDiag, 0x0006bd18,
+                  0x0006bd18);
+      uc_hook_add(uc, &profileConfigInsertHook, UC_HOOK_CODE,
+                  (void *)hookProfileSettingC3, &profileDiag, 0x0006c1a8,
+                  0x0006c1a8);
+      uc_hook_add(uc, &profileConfigExitHook, UC_HOOK_CODE,
+                  (void *)hookProfileSettingC3, &profileDiag, 0x0006c084,
+                  0x0006c084);
+      uc_hook_add(uc, &serialOpenWrapperHook, UC_HOOK_CODE,
+                  (void *)hookSerialOpenWrapper, nullptr, 0x0022f4f8,
+                  0x0022f4f8);
+      uc_hook_add(uc, &serialPortSetterHook, UC_HOOK_CODE,
+                  (void *)hookSerialOpenWrapper, nullptr, 0x000e8ca8,
+                  0x000e8ca8);
+      uc_hook_add(uc, &gpsPortLookupHook, UC_HOOK_CODE,
+                  (void *)hookSerialOpenWrapper, nullptr, 0x000319b0,
+                  0x000319b0);
+    }
     loader.preloadAvailableDlls();
     constexpr uint32_t STACK_BASE = 0x0f000000, STACK_SIZE = 0x00100000;
     uc_mem_map(uc, STACK_BASE, STACK_SIZE, UC_PROT_ALL);

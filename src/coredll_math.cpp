@@ -49,6 +49,7 @@ void SyntheticDllRuntime::registerCoredllMathExports(SyntheticModule& module) {
                     {0x03DF, {"atan", Code::CoreDllAtan, &SyntheticDllRuntime::handleAtan}},
                     {0x03EC, {"cos", Code::CoreDllCos, &SyntheticDllRuntime::handleCos}},
                     {0x03FF, {"_hypot", Code::CoreDllHypot, &SyntheticDllRuntime::handleHypot}},
+                    {0x041B, {"pow", Code::CoreDllPow, &SyntheticDllRuntime::handlePow}},
                     {0x041D, {"rand", Code::CoreDllRand, &SyntheticDllRuntime::handleRand}},
                     {0x0422, {"sin", Code::CoreDllSin, &SyntheticDllRuntime::handleSin}},
                     {0x0424, {"sqrt", Code::CoreDllSqrt, &SyntheticDllRuntime::handleSqrt}},
@@ -58,6 +59,8 @@ void SyntheticDllRuntime::registerCoredllMathExports(SyntheticModule& module) {
                     {0x057D, {"strtoul", Code::CoreDllStrtoul, &SyntheticDllRuntime::handleStrtoul}},
                     {0x066B, {"fmodf", Code::CoreDllFmodf, &SyntheticDllRuntime::handleFmodf}},
                     {0x07D5, {"__ll_div", Code::CoreDllLlDiv, &SyntheticDllRuntime::handleLlDiv}},
+                    {0x07DA, {"__ll_to_d", Code::CoreDllLongLongToDouble, &SyntheticDllRuntime::handleLongLongToDouble}},
+                    {0x07E1, {"__ull_to_d", Code::CoreDllUnsignedLongLongToDouble, &SyntheticDllRuntime::handleUnsignedLongLongToDouble}},
                     {0x07E2, {"__f_to_ll", Code::CoreDllFloatToLongLong, &SyntheticDllRuntime::handleFloatToLongLong}},
                     {0x07E6, {"__fpadd", Code::CoreDllFloatAdd, &SyntheticDllRuntime::handleFloatAdd}},
                     {0x07E7, {"__dpadd", Code::CoreDllDoubleAdd, &SyntheticDllRuntime::handleDoubleAdd}},
@@ -128,6 +131,13 @@ bool SyntheticDllRuntime::handleHypot(SyntheticExportCode code, const GuestCallA
     (void)code;
     setGuestDoubleReturn(uc_, std::hypot(doubleFromGuestPair(args.a0, args.a1),
                                          doubleFromGuestPair(args.a2, args.a3)), ret);
+    return true;
+}
+
+bool SyntheticDllRuntime::handlePow(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
+    (void)code;
+    setGuestDoubleReturn(uc_, std::pow(doubleFromGuestPair(args.a0, args.a1),
+                                       doubleFromGuestPair(args.a2, args.a3)), ret);
     return true;
 }
 
@@ -213,6 +223,20 @@ bool SyntheticDllRuntime::handleFloatToLongLong(SyntheticExportCode code, const 
     const int64_t converted = std::isfinite(value) ? static_cast<int64_t>(value) : 0;
     ret = uint32_t(uint64_t(converted));
     setReg(UC_MIPS_REG_V1, uint32_t(uint64_t(converted) >> 32));
+    return true;
+}
+
+bool SyntheticDllRuntime::handleLongLongToDouble(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
+    (void)code;
+    const int64_t value = (int64_t(uint64_t(args.a1)) << 32) | uint64_t(args.a0);
+    setGuestDoubleReturn(uc_, static_cast<double>(value), ret);
+    return true;
+}
+
+bool SyntheticDllRuntime::handleUnsignedLongLongToDouble(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
+    (void)code;
+    const uint64_t value = (uint64_t(args.a1) << 32) | uint64_t(args.a0);
+    setGuestDoubleReturn(uc_, static_cast<double>(value), ret);
     return true;
 }
 

@@ -143,6 +143,10 @@ bool SyntheticDllRuntime::handleSetCommMask(SyntheticExportCode code, const Gues
     const BOOL ok = SetCommMask(reinterpret_cast<HANDLE>(handle->hostValue), args.a1);
     ret = ok ? 1 : 0;
     lastError_ = ok ? 0 : GetLastError();
+    auto debugName = fileHandleDebugNames_.find(args.a0);
+    const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+    spdlog::info("SetCommMask host serial handle=0x{:08x} path=\"{}\" mask=0x{:08x} -> {} lastError={}",
+                 args.a0, debugPath, args.a1, ret, lastError_);
     return true;
 }
 
@@ -159,6 +163,10 @@ bool SyntheticDllRuntime::handleSetupComm(SyntheticExportCode code, const GuestC
     const BOOL ok = SetupComm(reinterpret_cast<HANDLE>(handle->hostValue), args.a1, args.a2);
     ret = ok ? 1 : 0;
     lastError_ = ok ? 0 : GetLastError();
+    auto debugName = fileHandleDebugNames_.find(args.a0);
+    const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+    spdlog::info("SetupComm host serial handle=0x{:08x} path=\"{}\" inQueue={} outQueue={} -> {} lastError={}",
+                 args.a0, debugPath, args.a1, args.a2, ret, lastError_);
     return true;
 }
 
@@ -175,6 +183,10 @@ bool SyntheticDllRuntime::handlePurgeComm(SyntheticExportCode code, const GuestC
     const BOOL ok = PurgeComm(reinterpret_cast<HANDLE>(handle->hostValue), args.a1);
     ret = ok ? 1 : 0;
     lastError_ = ok ? 0 : GetLastError();
+    auto debugName = fileHandleDebugNames_.find(args.a0);
+    const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+    spdlog::info("PurgeComm host serial handle=0x{:08x} path=\"{}\" flags=0x{:08x} -> {} lastError={}",
+                 args.a0, debugPath, args.a1, ret, lastError_);
     return true;
 }
 
@@ -195,5 +207,9 @@ bool SyntheticDllRuntime::handleClearCommError(SyntheticExportCode code, const G
     if (ok && args.a2) uc_mem_write(uc_, args.a2, &stat, sizeof(stat));
     ret = ok ? 1 : 0;
     lastError_ = ok ? 0 : GetLastError();
+    auto debugName = fileHandleDebugNames_.find(args.a0);
+    const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+    spdlog::info("ClearCommError host serial handle=0x{:08x} path=\"{}\" -> {} lastError={} errors=0x{:08x} cbInQue={} cbOutQue={}",
+                 args.a0, debugPath, ret, lastError_, errors, stat.cbInQue, stat.cbOutQue);
     return true;
 }

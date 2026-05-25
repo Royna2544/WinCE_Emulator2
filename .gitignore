@@ -12,7 +12,7 @@ fakece_*.bmp
 *.pdb
 *.obj
 *.tlog
-captures/
+*captures/
 
 # User/IDE
 *.user

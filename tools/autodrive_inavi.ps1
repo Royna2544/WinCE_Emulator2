@@ -14,7 +14,9 @@ param(
     [int]$InitialSettleMs = 18000,
     [int]$AfterTapMs = 4500,
     [AllowEmptyString()]
-    [string]$Taps = "650,430,safety_ok;725,35,current_position;665,35,menu_grid;135,250,route_search;500,445,recent_destination",
+    [string]$Taps = "",
+    [switch]$NoTaps,
+    [switch]$RoutePreset,
     [string]$OutputRoot = ".\captures",
     [switch]$KeepAlive
 )
@@ -237,14 +239,15 @@ function Parse-TapPlan([string]$Plan) {
     foreach ($tap in ($Plan -split ';')) {
         $trimmed = $tap.Trim()
         if (-not $trimmed) { continue }
-        $parts = $trimmed -split ',', 3
+        $parts = $trimmed -split ',', 4
         if ($parts.Count -lt 2) {
-            throw "Bad tap entry '$trimmed'. Use x,y,label."
+            throw "Bad tap entry '$trimmed'. Use x,y,label[,delayMs]."
         }
         [pscustomobject]@{
             X = [int]$parts[0]
             Y = [int]$parts[1]
             Label = if ($parts.Count -ge 3 -and $parts[2]) { $parts[2] } else { "tap" }
+            DelayMs = if ($parts.Count -ge 4 -and $parts[3]) { [int]$parts[3] } else { $AfterTapMs }
         }
     }
 }
@@ -256,6 +259,16 @@ New-Item -ItemType Directory -Force -Path $runDir | Out-Null
 $stdoutPath = Join-Path $runDir "emulator.stdout.log"
 $stderrPath = Join-Path $runDir "emulator.stderr.log"
 $manifestPath = Join-Path $runDir "manifest.json"
+
+$defaultTapPlan = "650,430,safety_ok;725,35,current_position;665,35,menu_grid;135,250,route_search;500,445,recent_destination"
+$routeTapPlan = "650,430,safety_ok_1,6000;650,430,safety_ok_2,6000;650,430,safety_ok_3,6000;650,430,safety_ok_4,8000;400,365,serial_popup_ok,5000;650,430,safety_ok_after_serial,12000;760,95,red_search,9000;135,180,destination_tab,7000;500,445,bottom_confirm_1,5000;650,430,confirm_ok_1,5000;675,430,right_confirm_1,5000;650,430,confirm_ok_2,5000"
+if ($NoTaps) {
+    $Taps = ""
+} elseif ($RoutePreset -and -not $Taps) {
+    $Taps = $routeTapPlan
+} elseif (-not $Taps) {
+    $Taps = $defaultTapPlan
+}
 
 $argumentList = @($Target, "--registry", $Registry, "--sdmmc-path", $SdmmcPath)
 if ($SerialMap) {
@@ -292,29 +305,36 @@ try {
         Save-WindowScreenshot $hwnd $path
         $events.Add([pscustomobject]@{ kind="screenshot"; file=(Split-Path -Leaf $path); time=(Get-Date).ToString("o") })
 
-        $index = 1
-        foreach ($tap in (Parse-TapPlan $Taps)) {
-            if ($process.HasExited) { break }
-            $tapResult = Send-GuestTap $hwnd $tap.X $tap.Y
-            $events.Add([pscustomobject]@{
-                kind="tap"
-                label=$tap.Label
-                guestX=$tapResult.GuestX
-                guestY=$tapResult.GuestY
-                hostX=$tapResult.HostX
-                hostY=$tapResult.HostY
-                clientWidth=$tapResult.ClientWidth
-                clientHeight=$tapResult.ClientHeight
-                time=(Get-Date).ToString("o")
-            })
-            Start-Sleep -Milliseconds $AfterTapMs
-            if (-not $process.HasExited) {
-                $safeLabel = ($tap.Label -replace '[^A-Za-z0-9_.-]', '_')
-                $path = Join-Path $runDir ("{0:00}_{1}.png" -f $index, $safeLabel)
-                Save-WindowScreenshot $hwnd $path
-                $events.Add([pscustomobject]@{ kind="screenshot"; file=(Split-Path -Leaf $path); after=$tap.Label; time=(Get-Date).ToString("o") })
+        if ($Taps) {
+            $index = 1
+            foreach ($tap in (Parse-TapPlan $Taps)) {
+                if ($process.HasExited) { break }
+                $tapResult = Send-GuestTap $hwnd $tap.X $tap.Y
+                $events.Add([pscustomobject]@{
+                    kind="tap"
+                    label=$tap.Label
+                    guestX=$tapResult.GuestX
+                    guestY=$tapResult.GuestY
+                    hostX=$tapResult.HostX
+                    hostY=$tapResult.HostY
+                    clientWidth=$tapResult.ClientWidth
+                    clientHeight=$tapResult.ClientHeight
+                    time=(Get-Date).ToString("o")
+                })
+                Start-Sleep -Milliseconds $tap.DelayMs
+                if (-not $process.HasExited) {
+                    $safeLabel = ($tap.Label -replace '[^A-Za-z0-9_.-]', '_')
+                    $path = Join-Path $runDir ("{0:00}_{1}.png" -f $index, $safeLabel)
+                    Save-WindowScreenshot $hwnd $path
+                    $events.Add([pscustomobject]@{
+                        kind="screenshot"
+                        file=(Split-Path -Leaf $path)
+                        after=$tap.Label
+                        time=(Get-Date).ToString("o")
+                    })
+                }
+                $index++
             }
-            $index++
         }
     }
 

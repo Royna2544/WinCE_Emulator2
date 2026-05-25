@@ -26,6 +26,13 @@ std::string lowerAscii(std::string text) {
     return text;
 }
 
+bool isProfileTracePath(const std::string& lowerPath) {
+    return lowerPath.find("inavidata\\config.bin") != std::string::npos ||
+           lowerPath.find("inavidata/config.bin") != std::string::npos ||
+           lowerPath.find("inavi\\res\\values.dat") != std::string::npos ||
+           lowerPath.find("inavi/res/values.dat") != std::string::npos;
+}
+
 std::string wideZToUtf8(const wchar_t* text, size_t maxChars) {
     std::string out;
     for (size_t i = 0; i < maxChars && text[i]; ++i) {
@@ -207,7 +214,13 @@ bool SyntheticDllRuntime::handleCreateFileW(SyntheticExportCode code, const Gues
                                     guestLower.find("routetest") != std::string::npos ||
                                     hostLower.find("route") != std::string::npos ||
                                     hostLower.find("routetest") != std::string::npos;
-        if (traceRouteFile) {
+        const bool traceProfileFile = isProfileTracePath(guestLower) ||
+                                      isProfileTracePath(hostLower);
+        if (traceProfileFile) {
+            spdlog::info("CreateFileW profile hit guest=\"{}\" host=\"{}\" guestHandle=0x{:08x} access=0x{:08x} share=0x{:08x} creation=0x{:08x} flags=0x{:08x} ra=0x{:08x}",
+                         guestPath, hostText, ret, args.a1, args.a2,
+                         stackArg(4), stackArg(5), args.ra);
+        } else if (traceRouteFile) {
             spdlog::info("CreateFileW route hit guest=\"{}\" host=\"{}\" guestHandle=0x{:08x} access=0x{:08x} share=0x{:08x} creation=0x{:08x} flags=0x{:08x}",
                          guestPath, hostText, ret, args.a1, args.a2, stackArg(4), stackArg(5));
         } else if (traceMapFile) {
@@ -402,26 +415,52 @@ bool SyntheticDllRuntime::handleReadFile(SyntheticExportCode code, const GuestCa
         ret = 0;
     } else {
         DWORD transferred = 0;
+        const DWORD requested = handle->kind == GuestHandle::Kind::HostSerialDevice
+            ? std::min<DWORD>(args.a2, 128)
+            : args.a2;
         static thread_local std::vector<uint8_t> bytes;
-        bytes.resize(args.a2);
+        bytes.resize(requested);
+        auto debugName = fileHandleDebugNames_.find(args.a0);
+        const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+        const std::string debugLower = lowerAscii(debugPath);
+        const bool traceProfileFile = isProfileTracePath(debugLower);
+        DWORD fileOffsetBefore = 0xffffffffu;
+        if (handle->kind == GuestHandle::Kind::HostFile && traceProfileFile) {
+            fileOffsetBefore = SetFilePointer(reinterpret_cast<HANDLE>(handle->hostValue), 0, nullptr, FILE_CURRENT);
+        }
         const BOOL ok = ReadFile(reinterpret_cast<HANDLE>(handle->hostValue),
                                  bytes.empty() ? nullptr : bytes.data(),
-                                 args.a2, &transferred, nullptr);
+                                 requested, &transferred, nullptr);
         if (ok && transferred) uc_mem_write(uc_, args.a1, bytes.data(), transferred);
         ret = ok ? 1 : 0;
         writeU32(args.a3, transferred);
         lastError_ = ret ? 0 : GetLastError();
         const uint32_t readCount = ++fileReadCounts_[args.a0];
-        auto debugName = fileHandleDebugNames_.find(args.a0);
-        const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+        constexpr uint32_t gpsPortSlot = 0x0079233c;
+        if (ok && transferred && args.a1 <= gpsPortSlot &&
+            gpsPortSlot + sizeof(uint16_t) <= args.a1 + transferred) {
+            uint16_t slotValue = 0;
+            uc_mem_read(uc_, gpsPortSlot, &slotValue, sizeof(slotValue));
+            const uint32_t offset = gpsPortSlot - args.a1;
+            spdlog::info("diag gps-port slot filled by ReadFile handle=0x{:08x} path=\"{}\" buffer=0x{:08x} guestRequested={} hostRequested={} transferred={} offset=0x{:x} bytes={} {} slotNow={}",
+                         args.a0, debugPath, args.a1, args.a2, requested, transferred, offset,
+                         offset < bytes.size() ? unsigned(bytes[offset]) : 0u,
+                         offset + 1 < bytes.size() ? unsigned(bytes[offset + 1]) : 0u,
+                         int16_t(slotValue));
+        }
+        if (traceProfileFile) {
+            spdlog::info("ReadFile profile handle=0x{:08x} path=\"{}\" guestBuffer=0x{:08x} requested={} transferred={} fileOffset=0x{:08x} ok={} lastError={} ra=0x{:08x}",
+                         args.a0, debugPath, args.a1, args.a2, transferred,
+                         fileOffsetBefore, ok ? 1 : 0, lastError_, args.ra);
+        }
         if (handle->kind == GuestHandle::Kind::HostSerialDevice) {
             const std::string preview = transferred ? serialAsciiPreview(bytes.data(), transferred) : std::string{};
-            spdlog::info("ReadFile host serial handle=0x{:08x} path=\"{}\" requested={} transferred={} ok={} lastError={} read#={} data=\"{}\"",
-                         args.a0, debugPath, args.a2, transferred, ok ? 1 : 0, lastError_, readCount, preview);
+            spdlog::info("ReadFile host serial handle=0x{:08x} path=\"{}\" guestRequested={} hostRequested={} transferred={} ok={} lastError={} read#={} data=\"{}\"",
+                         args.a0, debugPath, args.a2, requested, transferred, ok ? 1 : 0, lastError_, readCount, preview);
         }
         if (readCount <= 32 || !ok || transferred != args.a2 || transferred == 0) {
-            spdlog::debug("ReadFile handle=0x{:08x} path=\"{}\" requested={} transferred={} ok={} read#={}",
-                          args.a0, debugPath, args.a2, transferred, ok ? 1 : 0, readCount);
+            spdlog::debug("ReadFile handle=0x{:08x} path=\"{}\" guestRequested={} hostRequested={} transferred={} ok={} read#={}",
+                          args.a0, debugPath, args.a2, requested, transferred, ok ? 1 : 0, readCount);
         }
     }
     return true;
@@ -456,7 +495,16 @@ bool SyntheticDllRuntime::handleWriteFile(SyntheticExportCode code, const GuestC
         auto debugName = fileHandleDebugNames_.find(args.a0);
         const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
         const std::string debugLower = lowerAscii(debugPath);
-        if (debugLower.find("route") != std::string::npos ||
+        const bool traceProfileFile = isProfileTracePath(debugLower);
+        DWORD fileOffsetBefore = 0xffffffffu;
+        if (handle->kind == GuestHandle::Kind::HostFile && traceProfileFile) {
+            fileOffsetBefore = SetFilePointer(reinterpret_cast<HANDLE>(handle->hostValue), 0, nullptr, FILE_CURRENT);
+        }
+        if (traceProfileFile) {
+            spdlog::info("WriteFile profile handle=0x{:08x} path=\"{}\" guestBuffer=0x{:08x} requested={} transferred={} fileOffset=0x{:08x} ok={} lastError={} ra=0x{:08x}",
+                         args.a0, debugPath, args.a1, args.a2, transferred,
+                         fileOffsetBefore, ok ? 1 : 0, lastError_, args.ra);
+        } else if (debugLower.find("route") != std::string::npos ||
             debugLower.find("routetest") != std::string::npos) {
             spdlog::info("WriteFile route handle=0x{:08x} path=\"{}\" requested={} transferred={} ok={} lastError={}",
                          args.a0, debugPath, args.a2, transferred, ok ? 1 : 0, lastError_);
@@ -499,9 +547,17 @@ bool SyntheticDllRuntime::handleSetFilePointer(SyntheticExportCode code, const G
         const uint32_t seekCount = ++fileSeekCounts_[args.a0];
         if (seekCount <= 32 || ret == 0xffffffffu) {
             auto debugName = fileHandleDebugNames_.find(args.a0);
-            spdlog::debug("SetFilePointer handle=0x{:08x} path=\"{}\" distance={} method={} -> low={} high={} lastError={} seek#={}",
-                          args.a0, debugName == fileHandleDebugNames_.end() ? "" : debugName->second,
-                          int32_t(args.a1), args.a3, ret, uint32_t(high), lastError_, seekCount);
+            const std::string debugPath = debugName == fileHandleDebugNames_.end() ? "" : debugName->second;
+            const bool traceProfileFile = isProfileTracePath(lowerAscii(debugPath));
+            if (traceProfileFile) {
+                spdlog::info("SetFilePointer profile handle=0x{:08x} path=\"{}\" distance={} method={} -> low={} high={} lastError={} seek#={} ra=0x{:08x}",
+                             args.a0, debugPath, int32_t(args.a1), args.a3,
+                             ret, uint32_t(high), lastError_, seekCount, args.ra);
+            } else {
+                spdlog::debug("SetFilePointer handle=0x{:08x} path=\"{}\" distance={} method={} -> low={} high={} lastError={} seek#={}",
+                              args.a0, debugPath, int32_t(args.a1), args.a3,
+                              ret, uint32_t(high), lastError_, seekCount);
+            }
         }
     }
     return true;

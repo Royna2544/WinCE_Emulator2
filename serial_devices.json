@@ -6,12 +6,12 @@
   },
   "devices": [
     {
-      "guest": "COM1:",
+      "guest": "COM7:",
       "type": "serial",
       "backend": "win32_com",
       "host": "COM21",
       "enabled": true,
-      "note": "GPS Sensor; real device Drivers\\BuiltIn\\VSP, VSP.dll, GPS NMEA output confirmed, 9600 8N1"
+      "note": "TEMP diagnostic: current dump selects COM7; host COM21 is GPS Sensor. Real device is Drivers\\BuiltIn\\VSP, VSP.dll, COM1 GPS NMEA output confirmed, 9600 8N1"
     },
     {
       "guest": "COM3:",
@@ -23,7 +23,7 @@
     {
       "guest": "UID1:",
       "type": "ioctl_device",
-      "backend": "stub",
+      "backend": "NANDUUID_RETURN",
       "enabled": true,
       "note": "Drivers\\BuiltIn\\NANDUUID, NANDUUID.dll, NAND UUID custom device"
     },

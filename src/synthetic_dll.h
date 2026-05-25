@@ -159,6 +159,7 @@ private:
         CoreDllFileTimeToSystemTime,
         CoreDllGetLocalTime,
         CoreDllGetSystemTime,
+        CoreDllSetSystemTime,
         CoreDllGetTimeZoneInformation,
         CoreDllSleep,
         CoreDllGetTickCount,
@@ -241,6 +242,7 @@ private:
         CoreDllAtan,
         CoreDllCos,
         CoreDllHypot,
+        CoreDllPow,
         CoreDllRand,
         CoreDllSqrt,
         CoreDllSrand,
@@ -251,6 +253,8 @@ private:
         CoreDllFmodf,
         CoreDllLlDiv,
         CoreDllFloatToLongLong,
+        CoreDllLongLongToDouble,
+        CoreDllUnsignedLongLongToDouble,
         CoreDllFloatAdd,
         CoreDllDoubleAdd,
         CoreDllFloatSub,
@@ -494,6 +498,7 @@ private:
         uint32_t wndProc{};
         uint32_t userData{};
         uint32_t createStruct{};
+        uint32_t ownerThread{};
         int32_t x{};
         int32_t y{};
         int32_t width{800};
@@ -601,6 +606,7 @@ private:
         uint32_t time{};
         uint32_t x{};
         uint32_t y{};
+        uint32_t synchronousSender{};
     };
     struct ResourceName {
         bool ordinal{};
@@ -767,6 +773,7 @@ private:
     std::vector<CachedWaveOutDevice> cachedWaveOutDevices_;
     std::map<uint32_t, std::string> registryHandles_;
     std::map<uint32_t, std::string> fileHandleDebugNames_;
+    std::map<uint32_t, SerialDeviceConfig> guestDeviceConfigsByHandle_;
     std::map<uint32_t, uint32_t> fileReadCounts_;
     std::map<uint32_t, uint32_t> fileSeekCounts_;
     std::map<uint32_t, GuestFileMapping> fileMappings_;
@@ -925,6 +932,7 @@ private:
     bool handleFileTimeToSystemTime(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleGetLocalTime(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleGetSystemTime(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleSetSystemTime(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleGetTimeZoneInformation(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleSleep(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleGetTickCount(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
@@ -1007,6 +1015,7 @@ private:
     bool handleAtan(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleCos(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleHypot(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handlePow(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleRand(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleSqrt(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleSrand(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
@@ -1017,6 +1026,8 @@ private:
     bool handleFmodf(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleLlDiv(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleFloatToLongLong(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleLongLongToDouble(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleUnsignedLongLongToDouble(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleFloatAdd(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleDoubleAdd(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleFloatSub(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);

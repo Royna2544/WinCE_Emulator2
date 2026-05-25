@@ -1,6 +1,6 @@
 # Known Bugs
 
-Last refreshed: 2026-05-24.
+Last refreshed: 2026-05-25.
 
 ## Route Search Does Not Complete
 
@@ -29,6 +29,28 @@ Likely areas:
 - `ShowWindow`/activation ordering,
 - paint invalidation timing.
 
+## GPS Status UI Still Needs Live-NMEA Retest
+
+The parent app can now open the temporary diagnostic `COM7:` -> host `COM21`
+bridge and earlier logs showed valid NMEA reads, but the latest post-fix
+verification run read zero bytes from the host port.
+
+Recent evidence:
+- `captures/inavi_autodrive_20260525_091237` read valid `$GPGGA`, `$GPRMC`,
+  and `$GPVTG` data from host `COM21`.
+- Missing GPS-path ordinals `__ll_to_d` (`#2010`), `SetSystemTime` (`#26`),
+  and `pow` (`#1051`) were added afterward.
+- `captures/inavi_autodrive_20260525_094818` no longer crashes after the
+  GPS/private-message path, but `ReadFile host serial` transferred `0` bytes
+  during that run.
+- `captures/inavi_autodrive_20260525_100904` shows the guest calls
+  `PurgeComm(..., 0x0f)` immediately after serial setup, then
+  `ClearCommError` reports `cbInQue=0` before reads. If the feeder only sends a
+  burst before/around open, the app can clear it before parsing.
+
+Status: needs another run with the NMEA feeder confirmed active before judging
+the GPS status icon/UI update.
+
 ## Bottom Bar Can Disappear After Search/Overlay Flows
 
 The map and right-side controls can remain visible while the bottom bar disappears or is hidden behind another guest surface.
@@ -38,12 +60,26 @@ Likely areas:
 - child window clipping,
 - stale presenter surface after modal transitions.
 
+## Worker Thread SendMessage Routing Was Crashing GPS Update Path
+
+The GPS worker path reached a synchronous `SendMessageW` to the main UI window
+and previously entered the UI wndproc on the worker thread. That exposed a
+`pc=0` / unaligned-read crash after `msg=0x577d`.
+
+Status: partially fixed. Guest windows now track owner thread, cross-thread
+`SendMessageW` to main-owned windows is queued/yielded, and resumed guest waits
+restore the saved return PC. `captures/inavi_autodrive_20260525_094818`
+completed without the prior crash, but this needs more live-input testing.
+
 ## Stub Device Behavior Is Incomplete
 
-Known real stream devices are now present as stubs, but device-specific `DeviceIoControl` behavior is not implemented yet.
+Known real stream devices are now present as stubs or named JSON-selected
+handlers, but most device-specific `DeviceIoControl` behavior is not
+implemented yet.
 
 Affected devices:
-- `UID1:` NAND UUID,
+- `UID1:` NAND UUID now has a narrow `NANDUUID_RETURN` backend for ioctls
+  `0xa00100cc` and `0xa00100d0`, but any other UID1 ioctl remains unsupported,
 - `PIC1:` MCU/PIC candidate,
 - `BTN1:` buttons,
 - `LSD1:` light sensor,
@@ -61,11 +97,29 @@ Evidence:
 - Runtime launched `happyway_win.exe` with command line
   `iNavi|SDMMC Disk\mapdata|SDMMC Disk\inavidata|11|7|0|1`.
 - The child opened `COM7:` immediately afterward.
-- `iNaviData\config.bin` contains the same GPS port value `7` as a dword at
-  offset `0x34`.
+- A/B patches of obvious `config.bin` candidate dwords at `0x34`, `0x4c`, and
+  `0xb4` did not change the launch command, so those offsets are not the
+  direct runtime source of the current `11|7` values.
 - `DeviceParser.exe` runs earlier in startup, before the `happyway_win.exe`
   command line is built, so the emulator may be missing the hardware/profile
   detection path that should produce GPS port `1`.
+- Disassembly shows `iNavi.exe` reads setting key `0xc3`; value `4` maps to
+  `happyway_win.exe ...|11|7|0|1`.
+- Runtime diagnostic confirms `0xc3` returns `4` at the launcher callsites
+  immediately before the `happyway_win.exe` `11|7|0|1` command line is built.
+- `captures/inavi_autodrive_20260525_002848` confirms the original SDMMC data
+  already contains the bad selection: `values.dat` kind `47` key `0xc3` loads
+  as value `4`, and `iNaviData\config.bin` disk offset `0x80` contains
+  `06 00`, which fills the parent app's GPS-port table slot as zero-based port
+  `6`.
+- The same run saw no `WriteFile` to `values.dat` or `iNaviData\config.bin`.
+  `DeviceParser.exe` launches after `values.dat` has already supplied
+  `0xc3=4`, and direct execution only showed `.bat`/`autorun.inf` probing
+  before the emulator hit a process-return gap.
+- `UID1:` with backend `NANDUUID_RETURN` successfully returns the SDMMC
+  `Device.uid` value (`022794806836GN`) for ioctl `0xa00100d0`. The parent
+  app also probes `UID1:` with ioctl `0xa00100cc`; that path is now implemented
+  but was not exercised in the 2026-05-24 23:27 harness run.
 
 Registry-based explanations are rejected. Next fix should come from correcting
 the SDMMC config/profile data or finding the real device-profile source that
