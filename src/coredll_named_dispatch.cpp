@@ -733,31 +733,6 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
         }
         return 0;
     };
-    auto ensureExternalWindowProxy =
-        [&](const std::string& proxyClass, const std::string& proxyTitle, int32_t width, int32_t height) -> uint32_t {
-        for (const auto& [hwnd, window] : windows_) {
-            if (!window.destroyed &&
-                (proxyClass.empty() || lowerAscii(window.className) == proxyClass) &&
-                window.title == proxyTitle) {
-                return hwnd;
-            }
-        }
-        const uint32_t hwnd = makeGuestHandle({GuestHandle::Kind::GuestWindow, 0, 0});
-        GuestWindow window;
-        window.hwnd = hwnd;
-        window.className = proxyClass;
-        window.title = proxyTitle;
-        window.width = width;
-        window.height = height;
-        window.ownerThread = activeGuestThread_ ? activeGuestThread_ : mainThreadPseudoHandle_;
-        window.visible = false;
-        window.enabled = true;
-        windows_[hwnd] = window;
-        spdlog::info("registered external guest window proxy hwnd=0x{:08x} class=\"{}\" title=\"{}\"",
-                     hwnd, proxyClass, proxyTitle);
-        return hwnd;
-    };
-
     if (ordinal == ord(CoredllOrdinal::CreateDialogIndirectParamW)) {
         auto read16 = [&](uint32_t address) -> uint16_t {
             uint16_t value = 0;
@@ -1106,15 +1081,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             : resolveGuestPath(application);
         spdlog::info("CreateProcessW callsite ra=0x{:08x} app=\"{}\" cmd=\"{}\" pi=0x{:08x}",
                      args.ra, application, commandLine, processInfo);
-        const std::string childFileName = lowerAscii(pathToUtf8(hostApplication.filename()));
-        const bool childIsHappyway = childFileName == "happyway_win.exe";
-        const bool childIsSearch = childFileName == "isearch.exe";
-        const bool needsSharedGuestWindowNamespace = childIsHappyway || childIsSearch;
-        const bool shouldRunInRuntime = !childFileName.empty();
-        const std::string proxyClass = childIsHappyway ? "happyway_win" : std::string{};
-        const std::string proxyTitle = childIsHappyway ? "happyway_win" : "iSearch";
-        const int32_t proxyWidth = childIsSearch ? 1 : 150;
-        const int32_t proxyHeight = childIsSearch ? 1 : 50;
+        const bool shouldRunInRuntime = !hostApplication.empty();
         if (!application.empty() && (hostApplication.empty() || !std::filesystem::exists(hostApplication))) {
             lastError_ = 2;
             ret = 0;
@@ -1151,9 +1118,6 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
                 }
                 lastError_ = 0;
                 ret = 1;
-                if (needsSharedGuestWindowNamespace) {
-                    ensureExternalWindowProxy(proxyClass, proxyTitle, proxyWidth, proxyHeight);
-                }
                 spdlog::info("CreateProcessW synthetic child placeholder app=\"{}\" process=0x{:08x} thread=0x{:08x}",
                              application, processHandle, threadHandle);
             } else if (!launchedInRuntime) {
@@ -1268,9 +1232,6 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
                     }
                     lastError_ = 0;
                     ret = 1;
-                    if (needsSharedGuestWindowNamespace) {
-                        ensureExternalWindowProxy(proxyClass, proxyTitle, proxyWidth, proxyHeight);
-                    }
                     spdlog::info("CreateProcessW launched child emulator app=\"{}\" pid={} tid={} process=0x{:08x} thread=0x{:08x}",
                                  application, hostPi.dwProcessId, hostPi.dwThreadId, processHandle, threadHandle);
                 }
