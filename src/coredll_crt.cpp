@@ -55,6 +55,7 @@ void SyntheticDllRuntime::registerCoredllCrtExports(SyntheticModule& module) {
                     {0x042A, {"strcpy", Code::CoreDllStrcpy, &SyntheticDllRuntime::handleStrcpy}},
                     {0x042B, {"strcspn", Code::CoreDllStrcspn, &SyntheticDllRuntime::handleStrcspn}},
                     {0x042C, {"strlen", Code::CoreDllStrlen, &SyntheticDllRuntime::handleStrlen}},
+                    {0x0430, {"strstr", Code::CoreDllStrstr, &SyntheticDllRuntime::handleStrstr}},
                     {0x0431, {"strtok", Code::CoreDllStrtok, &SyntheticDllRuntime::handleStrtok}},
                     {0x0438, {"_ultow", Code::CoreDllUltow, &SyntheticDllRuntime::handleUltow}},
                     {0x0443, {"toupper", Code::CoreDllToupper, &SyntheticDllRuntime::handleToupper}},
@@ -148,6 +149,14 @@ bool SyntheticDllRuntime::handleMemcmp(SyntheticExportCode, const GuestCallArgs&
 
 bool SyntheticDllRuntime::handleStrlen(SyntheticExportCode, const GuestCallArgs& args, uint32_t& ret) {
     ret = uint32_t(readAscii(args.a0).size());
+    return true;
+}
+
+bool SyntheticDllRuntime::handleStrstr(SyntheticExportCode, const GuestCallArgs& args, uint32_t& ret) {
+    const std::string haystack = readAscii(args.a0);
+    const std::string needle = readAscii(args.a1);
+    const size_t found = haystack.find(needle);
+    ret = found == std::string::npos ? 0 : args.a0 + uint32_t(found);
     return true;
 }
 

@@ -62,6 +62,7 @@ void SyntheticDllRuntime::registerCoredllMathExports(SyntheticModule& module) {
                     {0x057C, {"strtol", Code::CoreDllStrtol, &SyntheticDllRuntime::handleStrtol}},
                     {0x057D, {"strtoul", Code::CoreDllStrtoul, &SyntheticDllRuntime::handleStrtoul}},
                     {0x066B, {"fmodf", Code::CoreDllFmodf, &SyntheticDllRuntime::handleFmodf}},
+                    {0x07D3, {"__ll_lshift", Code::CoreDllLlLshift, &SyntheticDllRuntime::handleLlLshift}},
                     {0x07D5, {"__ll_div", Code::CoreDllLlDiv, &SyntheticDllRuntime::handleLlDiv}},
                     {0x07DA, {"__ll_to_d", Code::CoreDllLongLongToDouble, &SyntheticDllRuntime::handleLongLongToDouble}},
                     {0x07E1, {"__ull_to_d", Code::CoreDllUnsignedLongLongToDouble, &SyntheticDllRuntime::handleUnsignedLongLongToDouble}},
@@ -232,6 +233,16 @@ bool SyntheticDllRuntime::handleFmodf(SyntheticExportCode code, const GuestCallA
     const float left = guestFloat(args.a0);
     const float right = guestFloat(args.a1);
     ret = guestFloatBits(right == 0.0f ? 0.0f : std::fmod(left, right));
+    return true;
+}
+
+bool SyntheticDllRuntime::handleLlLshift(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
+    (void)code;
+    const uint64_t value = (uint64_t(args.a1) << 32) | uint64_t(args.a0);
+    const uint32_t shift = args.a2 & 0x3fu;
+    const uint64_t shifted = value << shift;
+    ret = uint32_t(shifted);
+    setReg(UC_MIPS_REG_V1, uint32_t(shifted >> 32));
     return true;
 }
 

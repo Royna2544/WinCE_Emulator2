@@ -212,6 +212,7 @@ void SyntheticDllRuntime::registerCoredllFsExports(SyntheticModule& module) {
                     {0x00A6, {"GetFileAttributesW", Code::CoreDllGetFileAttributesW, &SyntheticDllRuntime::handleGetFileAttributesW}},
                     {0x00A7, {"FindFirstFileW", Code::CoreDllFindFirstFileW, &SyntheticDllRuntime::handleFindFirstFileW}},
                     {0x00A8, {"CreateFileW", Code::CoreDllCreateFileW, &SyntheticDllRuntime::handleCreateFileW}},
+                    {0x048F, {"CreateFileForMappingW", Code::CoreDllCreateFileForMappingW, &SyntheticDllRuntime::handleCreateFileW}},
                     {0x00AA, {"ReadFile", Code::CoreDllReadFile, &SyntheticDllRuntime::handleReadFile}},
                     {0x00AB, {"WriteFile", Code::CoreDllWriteFile, &SyntheticDllRuntime::handleWriteFile}},
                     {0x00AC, {"GetFileSize", Code::CoreDllGetFileSize, &SyntheticDllRuntime::handleGetFileSize}},
@@ -231,7 +232,9 @@ void SyntheticDllRuntime::registerCoredllFsExports(SyntheticModule& module) {
 }
 
 bool SyntheticDllRuntime::handleCreateFileW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
-    (void)code;
+    const char* apiName = code == SyntheticExportCode::CoreDllCreateFileForMappingW
+        ? "CreateFileForMappingW"
+        : "CreateFileW";
     const std::string guestPath = readUtf16(args.a0);
     const std::string guestLowerForTrace = lowerAscii(guestPath);
     if (isGuestDevicePath(guestPath)) {
@@ -250,8 +253,8 @@ bool SyntheticDllRuntime::handleCreateFileW(SyntheticExportCode code, const Gues
     if (host == INVALID_HANDLE_VALUE) {
         lastError_ = normalizeVirtualFileMiss(hostPath, hostPath.empty() ? ERROR_PATH_NOT_FOUND : GetLastError());
         ret = 0xffffffffu;
-        spdlog::warn("CreateFileW miss guest=\"{}\" host=\"{}\" access=0x{:08x} share=0x{:08x} creation=0x{:08x} flags=0x{:08x} lastError={}",
-                     guestPath, pathToUtf8(hostPath), args.a1, args.a2, stackArg(4), stackArg(5), lastError_);
+        spdlog::warn("{} miss guest=\"{}\" host=\"{}\" access=0x{:08x} share=0x{:08x} creation=0x{:08x} flags=0x{:08x} lastError={}",
+                     apiName, guestPath, pathToUtf8(hostPath), args.a1, args.a2, stackArg(4), stackArg(5), lastError_);
     } else {
         ret = makeGuestHandle({GuestHandle::Kind::HostFile, reinterpret_cast<uintptr_t>(host), 0});
         const std::string hostText = pathToUtf8(hostPath);
@@ -268,18 +271,18 @@ bool SyntheticDllRuntime::handleCreateFileW(SyntheticExportCode code, const Gues
         const bool traceProfileFile = isProfileTracePath(guestLower) ||
                                       isProfileTracePath(hostLower);
         if (traceProfileFile) {
-            spdlog::info("CreateFileW profile hit guest=\"{}\" host=\"{}\" guestHandle=0x{:08x} access=0x{:08x} share=0x{:08x} creation=0x{:08x} flags=0x{:08x} ra=0x{:08x}",
-                         guestPath, hostText, ret, args.a1, args.a2,
+            spdlog::info("{} profile hit guest=\"{}\" host=\"{}\" guestHandle=0x{:08x} access=0x{:08x} share=0x{:08x} creation=0x{:08x} flags=0x{:08x} ra=0x{:08x}",
+                         apiName, guestPath, hostText, ret, args.a1, args.a2,
                          stackArg(4), stackArg(5), args.ra);
         } else if (traceRouteFile) {
-            spdlog::info("CreateFileW route hit guest=\"{}\" host=\"{}\" guestHandle=0x{:08x} access=0x{:08x} share=0x{:08x} creation=0x{:08x} flags=0x{:08x}",
-                         guestPath, hostText, ret, args.a1, args.a2, stackArg(4), stackArg(5));
+            spdlog::info("{} route hit guest=\"{}\" host=\"{}\" guestHandle=0x{:08x} access=0x{:08x} share=0x{:08x} creation=0x{:08x} flags=0x{:08x}",
+                         apiName, guestPath, hostText, ret, args.a1, args.a2, stackArg(4), stackArg(5));
         } else if (traceMapFile) {
-            spdlog::debug("CreateFileW map hit guest=\"{}\" host=\"{}\" guestHandle=0x{:08x} access=0x{:08x} share=0x{:08x} creation=0x{:08x} flags=0x{:08x}",
-                          guestPath, hostText, ret, args.a1, args.a2, stackArg(4), stackArg(5));
+            spdlog::debug("{} map hit guest=\"{}\" host=\"{}\" guestHandle=0x{:08x} access=0x{:08x} share=0x{:08x} creation=0x{:08x} flags=0x{:08x}",
+                          apiName, guestPath, hostText, ret, args.a1, args.a2, stackArg(4), stackArg(5));
         } else {
-            spdlog::debug("CreateFileW hit guest=\"{}\" host=\"{}\" guestHandle=0x{:08x} access=0x{:08x} share=0x{:08x} creation=0x{:08x} flags=0x{:08x}",
-                          guestPath, hostText, ret, args.a1, args.a2, stackArg(4), stackArg(5));
+            spdlog::debug("{} hit guest=\"{}\" host=\"{}\" guestHandle=0x{:08x} access=0x{:08x} share=0x{:08x} creation=0x{:08x} flags=0x{:08x}",
+                          apiName, guestPath, hostText, ret, args.a1, args.a2, stackArg(4), stackArg(5));
         }
     }
     return true;

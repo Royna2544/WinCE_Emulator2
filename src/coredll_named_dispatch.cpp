@@ -3217,8 +3217,9 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
         } else {
             if (message.message == 0x0007 || message.message == 0x0008 ||
                 (message.message >= 0x0200 && message.message <= 0x0202) ||
-                (message.message >= 0x0600 && message.message <= 0x07ff) ||
-                (message.message >= 0x5700 && message.message <= 0x58ff)) {
+                message.message == 0x032f0 ||
+                message.message == 0x057c9 || message.message == 0x057cc ||
+                message.message == 0x057ed || message.message == 0x057f5) {
                 spdlog::info("{} retrieved input hwnd=0x{:08x} msg=0x{:08x} wparam=0x{:08x} lparam=0x{:08x} peek={} remove={} queued={}",
                              name, message.hwnd, message.message, message.wParam, message.lParam,
                              peek ? 1 : 0, (!peek || (removeFlags & 1)) ? 1 : 0, guestMessages_.size());

@@ -88,15 +88,15 @@ bool SyntheticDllRuntime::handleEventModify(SyntheticExportCode code, const Gues
     const uint32_t repeated = ++eventModifyLogCounts[logKey];
     if (args.a1 == 3 && ret && repeated > 8) {
         if ((repeated & 0xffffu) == 0) {
-            spdlog::info("EventModify handle=0x{:08x} op={} -> {} lastError={} repeated={}",
-                         args.a0, args.a1, ret, lastError_, repeated);
+            spdlog::debug("EventModify handle=0x{:08x} op={} -> {} lastError={} repeated={}",
+                          args.a0, args.a1, ret, lastError_, repeated);
         } else {
             spdlog::debug("EventModify handle=0x{:08x} op={} -> {} lastError={}",
                           args.a0, args.a1, ret, lastError_);
         }
     } else {
-        spdlog::info("EventModify handle=0x{:08x} op={} -> {} lastError={}",
-                     args.a0, args.a1, ret, lastError_);
+        spdlog::debug("EventModify handle=0x{:08x} op={} -> {} lastError={}",
+                      args.a0, args.a1, ret, lastError_);
     }
 
     if (ret && (args.a1 == 1 || args.a1 == 3)) refreshSignaledGuestWaits();

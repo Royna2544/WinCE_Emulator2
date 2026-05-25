@@ -46,6 +46,19 @@ constexpr uint32_t kErrorFileNotFound = 2;
 constexpr uint32_t kErrorPathNotFound = 3;
 constexpr uint32_t kWindowStyleChild = 0x40000000u; // WS_CHILD
 
+bool tracePrivateUiMessage(uint32_t msg) {
+    return msg == 0x057c9 || // route-search handoff payload
+           msg == 0x057cc || // route/result transition
+           msg == 0x057ed || // route completion/update post
+           msg == 0x057f5;   // route traffic/status update
+}
+
+bool traceGuestWindowMessage(uint32_t msg) {
+    return msg == 0x0007 || msg == 0x0008 ||
+           msg == 0x0200 || msg == 0x0201 || msg == 0x0202 ||
+           msg == 0x032f0 || tracePrivateUiMessage(msg);
+}
+
 bool supportedSourceRasterOp(uint32_t rop) {
     switch (rop) {
     case 0x00000042u: // BLACKNESS
@@ -1221,11 +1234,11 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
         } else if (activeGuestThread_) {
             instructionBudget = std::min<uint64_t>(instructionBudget, 250000u);
         } else if (servicingQueuedMessages) {
-            instructionBudget = std::min<uint64_t>(instructionBudget, 12000u);
+            instructionBudget = std::min<uint64_t>(instructionBudget, 250000u);
         }
         const auto wallBudget = latencySensitive
             ? std::chrono::milliseconds(12)
-            : (servicingQueuedMessages ? std::chrono::milliseconds(25)
+            : (servicingQueuedMessages ? std::chrono::milliseconds(60)
                                        : (activeGuestThread_ ? std::chrono::milliseconds(60)
                                                             : std::chrono::milliseconds(120)));
         beginInteractiveSlice(wallBudget, reason, instructionBudget);
@@ -1309,6 +1322,14 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
             spdlog::debug("resuming guest for queued message queued={} budget={}", guestMessages_.size(), budget);
             if (!resumeGuestSlice(budget, "queued-message")) {
                 return;
+            }
+            if (guestMessages_.empty() && hasHostWindows() && hasRunnableGuestThread()) {
+                if (!activeGuestThread_) {
+                    switchToRunnableGuestThread("queued-worker");
+                }
+                if (activeGuestThread_ && !resumeGuestSlice(25000, "queued-worker")) {
+                    return;
+                }
             }
         }
         const DWORD waitMs = std::max<DWORD>(1, std::min<DWORD>(50, timerWaitMilliseconds()));
@@ -1922,7 +1943,7 @@ void SyntheticDllRuntime::refreshSignaledGuestWaits() {
             thread.waitHandles.clear();
             thread.context.registers[UC_MIPS_REG_V0] = 0;
             lastError_ = 0;
-            spdlog::info("guest thread sleep satisfied handle=0x{:08x}", threadHandle);
+            spdlog::debug("guest thread sleep satisfied handle=0x{:08x}", threadHandle);
             continue;
         }
         std::vector<uint32_t> handles = thread.waitHandles;
@@ -2031,8 +2052,8 @@ bool SyntheticDllRuntime::switchToRunnableGuestThread(const char* reason,
             const uint32_t savedSp = mainThreadContext_.registers.count(UC_MIPS_REG_SP)
                 ? mainThreadContext_.registers[UC_MIPS_REG_SP]
                 : 0;
-            spdlog::info("main thread context saved reason={} pc=0x{:08x} ra=0x{:08x} sp=0x{:08x}",
-                         reason ? reason : "cooperate", savedPc, savedRa, savedSp);
+            spdlog::debug("main thread context saved reason={} pc=0x{:08x} ra=0x{:08x} sp=0x{:08x}",
+                          reason ? reason : "cooperate", savedPc, savedRa, savedSp);
         }
         const uint32_t threadPc = thread.context.registers.count(UC_MIPS_REG_PC)
             ? thread.context.registers.at(UC_MIPS_REG_PC)
@@ -2051,9 +2072,9 @@ bool SyntheticDllRuntime::switchToRunnableGuestThread(const char* reason,
         lastScheduledGuestThread_ = handle;
         updateCurrentThreadKData(thread.threadId, thread.tlsBase);
         restoreGuestCpuContext(thread.context);
-        spdlog::info("guest thread switch reason={} handle=0x{:08x} start=0x{:08x} pc=0x{:08x} ra=0x{:08x} sp=0x{:08x} v0=0x{:08x}",
-                     reason ? reason : "cooperate", handle, thread.startAddress,
-                     threadPc, threadRa, threadSp, threadV0);
+        spdlog::debug("guest thread switch reason={} handle=0x{:08x} start=0x{:08x} pc=0x{:08x} ra=0x{:08x} sp=0x{:08x} v0=0x{:08x}",
+                      reason ? reason : "cooperate", handle, thread.startAddress,
+                      threadPc, threadRa, threadSp, threadV0);
         return true;
     };
 
@@ -6744,16 +6765,18 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
                     : 0;
                 sender->second.context.registers[UC_MIPS_REG_V0] = wndProcResult;
                 sender->second.state = GuestThreadRunState::Runnable;
-                spdlog::info("{} completed synchronous sender=0x{:08x} hwnd=0x{:08x} msg=0x{:08x} result=0x{:08x} senderPc=0x{:08x} senderRa=0x{:08x} senderSp=0x{:08x} return=0x{:08x}",
-                             pending.sourceName,
-                             pending.synchronousSender,
-                             pending.hwnd,
-                             pending.message,
-                             wndProcResult,
-                             senderPc,
-                             senderRa,
-                             senderSp,
-                             pending.originalRa);
+                if (traceGuestWindowMessage(pending.message)) {
+                    spdlog::info("{} completed synchronous sender=0x{:08x} hwnd=0x{:08x} msg=0x{:08x} result=0x{:08x} senderPc=0x{:08x} senderRa=0x{:08x} senderSp=0x{:08x} return=0x{:08x}",
+                                 pending.sourceName,
+                                 pending.synchronousSender,
+                                 pending.hwnd,
+                                 pending.message,
+                                 wndProcResult,
+                                 senderPc,
+                                 senderRa,
+                                 senderSp,
+                                 pending.originalRa);
+                }
             } else {
                 spdlog::warn("{} synchronous sender missing/not waiting sender=0x{:08x} hwnd=0x{:08x} msg=0x{:08x}",
                              pending.sourceName,
@@ -6762,7 +6785,7 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
                              pending.message);
             }
         }
-        if (!pending.synchronousSender) {
+        if (!pending.synchronousSender && traceGuestWindowMessage(pending.message)) {
             spdlog::info("{} message transfer complete hwnd=0x{:08x} msg=0x{:08x} result=0x{:08x} return=0x{:08x}",
                          pending.sourceName,
                          pending.hwnd,
@@ -6913,8 +6936,8 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
             const uint32_t savedSp = active->second.context.registers.count(UC_MIPS_REG_SP)
                 ? active->second.context.registers[UC_MIPS_REG_SP]
                 : 0;
-            spdlog::info("guest thread sleep handle=0x{:08x} timeout={} return=0x{:08x} savedRa=0x{:08x} savedSp=0x{:08x}",
-                         activeGuestThread_, a0, ra, savedRa, savedSp);
+            spdlog::debug("guest thread sleep handle=0x{:08x} timeout={} return=0x{:08x} savedRa=0x{:08x} savedSp=0x{:08x}",
+                          activeGuestThread_, a0, ra, savedRa, savedSp);
         }
         activeGuestThread_ = 0;
         if (mainThreadContext_.valid) {
@@ -7210,7 +7233,11 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
             message.lParam = lParam;
             message.time = uint32_t(++tick_ * 16);
             message.synchronousSender = activeGuestThread_;
-            guestMessages_.push_back(message);
+            auto insertAt = std::find_if(guestMessages_.begin(), guestMessages_.end(),
+                                         [](const GuestMessage& queued) {
+                                             return queued.synchronousSender == 0;
+                                         });
+            guestMessages_.insert(insertAt, message);
             wakeGuestThreadsWaitingForMessage();
             lastError_ = 0;
             const uint32_t senderHandle = activeGuestThread_;
@@ -7226,19 +7253,30 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
                 const uint32_t senderSp = sender->second.context.registers.count(UC_MIPS_REG_SP)
                     ? sender->second.context.registers[UC_MIPS_REG_SP]
                     : 0;
-                spdlog::info("SendMessageW cross-thread saved sender context sender=0x{:08x} return=0x{:08x} savedRa=0x{:08x} savedSp=0x{:08x}",
-                             senderHandle,
-                             ra,
-                             senderRa,
-                             senderSp);
+                spdlog::debug("SendMessageW cross-thread saved sender context sender=0x{:08x} return=0x{:08x} savedRa=0x{:08x} savedSp=0x{:08x}",
+                              senderHandle,
+                              ra,
+                              senderRa,
+                              senderSp);
             }
-            spdlog::info("SendMessageW cross-thread queued hwnd=0x{:08x} msg=0x{:08x} sender=0x{:08x} owner=0x{:08x} queued={} waiting={}",
-                         hwnd,
-                         msg,
-                         senderHandle,
-                         targetWindow->second.ownerThread,
-                         guestMessages_.size(),
-                         sender != guestThreads_.end());
+            const bool traceCrossThread = traceGuestWindowMessage(msg);
+            if (traceCrossThread) {
+                spdlog::info("SendMessageW cross-thread queued hwnd=0x{:08x} msg=0x{:08x} sender=0x{:08x} owner=0x{:08x} queued={} waiting={}",
+                             hwnd,
+                             msg,
+                             senderHandle,
+                             targetWindow->second.ownerThread,
+                             guestMessages_.size(),
+                             sender != guestThreads_.end());
+            } else {
+                spdlog::debug("SendMessageW cross-thread queued hwnd=0x{:08x} msg=0x{:08x} sender=0x{:08x} owner=0x{:08x} queued={} waiting={}",
+                              hwnd,
+                              msg,
+                              senderHandle,
+                              targetWindow->second.ownerThread,
+                              guestMessages_.size(),
+                              sender != guestThreads_.end());
+            }
             activeGuestThread_ = 0;
             if (mainThreadContext_.valid) {
                 const uint32_t mainPc = mainThreadContext_.registers.count(UC_MIPS_REG_PC)
@@ -7250,8 +7288,8 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
                 const uint32_t mainSp = mainThreadContext_.registers.count(UC_MIPS_REG_SP)
                     ? mainThreadContext_.registers[UC_MIPS_REG_SP]
                     : 0;
-                spdlog::info("SendMessageW cross-thread restoring main context pc=0x{:08x} ra=0x{:08x} sp=0x{:08x}",
-                             mainPc, mainRa, mainSp);
+                spdlog::debug("SendMessageW cross-thread restoring main context pc=0x{:08x} ra=0x{:08x} sp=0x{:08x}",
+                              mainPc, mainRa, mainSp);
                 updateCurrentThreadKData(mainThreadPseudoHandle_, mainThreadTls_);
                 restoreGuestCpuContext(mainThreadContext_);
             } else {
@@ -7261,16 +7299,14 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
             return;
         }
         wndProc = translatedWndProc(wndProc, name.c_str());
-        const bool traceWindowMessage =
-            msg == 0x0007 || msg == 0x0008 ||
-            msg == 0x0200 || msg == 0x0201 || msg == 0x0202 ||
-            msg == 0x032f0 || (msg >= 0x0600 && msg <= 0x07ff) ||
-            (msg >= 0x5700 && msg <= 0x58ff);
+        const bool tracePrivatePayload =
+            msg == 0x057c9;
+        const bool traceWindowMessage = traceGuestWindowMessage(msg);
         if (mutableEntry.calls <= 128 || traceWindowMessage) {
             spdlog::info("synthetic coredll.dll!{} transfer wndproc=0x{:08x} hwnd=0x{:08x} msg=0x{:08x} wparam=0x{:08x} lparam=0x{:08x}",
                          name, wndProc, hwnd, msg, wParam, lParam);
         }
-        if ((msg >= 0x0600 && msg <= 0x07ff) || (msg >= 0x5700 && msg <= 0x58ff)) {
+        if (tracePrivatePayload) {
             auto describePointer = [&](const char* label, uint32_t ptr) {
                 if (!ptr || !isGuestRangeReadable(ptr, 4)) return;
                 std::array<uint8_t, 64> bytes{};
@@ -7346,7 +7382,32 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
     if (isCoredll) {
         lastError_ = 120; // ERROR_CALL_NOT_IMPLEMENTED
         ret = 0;
-        if (mutableEntry.calls <= 128) {
+        if (ordinal == 1167) {
+            const uint32_t sp = reg(UC_MIPS_REG_SP);
+            const uint32_t s4 = stackArg(4);
+            const uint32_t s5 = stackArg(5);
+            const uint32_t s6 = stackArg(6);
+            const uint32_t s7 = stackArg(7);
+            auto previewPointer = [&](const char* label, uint32_t ptr) {
+                if (!ptr || !isGuestRangeReadable(ptr, 2)) return;
+                std::string ascii = readAscii(ptr, 96);
+                std::string utf16 = readUtf16(ptr, 96);
+                if (ascii.empty() && utf16.empty()) return;
+                spdlog::warn("synthetic coredll.dll!{} unsupported ptr {}=0x{:08x} ascii=\"{}\" utf16=\"{}\"",
+                             name, label, ptr, ascii, utf16);
+            };
+            spdlog::warn("synthetic coredll.dll!{} unsupported by translate layer -> 0 "
+                         "call={} pc=0x{:08x} ra=0x{:08x} sp=0x{:08x} "
+                         "a0=0x{:08x} a1=0x{:08x} a2=0x{:08x} a3=0x{:08x} "
+                         "s4=0x{:08x} s5=0x{:08x} s6=0x{:08x} s7=0x{:08x}",
+                         name, mutableEntry.calls, pc, ra, sp, a0, a1, a2, a3, s4, s5, s6, s7);
+            previewPointer("a0", a0);
+            previewPointer("a1", a1);
+            previewPointer("a2", a2);
+            previewPointer("a3", a3);
+            previewPointer("s4", s4);
+            previewPointer("s5", s5);
+        } else if (mutableEntry.calls == 1) {
             spdlog::warn("synthetic coredll.dll!{} unsupported by translate layer -> 0", name);
         }
         finishImmediateReturn(ret);

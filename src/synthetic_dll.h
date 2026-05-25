@@ -271,6 +271,7 @@ private:
         CoreDllStrtoul,
         CoreDllWcstoul,
         CoreDllFmodf,
+        CoreDllLlLshift,
         CoreDllLlDiv,
         CoreDllFloatToLongLong,
         CoreDllLongLongToDouble,
@@ -327,6 +328,7 @@ private:
         CoreDllStrcpy,
         CoreDllStrcspn,
         CoreDllStrlen,
+        CoreDllStrstr,
         CoreDllStrtok,
         CoreDllStricmp,
         CoreDllStrnicmp,
@@ -363,6 +365,7 @@ private:
         CoreDllGetFileAttributesW,
         CoreDllFindFirstFileW,
         CoreDllCreateFileW,
+        CoreDllCreateFileForMappingW,
         CoreDllReadFile,
         CoreDllWriteFile,
         CoreDllGetFileSize,
@@ -1079,6 +1082,7 @@ private:
     bool handleStrtoul(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleWcstoul(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleFmodf(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleLlLshift(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleLlDiv(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleFloatToLongLong(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleLongLongToDouble(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
@@ -1134,6 +1138,7 @@ private:
     bool handleStrcpy(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleStrcspn(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleStrlen(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleStrstr(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleStrtok(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleStricmp(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleStrnicmp(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
