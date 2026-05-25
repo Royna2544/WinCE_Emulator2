@@ -2002,6 +2002,10 @@ bool SyntheticDllRuntime::cooperateGuestThreadsAfterCall(const std::string& name
     if (activeGuestThread_ && processStarterCall && hasRunnableGuestThread()) {
         return yieldActiveGuestThread(name.c_str(), returnAddress);
     }
+    if (!activeGuestThread_ && name == "Sleep" && hasRunnableGuestThread()) {
+        setReg(UC_MIPS_REG_V0, 0);
+        return switchToRunnableGuestThread(name.c_str(), returnAddress);
+    }
     const bool threadStarterCall = name == "CreateThread" || name == "ResumeThread" ||
                                    processStarterCall;
     if (!activeGuestThread_ && threadStarterCall && hasRunnableGuestThread()) {
