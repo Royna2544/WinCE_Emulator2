@@ -1,14 +1,18 @@
 # TODO
 
-Current priority order after the 2026-05-24 serial/device cleanup.
+Current priority order after the 2026-05-25 window-title and route-helper
+diagnostics.
 
 1. Route-search UI/process behavior
-   - Update the route harness preset so it first dismisses or handles the
-     `TGNaviDlg` destination/current-position modal seen in
-     `captures/inavi_autodrive_20260525_094818`; the current preset keeps
-     tapping that modal instead of exercising the underlying route-search flow.
-   - Verify the real `CreateProcessW` path for route helper processes.
-   - Replace any remaining placeholder child-process behavior with faithful guest process execution or a clearly failing unsupported path.
+   - Wait for the real-device dump that may identify how `\TBT\MultiTBT.exe`
+     is launched or registered. Current logs show the app polling for a
+     top-level `MultiTBT` window but do not show a guest `CreateProcessW` for
+     it.
+   - If the real dump proves `MultiTBT` is a session companion, add a generic
+     external session-companion manifest/argument. Do not hardcode
+     `MultiTBT.exe`, app names, or paths in emulator logic.
+   - Keep the manual `MultiTBT` launch as diagnostic evidence only; remove any
+     temporary launch scripts/log assumptions before committing a real fix.
    - Confirm the full-screen "searching route" UI is raised before long helper work begins.
 
 2. Popup and modal ordering
@@ -61,3 +65,6 @@ Current priority order after the 2026-05-24 serial/device cleanup.
    - Keep `--serial-map` documented in scripts and examples.
    - Keep `--sdmmc-path` documented as the host directory backing guest `\SDMMC Disk`.
    - Keep logs specific enough to diagnose routing without flooding every frame.
+   - Keep SDK ordinal evidence in code comments or progress notes when adding
+     new coredll handlers. The `SetWindowTextW` fix was based on the CE 4.2
+     MIPSII SDK import library, not a guessed ordinal.

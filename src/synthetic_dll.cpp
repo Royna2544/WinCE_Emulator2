@@ -1194,6 +1194,7 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
         return true;
     };
     while (hasHostWindows()) {
+        pollCrossProcessGuestMessages();
         enqueueDueTimers();
         if (!guestMessages_.empty() && hasHostWindows()) {
             compactQueuedPointerMotion();
@@ -1287,7 +1288,6 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x010B, "UpdateWindow");
     registerExport(module, 0x010D, "GetParent");
     registerExport(module, 0x0110, "MoveWindow");
-    registerExport(module, 0x0100, "ScreenToClient");
     registerCoredllWindowExports(module);
     registerExport(module, 0x011D, "CallWindowProcW");
     registerExport(module, 0x011E, "FindWindowW");
@@ -2679,6 +2679,7 @@ uint32_t SyntheticDllRuntime::makeGuestWindow(const std::string& className, cons
     window.visible = visible;
     windows_[hwnd] = window;
     ensureHostWindow(hwnd, windows_[hwnd]);
+    publishGuestWindowState(hwnd);
     return hwnd;
 }
 
@@ -6646,13 +6647,31 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
             wParam = a2;
             lParam = a3;
         }
+        auto targetWindow = windows_.find(hwnd);
+        if (targetWindow != windows_.end() && targetWindow->second.externalProcess) {
+            const bool delivered = postCrossProcessGuestMessage(targetWindow->second.externalProcessId,
+                                                                targetWindow->second.externalHwnd,
+                                                                msg,
+                                                                wParam,
+                                                                lParam);
+            ret = delivered ? 1 : 0;
+            setReg(UC_MIPS_REG_V0, ret);
+            spdlog::info("synthetic coredll.dll!{} delivered external hwnd=0x{:08x} remotePid={} remoteHwnd=0x{:08x} msg=0x{:08x} ok={}",
+                         name,
+                         hwnd,
+                         targetWindow->second.externalProcessId,
+                         targetWindow->second.externalHwnd,
+                         msg,
+                         delivered);
+            pumpHostMessages();
+            return;
+        }
         if (!wndProc) {
             ret = 0;
             setReg(UC_MIPS_REG_V0, ret);
             pumpHostMessages();
             return;
         }
-        auto targetWindow = windows_.find(hwnd);
         if (ordinal == 0x0364 && activeGuestThread_ &&
             targetWindow != windows_.end() &&
             targetWindow->second.ownerThread == mainThreadPseudoHandle_ &&

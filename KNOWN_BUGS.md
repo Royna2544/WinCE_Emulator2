@@ -6,10 +6,38 @@ Last refreshed: 2026-05-25.
 
 Pressing the route-search path can show delayed popups or transient helper windows, then stall without presenting the expected full-screen route-search/result UI.
 
+Current evidence:
+- `captures/inavi_autodrive_20260525_125523` shows `iSearch.exe` starts and
+  posts back to the parent app.
+- The parent creates a full-screen `TGNaviDlg`, then repeatedly polls
+  `FindWindowW(NULL, L"MultiTBT")`.
+- No guest `CreateProcessW` call for `\TBT\MultiTBT.exe` is visible in the
+  current logs.
+
 Likely areas:
-- `CreateProcessW` guest child process handling.
-- Modal/window z-order routing.
-- Blocking helper/file/serial work on the UI thread.
+- missing startup/session companion process behavior for `MultiTBT`,
+- modal/window z-order routing after the helper window exists,
+- blocking helper/file/serial work on the UI thread.
+
+Status: narrowed, not fixed. Do not hardcode `MultiTBT` launch in emulator
+logic; wait for real-device evidence or implement a generic session-companion
+configuration if the device dump supports it.
+
+## Window Title Propagation Was Broken
+
+The emulator previously treated `coredll #0x0100` as a second
+`ScreenToClient` alias. The CE 4.2 MIPSII SDK import library identifies
+`#0x0100` as `SetWindowTextW`.
+
+Impact:
+- Main iNavi windows were created with empty titles even after the app tried to
+  set them.
+- `happyway_win.exe` received cross-process messages but failed
+  `FindWindowW(NULL, L"iNavi")`, blocking later helper communication.
+
+Status: fixed in the working tree. `SetWindowTextW` now updates the guest
+window title and republishes the shared guest window registry. The 12:55 run
+shows `happyway_win.exe` resolving the `iNavi` window successfully.
 
 ## Modal And Overlay Routing Is Still Wrong
 
@@ -37,8 +65,9 @@ and previously entered the UI wndproc on the worker thread. That exposed a
 
 Status: partially fixed. Guest windows now track owner thread, cross-thread
 `SendMessageW` to main-owned windows is queued/yielded, and resumed guest waits
-restore the saved return PC. `captures/inavi_autodrive_20260525_094818`
-completed without the prior crash, but this needs more live-input testing.
+restore the saved return PC. Recent live-input runs no longer hit the prior
+`pc=0` crash, but the queuing is still only cooperative and may contribute to
+UI lag when guest code expects a strictly synchronous `SendMessageW` return.
 
 ## Stub Device Behavior Is Incomplete
 

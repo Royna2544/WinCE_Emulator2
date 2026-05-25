@@ -9,6 +9,7 @@ void SyntheticDllRuntime::registerCoredllWindowExports(SyntheticModule& module) 
             return OrdinalHandlerGroup{
                 "coredll.window",
                 {
+                    {0x0100, {"SetWindowTextW", Code::CoreDllSetWindowTextW, &SyntheticDllRuntime::handleSetWindowTextW}},
                     {0x0101, {"GetWindowTextW", Code::CoreDllGetWindowTextW, &SyntheticDllRuntime::handleGetWindowTextW}},
                     {0x0114, {"GetWindowTextLengthW", Code::CoreDllGetWindowTextLengthW, &SyntheticDllRuntime::handleGetWindowTextLengthW}},
                     {0x011F, {"EnableWindow", Code::CoreDllEnableWindow, &SyntheticDllRuntime::handleEnableWindow}},
@@ -25,6 +26,23 @@ void SyntheticDllRuntime::registerCoredllWindowExports(SyntheticModule& module) 
 
     const CoreDllWindow window;
     registerHandlers(module, window.group());
+}
+
+bool SyntheticDllRuntime::handleSetWindowTextW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
+    (void)code;
+    auto it = windows_.find(args.a0);
+    if (it == windows_.end() || it->second.destroyed) {
+        lastError_ = 1400;
+        ret = 0;
+        return true;
+    }
+
+    it->second.title = args.a1 ? readUtf16(args.a1) : std::string{};
+    publishGuestWindowState(args.a0);
+    ret = 1;
+    lastError_ = 0;
+    spdlog::info("SetWindowTextW guest=0x{:08x} title=\"{}\"", args.a0, it->second.title);
+    return true;
 }
 
 bool SyntheticDllRuntime::handleGetWindowTextLengthW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {

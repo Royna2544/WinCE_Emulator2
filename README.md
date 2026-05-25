@@ -24,5 +24,9 @@ powershell.exe -NoProfile -Command "& 'C:\Program Files\Microsoft Visual Studio\
 Run smoke test:
 
 ```bash
-powershell.exe -NoProfile -Command "& .\x64\Debug\iNavi_Unicorn_Emulator.exe 'C:\Users\royna\Downloads\INAVI\INavi\INavi.exe' 'C:\Program Files (x86)\Windows CE Tools\wce420\STANDARDSDK_420\Mfc\Lib\Mipsii' 'C:\Program Files (x86)\Windows CE Tools\wce420\STANDARDSDK_420\Mfc\Lib\Mipsii\L.kor' 'C:\Program Files (x86)\Windows CE Tools\wce420\STANDARDSDK_420\Atl\Lib\Mipsii'"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& 'tools\autodrive_inavi.ps1' -NoTaps -KeepAlive -InitialSettleMs 8000 -StartupTimeoutMs 45000"
 ```
+
+The harness passes the current registry, `--sdmmc-path`, serial map, and CE SDK
+DLL search directories used for normal debugging runs. `--sdmmc-path` is the
+host directory backing guest `\SDMMC Disk`; it is not a guest path.

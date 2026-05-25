@@ -355,6 +355,7 @@ private:
         CoreDllFindClose,
         CoreDllFindNextFileW,
         CoreDllGetFileAttributesExW,
+        CoreDllSetWindowTextW,
         CoreDllGetWindowTextW,
         CoreDllGetWindowTextLengthW,
         CoreDllEnableWindow,
@@ -513,6 +514,9 @@ private:
         bool visible{};
         bool enabled{true};
         bool destroyed{};
+        bool externalProcess{};
+        uint32_t externalProcessId{};
+        uint32_t externalHwnd{};
         bool paintBoundsValid{};
         int32_t paintLeft{};
         int32_t paintTop{};
@@ -742,6 +746,7 @@ private:
     std::string sdmmcGuestRoot_ = "\\SDMMC Disk";
     std::filesystem::path sdmmcHostRoot_;
     std::filesystem::path hostMainModulePath_;
+    std::filesystem::path crossProcessWindowRegistryPath_;
     uint32_t mainModuleBase_ = 0;
     std::filesystem::path hostBaseDir_;
     uint16_t nextAtom_ = 0xc000;
@@ -767,6 +772,7 @@ private:
     std::map<std::string, GuestWindowClass> windowClassesByName_;
     std::map<uint16_t, std::string> windowClassNamesByAtom_;
     std::map<uint32_t, GuestWindow> windows_;
+    std::map<std::pair<uint32_t, uint32_t>, uint32_t> externalWindowHandles_;
     std::map<uint32_t, GuestDc> dcs_;
     std::map<uint32_t, GuestBrush> brushes_;
     std::map<uint32_t, GuestPen> pens_;
@@ -1125,6 +1131,7 @@ private:
     bool handleGetFileAttributesExW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleGetWindowTextW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleGetWindowTextLengthW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleSetWindowTextW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleEnableWindow(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleIsWindowEnabled(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleSetFocus(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
@@ -1223,6 +1230,20 @@ private:
     void ensureHostWindow(uint32_t guestHwnd, GuestWindow& window);
     void destroyHostWindow(GuestWindow& window);
     void syncHostWindowPlacement(GuestWindow& window, bool present);
+    std::filesystem::path ensureCrossProcessWindowRegistryPath();
+    void publishGuestWindowState(uint32_t hwnd);
+    std::optional<uint32_t> findExternalGuestWindow(const std::string& className,
+                                                    const std::string& title,
+                                                    bool matchClass,
+                                                    bool matchTitle);
+    std::filesystem::path crossProcessMessageQueuePath();
+    bool postCrossProcessGuestMessage(uint32_t processId,
+                                      uint32_t hwnd,
+                                      uint32_t message,
+                                      uint32_t wParam,
+                                      uint32_t lParam);
+    bool postCrossProcessBroadcastMessage(uint32_t message, uint32_t wParam, uint32_t lParam);
+    void pollCrossProcessGuestMessages();
     void presentHostWindows(bool force);
     void invalidateHostWindows();
     void queueGuestPaint(uint32_t hwnd, bool erase);

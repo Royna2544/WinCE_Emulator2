@@ -6,6 +6,12 @@ Last refreshed: 2026-05-25.
 
 - The main iNavi map renders again after earlier white-map regressions.
 - Touch delivery is more responsive than the earlier busy-loop/frozen state, though modal routing is still incomplete.
+- The Windows CE SDK-confirmed `SetWindowTextW` ordinal is now implemented at
+  `coredll #0x0100`. This fixed a real title propagation bug where
+  `happyway_win.exe` could not resolve `FindWindowW(NULL, L"iNavi")`.
+- Cross-process guest window discovery/message routing is active for child
+  emulators. `happyway_win.exe` can publish its `happyway_win` window and
+  receive posted/sent guest messages through the shared window registry queue.
 - `report_serial.txt` from the real device has been imported into the emulator model:
   - `COM1:` is `Drivers\BuiltIn\VSP`, `VSP.dll`, GPS NMEA output, 9600 8N1.
   - `COM3:` is `Drivers\BuiltIn\Serial3`, `au16550.dll`, UART candidate, 9600 8N1, no automatic RX observed.
@@ -37,8 +43,19 @@ Last refreshed: 2026-05-25.
 
 ## Known Recent Observations
 
-- Route search still lags or appears to do nothing after confirmation.
-- The route helper has shown transient white/transparent host windows, then disappears or stalls.
+- `captures/inavi_autodrive_20260525_125523` proves the title fix:
+  `SetWindowTextW guest=0x00010007 title="iNavi"` is logged in the parent, and
+  the child later resolves `FindWindowW class="" title="iNavi" -> 0x00010021`.
+- In the same run, `iSearch.exe` starts in-process and posts back to the parent
+  app. The parent creates a full-screen `TGNaviDlg` at `12:56:08`, so the route
+  path now gets past the earlier parent-window discovery failure.
+- The current route-search stall is now narrowed to a missing `MultiTBT`
+  companion window. The parent repeatedly logs
+  `FindWindowW class="" title="MultiTBT" -> 0x00000000`; no corresponding
+  `CreateProcessW` for `\TBT\MultiTBT.exe` has been observed in the guest logs.
+- A manual diagnostic launch of the real `\TBT\MultiTBT.exe` in the shared
+  guest desktop was started to verify the route-search dependency. That is
+  evidence gathering only, not a committed emulator behavior or hardcoded fix.
 - Popup audio can occur before the matching UI becomes visible, which suggests window ordering or modal presentation is still wrong.
 - Under-layer controls can still receive clicks while a searching/overlay state is visible.
 - `captures/inavi_autodrive_20260525_091237` confirmed that temporary
