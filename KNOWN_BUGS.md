@@ -1,6 +1,6 @@
 # Known Bugs
 
-Last refreshed: 2026-05-25.
+Last refreshed: 2026-05-26.
 
 ## Route Search Does Not Complete
 
@@ -30,6 +30,12 @@ Current evidence:
 - `captures/inavi_autodrive_20260525_173931` shows route/result child windows
   being created after the final search tap, but the screenshot remains on a
   destination/current-position information dialog.
+- `captures/inavi_autodrive_20260526_075134` shows the updated route preset
+  reaching the route-result/map control view after the corrected
+  `route_method_first` tap at `(405,296)`.
+- The old route preset coordinate `(390,220)` was a diagnostic-script bug for
+  the "existing route" modal: it hit explanatory text above the first route
+  method button.
 - `captures/inavi_autodrive_20260525_191308` showed a now-fixed emulator
   regression where empty blocking `GetMessageW` returned `0` and caused MFC to
   enter shutdown/CRT cleanup.
@@ -52,17 +58,20 @@ Current hypothesis:
 - The emulator may need a generic companion-process configuration if real-device
   evidence confirms `MultiTBT` is normally launched outside the observed
   `CreateProcessW` path.
-- After `MultiTBT` is present, the current lead moves to wrong hit target or
-  paint/z-order/compositing for the route-result windows.
-- Re-test from `captures/inavi_autodrive_20260525_201627`, where parent and
-  companion are both alive after the runner fix.
+- After `MultiTBT` is present and the corrected tap reaches route-result/map
+  controls, the remaining lead is the final route-completion/guidance handoff
+  plus any paint/z-order issues around modal overlays.
+- Re-test from `captures/inavi_autodrive_20260526_075134`, where parent and
+  companion are both launched by the runner and the route-result transition is
+  observed.
 
 Status:
 
-- Still not complete, but the route `pc=0` crash and the diagnostic
-  companion-kill false stall are fixed in the current working tree. Do not
-  hardcode a `MultiTBT` launch. Use real-device evidence or a generic external
-  companion configuration if one is justified.
+- Still not complete, but the route `pc=0` crash, diagnostic companion-kill
+  false stall, route-result backlog lag, and wrong modal tap coordinate are
+  fixed or narrowed in the current working tree. Do not hardcode a `MultiTBT`
+  launch. Use real-device evidence or a generic external companion
+  configuration if one is justified.
 
 ## Modal And Overlay Routing Is Still Wrong
 
@@ -184,7 +193,8 @@ Likely areas:
 
 - Long guest slices while input is pending.
 - Synchronous `SendMessageW`/wndproc work that cannot be interrupted without
-  breaking call semantics.
+  breaking call semantics. Backlogged synchronous queued work now gets a larger
+  bounded slice, but this still needs more route/re-search coverage.
 - Large startup/route UI message bursts, including child window creation and
   cross-process companion messages.
 - Route/file helper work on the UI thread.

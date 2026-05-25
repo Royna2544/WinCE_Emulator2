@@ -1,15 +1,18 @@
 # Progress
 
-Last refreshed: 2026-05-25.
+Last refreshed: 2026-05-26.
 
 ## Current State
 
 - The main iNavi map renders again.
-- Touch input is more responsive than the earlier frozen/busy-loop state, but
-  modal and overlay input routing is still incomplete.
-- Route search still does not complete.
-- In the current diagnostic route run, a manually-started `MultiTBT.exe` joined
-  the same shared guest-window registry and the parent resolved
+- Touch input and route-result transitions are more responsive than the
+  earlier frozen/busy-loop state, but modal and overlay input routing is still
+  incomplete.
+- Route search can advance into route-result/map states with a headless
+  `MultiTBT.exe` companion, but full route completion/guidance is still under
+  investigation.
+- In the current diagnostic route runs, a companion `MultiTBT.exe` joined the
+  same shared guest-window registry and the parent resolved
   `FindWindowW(NULL, L"MultiTBT")`.
 - The emulator is using real-ish CE API and device boundaries rather than
   hardcoded app behavior.
@@ -68,6 +71,12 @@ Last refreshed: 2026-05-25.
 - `DEVICES.md` now records current COM1 GPS, SMB380, and YAS526B evidence.
 - `coredll.dll` ordinal `0x0419` is implemented as `_msize` from CE 4.2 MIPSII
   SDK evidence and returns the tracked guest allocation size.
+- The host GUI scheduler now gives backlogged queued-message work a larger
+  bounded slice even when pending input or cross-thread `SendMessageW` work is
+  present. This reduced route-result backlog lag without faking guest state.
+- The route autodrive preset now taps the actual first route-method modal
+  button at approximately `(405,296)` instead of the explanatory text area at
+  `(390,220)`.
 
 ## Device Evidence
 
@@ -154,6 +163,20 @@ Last refreshed: 2026-05-25.
   messages such as `0x06ee` then queued to the dead PID.
 - `captures/inavi_autodrive_20260525_201627` is the fresh post-fix run with
   parent PID `35580` and companion PID `36440` both alive/responding.
+- `captures/inavi_autodrive_20260526_073116` identified the new route re-search
+  lag source: pending input anywhere in a large queue capped queued-message
+  execution to tiny slices while the route UI backlog drained.
+- `captures/inavi_autodrive_20260526_073822` visually confirmed the larger
+  backlogged-queue slice improves the route screen transition in Release.
+- `captures/inavi_autodrive_20260526_074154` showed the route/result
+  `SendMessageW(0x57cc)` path does run and creates route child windows; later
+  `PostMessageW(0x57ed)` arrived during the re-search flow.
+- `captures/inavi_autodrive_20260526_074755` showed the old
+  `route_method_first` coordinate hit above the real first route-method button
+  when the "existing route" modal was visible.
+- `captures/inavi_autodrive_20260526_075134` verified the updated route preset:
+  after the `(405,296)` tap, `SendMessageW(0x57cc)` completed and the UI
+  advanced into the route-result/map control view.
 
 ## Known False Leads / Constraints
 

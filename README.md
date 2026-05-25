@@ -46,10 +46,11 @@ D:\INAVI_Emulator
 
 ## Important Current Limits
 
-- Route search still does not complete. Current logs show the app can start
-  `iSearch.exe` as a separate headless child emulator process, then later polls
-  for a `MultiTBT` window that is not observed launching through guest
-  `CreateProcessW`.
+- Route search is still incomplete, but with a headless diagnostic
+  `MultiTBT.exe` companion the app can now advance into route-result/map
+  control states. The final guidance/completion handoff is still under
+  investigation, and no guest `CreateProcessW` launch for `MultiTBT.exe` has
+  been observed.
 - Modal/window ordering is still incomplete. Popups can lag behind audio, and
   under-layer buttons can still receive touches in some overlay states.
 - The current SDMMC/profile data can still select `COM7:` for GPS even though
@@ -203,8 +204,9 @@ See `DEVICES.md` for indexed evidence and emulator implications.
 
 ## Current Investigation Threads
 
-- Route search process/UI behavior, especially the missing `MultiTBT` companion
-  window/process path.
+- Route search process/UI behavior after the verified route-result transition,
+  especially the missing `MultiTBT` companion window/process launch path and
+  final guidance/completion handoff.
 - Modal/topmost window ordering and input capture.
 - The COM profile data path that makes this dump choose `COM7:` despite real
   hardware reporting GPS on `COM1:`.

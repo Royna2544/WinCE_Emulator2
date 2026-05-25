@@ -1,6 +1,6 @@
 # TODO
 
-Last refreshed: 2026-05-25.
+Last refreshed: 2026-05-26.
 
 ## Immediate
 
@@ -30,10 +30,13 @@ Last refreshed: 2026-05-25.
    - If needed, design a generic session-companion configuration. Do not
      hardcode `MultiTBT.exe`, `iSearch.exe`, `happyway_win.exe`, or app paths in
      emulator logic.
-   - Continue from `captures/inavi_autodrive_20260525_173931`: the final
-     search tap creates route/result child windows, but the visible UI remains
-     in a destination/current-position information dialog. Separate wrong tap
-     target from paint/z-order/compositing failure.
+   - Continue from `captures/inavi_autodrive_20260526_075134`: with
+     `MultiTBT.exe` launched through `-CompanionTarget`, the updated route
+     preset reaches the route-result/map control view and `0x57cc` completes.
+     Next, determine what remains before full guidance/route completion.
+   - If the "existing route" modal is visible, use the actual first method
+     button area around `(405,296)`. The old `(390,220)` coordinate hits modal
+     explanatory text, not the button.
 
 2. Modal and overlay input
    - Make topmost/modal guest windows receive touch first.
@@ -76,8 +79,10 @@ Last refreshed: 2026-05-25.
      consistently instead of inventing app-specific state.
 
 6. Performance
-   - Reduce input lag caused by queued host mouse messages waiting behind long
-     guest slices and synchronous window/message work.
+   - Re-test route-result/re-search lag after the backlogged queued-message
+     scheduler change from 2026-05-26. It improves the large initial backlog,
+     but medium-sized modal/UI bursts and synchronous wndproc waits may still
+     lag.
    - Re-check input lag after the wait/sleep `$ra` preservation fix, because
      GPS worker threads now survive repeated serial read/message cycles instead
      of eventually poisoning the scheduler state.
