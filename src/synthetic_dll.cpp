@@ -1228,19 +1228,26 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
         // when a worker performs a long pure-guest loop between API calls.
         const bool servicingQueuedMessages = std::strcmp(reason, "queued-message") == 0;
         const bool synchronousQueuedMessage = servicingQueuedMessages && hasPendingSynchronousMessage();
-        const bool latencySensitive = hasPendingUserInput() || recentlyQueuedUserInput() || synchronousQueuedMessage;
-        if (latencySensitive) {
-            instructionBudget = std::min<uint64_t>(instructionBudget, 12000u);
+        const bool pendingUserInput = hasPendingUserInput() || recentlyQueuedUserInput();
+        const bool backloggedQueuedWork = servicingQueuedMessages && guestMessages_.size() > 32;
+        if (synchronousQueuedMessage) {
+            instructionBudget = std::min<uint64_t>(instructionBudget, 3000u);
+        } else if (pendingUserInput) {
+            instructionBudget = std::min<uint64_t>(instructionBudget, backloggedQueuedWork ? 50000u : 12000u);
+        } else if (servicingQueuedMessages && !activeGuestThread_) {
+            instructionBudget = std::min<uint64_t>(instructionBudget, 6000u);
         } else if (activeGuestThread_) {
             instructionBudget = std::min<uint64_t>(instructionBudget, 250000u);
         } else if (servicingQueuedMessages) {
             instructionBudget = std::min<uint64_t>(instructionBudget, 250000u);
         }
-        const auto wallBudget = latencySensitive
+        const auto wallBudget = synchronousQueuedMessage
             ? std::chrono::milliseconds(12)
-            : (servicingQueuedMessages ? std::chrono::milliseconds(60)
-                                       : (activeGuestThread_ ? std::chrono::milliseconds(60)
-                                                            : std::chrono::milliseconds(120)));
+            : (pendingUserInput
+                   ? (backloggedQueuedWork ? std::chrono::milliseconds(60) : std::chrono::milliseconds(12))
+                   : (servicingQueuedMessages ? std::chrono::milliseconds(60)
+                                              : (activeGuestThread_ ? std::chrono::milliseconds(60)
+                                                                   : std::chrono::milliseconds(120))));
         beginInteractiveSlice(wallBudget, reason, instructionBudget);
         const uc_err err = uc_emu_start(uc_, pc, 0, 0, instructionBudget);
         const bool stoppedByWatchdog = interactiveSliceStopRequested_;
@@ -1681,18 +1688,31 @@ void SyntheticDllRuntime::endInteractiveSlice() {
 void SyntheticDllRuntime::hookBasicBlock(uc_engine* uc, uint64_t address, uint32_t, void* user) {
     auto* runtime = static_cast<SyntheticDllRuntime*>(user);
     if (!runtime || !runtime->interactiveSliceActive_) return;
-    if ((++runtime->interactiveSliceBlockCounter_ & 0x003fu) != 0) return;
-    if (std::chrono::steady_clock::now() < runtime->interactiveSliceDeadline_) return;
+    const uint32_t blockCount = ++runtime->interactiveSliceBlockCounter_;
+    if ((blockCount & 0x000fu) != 0) return;
+
+    bool hostQueuePending = false;
+#if defined(_WIN32)
+    hostQueuePending = HIWORD(GetQueueStatus(QS_ALLINPUT)) != 0;
+#endif
+    if (!hostQueuePending && std::chrono::steady_clock::now() < runtime->interactiveSliceDeadline_) return;
 
     if (!runtime->interactiveSliceStopRequested_) {
         uint32_t pc = 0;
         uint32_t ra = 0;
         uc_reg_read(uc, UC_MIPS_REG_PC, &pc);
         uc_reg_read(uc, UC_MIPS_REG_RA, &ra);
-        spdlog::info("guest slice watchdog stop reason={} activeThread=0x{:08x} budget={} block=0x{:08x} pc=0x{:08x} ra=0x{:08x} queued={}",
-                     runtime->interactiveSliceReason_, runtime->activeGuestThread_,
-                     runtime->interactiveSliceInstructionBudget_, uint32_t(address), pc, ra,
-                     runtime->guestMessages_.size());
+        if (hostQueuePending) {
+            spdlog::debug("guest slice watchdog stop reason={} stopCause=host-queue activeThread=0x{:08x} budget={} block=0x{:08x} pc=0x{:08x} ra=0x{:08x} queued={}",
+                          runtime->interactiveSliceReason_, runtime->activeGuestThread_,
+                          runtime->interactiveSliceInstructionBudget_, uint32_t(address), pc, ra,
+                          runtime->guestMessages_.size());
+        } else {
+            spdlog::info("guest slice watchdog stop reason={} stopCause=deadline activeThread=0x{:08x} budget={} block=0x{:08x} pc=0x{:08x} ra=0x{:08x} queued={}",
+                         runtime->interactiveSliceReason_, runtime->activeGuestThread_,
+                         runtime->interactiveSliceInstructionBudget_, uint32_t(address), pc, ra,
+                         runtime->guestMessages_.size());
+        }
         runtime->interactiveSliceStopRequested_ = true;
     }
     uc_emu_stop(uc);
@@ -7300,11 +7320,27 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         }
         wndProc = translatedWndProc(wndProc, name.c_str());
         const bool tracePrivatePayload =
+            msg == 0x006ee ||
             msg == 0x057c9;
         const bool traceWindowMessage = traceGuestWindowMessage(msg);
         if (mutableEntry.calls <= 128 || traceWindowMessage) {
             spdlog::info("synthetic coredll.dll!{} transfer wndproc=0x{:08x} hwnd=0x{:08x} msg=0x{:08x} wparam=0x{:08x} lparam=0x{:08x}",
                          name, wndProc, hwnd, msg, wParam, lParam);
+        }
+        if (traceWindowMessage && isGuestRangeReadable(wndProc, 12)) {
+            const uint32_t first = readU32(wndProc);
+            const uint32_t second = readU32(wndProc + 4);
+            const uint32_t third = readU32(wndProc + 8);
+            if (msg == 0x006ee) {
+                spdlog::info("window proc words msg=0x{:08x} wndproc=0x{:08x} words=0x{:08x},0x{:08x},0x{:08x}",
+                             msg, wndProc, first, second, third);
+            }
+            if (first == 0x3c080006u && third == 0x01000008u) {
+                const uint32_t slot = 0x00060000u + uint32_t(int16_t(second & 0xffffu));
+                const uint32_t target = isGuestRangeReadable(slot, 4) ? readU32(slot) : 0;
+                spdlog::info("window proc thunk msg=0x{:08x} thunk=0x{:08x} slot=0x{:08x} target=0x{:08x}",
+                             msg, wndProc, slot, target);
+            }
         }
         if (tracePrivatePayload) {
             auto describePointer = [&](const char* label, uint32_t ptr) {
