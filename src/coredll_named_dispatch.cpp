@@ -2619,11 +2619,6 @@ ensureHostWindow(a0, it->second);
             lastError_ = 0;
             ret = 1;
             auto postedWindow = windows_.find(a0);
-            if (postedWindow != windows_.end() &&
-                postedWindow->second.className == "happyway_win") {
-                spdlog::info("PostMessageW target=happyway hwnd=0x{:08x} msg=0x{:08x} wparam=0x{:08x} lparam=0x{:08x} queued={}",
-                             a0, a1, a2, a3, guestMessages_.size());
-            }
             if (tracePostMessage) {
                 const std::string className = postedWindow == windows_.end() ? std::string{} : postedWindow->second.className;
                 const std::string title = postedWindow == windows_.end() ? std::string{} : postedWindow->second.title;
