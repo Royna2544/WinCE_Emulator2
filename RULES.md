@@ -1,15 +1,16 @@
 # RULES.md - FakeCE / iNavi SE G3 Emulator
 
-This is the primary project memory and workflow file. `AGENTS.md` is only a
-short entry-point reference back to this file.
-
 ## Project
 
-Repository: `/mnt/d/GitHub/WinCE_Emulator`
+Repository: `/mnt/d/GitHub/WinCE_Emulator_v2` or `D:\GitHub\WinCE_Emulator_v2`
 
 Main target:
 
-`.\x64\Debug\WinCE_Emulator.exe "D:\INAVI_Emulator\INAVI\INavi\INavi.exe"`
+`iNavi_Unicorn_Emulator.exe`
+
+The NMEA Feeder:
+
+`NMEASender.exe`
 
 Target app:
 
@@ -30,9 +31,7 @@ decorated-name evidence:
 - `C:\Program Files (x86)\Windows CE Tools\wce420\STANDARDSDK_420\Lib`
 - `C:\Program Files (x86)\Windows CE Tools\wce420\STANDARDSDK_420\Mfc\Lib`
 
-For this target, use `Mipsii` as the primary SDK directory. Use `Mipsii_fp` only
-as an A/B comparison if floating-point behavior diverges; checked COREDLL and
-MFC ordinals matched for the inspected target surfaces.
+For this target, use `Mipsii` as the primary SDK directory.
 
 The Visual Studio installation is at: `C:\Program Files\Microsoft Visual Studio\18\Community`
 
@@ -44,7 +43,7 @@ The application targets latest Windows-only with x86 target at Zen5. You can add
 
 This is an emulator.
 
-Do not fake custom iNavi app behavior just to make a screenshot look correct.
+Do not fake custom app behavior just to make a screenshot look correct/make it work.
 
 Prefer real-ish emulation:
 
@@ -60,11 +59,14 @@ Allowed:
 
 Dangerous unless explicitly justified:
 
-- Manually painting the splash/progress bar
+- Manually painting to match app behavior
 - Forcing app-specific callbacks
 - Replacing app state with guessed values
 - Hardcoding iNavi behavior as the final fix
 - Pretending success while bypassing the real app path
+- Specifying special behavior based on hardcoded strings or file names.
+
+IMPORTANT: DO. NOT. INVENT BEHAVIOR, ADD HARDCODED SPECIFIC FIX, QUIT INVESTIGATION UNLESS THE USER ASKS TO. KEEP RUNNING AUTO TESTS
 
 ---
 
@@ -82,7 +84,9 @@ After meaningful changes:
 1. Build.
 2. Run a bounded test.
 3. Inspect logs/output.
-4. Commit real fixes separately from diagnostics.
+4. Commit real fixes separately from diagnostics. Use git with proper commit message.
+5. Clean up / Update `PROGRESS.md`, `TODO.md`, and `KNOWN_BUGS.md`. So there will be no stale entries.
+6. Update `README.md` if it contains any stale entries after the change. Always verify against the latest sources.
 
 Do not mix these in one commit:
 
@@ -116,35 +120,6 @@ Maintain these files as durable memory across Codex sessions:
 `TODO.md` is for active next steps. Keep sections like Immediate, Next, Later, Parked.
 
 `KNOWN_BUGS.md` is for reproducible failures. Include symptom, current hypothesis, evidence, relevant addresses/ordinals/logs, and status.
-
-Track ordinal discoveries in the durable memory files above. Mark each entry as
-Confirmed, Likely, Speculative, or Rejected, and include the evidence source:
-SDK import library, target import table, runtime call shape, or disassembly.
-
----
-
-## SDK / Ordinal Policy
-
-The SDK import libraries are evidence for symbol names and ordinals. They are
-not proof that a stub's behavior is complete.
-
-Use SDK evidence to:
-
-- rename stale or speculative ordinal labels
-- correct direct ordinal mismatches
-- identify MFC decorated names and vtable candidates
-- compare `Mipsii` against `Mipsii_fp` when needed
-
-Use runtime evidence to:
-
-- determine call shape
-- decide whether an MFC ordinal is acting as a constructor, method, data export,
-  or compatibility path
-- decide whether a host-backed shim should write memory, return an object, or
-  fail like CE would
-
-Do not mass-replace behavior from names alone when the app has already shown a
-different call shape. Record the conflict in `PROGRESS.md` or `KNOWN_BUGS.md`.
 
 ---
 
@@ -180,9 +155,10 @@ Prefer bounded runs.
 Build:
 
 ```bash
-powershell.exe -NoProfile -Command "& 'C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe' iNavi_Unicorn_Emulator.vcxproj /p:Configuration=Debug /p:Platform=x64 /m"
+powershell.exe -NoProfile -Command "& 'C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe' iNavi_Unicorn_Emulator.vcxproj /p:Configuration=Release /p:Platform=x64 /m"
 ```
-Or use the ps1 script at tools/
+
+For active running and testing, use the ps1 script at tools/
 
 ---
 

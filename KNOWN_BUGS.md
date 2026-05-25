@@ -29,37 +29,6 @@ Likely areas:
 - `ShowWindow`/activation ordering,
 - paint invalidation timing.
 
-## GPS Status UI Still Needs Live-NMEA Retest
-
-The parent app can now open the temporary diagnostic `COM7:` -> host `COM21`
-bridge and earlier logs showed valid NMEA reads, but the latest post-fix
-verification run read zero bytes from the host port.
-
-Recent evidence:
-- `captures/inavi_autodrive_20260525_091237` read valid `$GPGGA`, `$GPRMC`,
-  and `$GPVTG` data from host `COM21`.
-- Missing GPS-path ordinals `__ll_to_d` (`#2010`), `SetSystemTime` (`#26`),
-  and `pow` (`#1051`) were added afterward.
-- `captures/inavi_autodrive_20260525_094818` no longer crashes after the
-  GPS/private-message path, but `ReadFile host serial` transferred `0` bytes
-  during that run.
-- `captures/inavi_autodrive_20260525_100904` shows the guest calls
-  `PurgeComm(..., 0x0f)` immediately after serial setup, then
-  `ClearCommError` reports `cbInQue=0` before reads. If the feeder only sends a
-  burst before/around open, the app can clear it before parsing.
-
-Status: needs another run with the NMEA feeder confirmed active before judging
-the GPS status icon/UI update.
-
-## Bottom Bar Can Disappear After Search/Overlay Flows
-
-The map and right-side controls can remain visible while the bottom bar disappears or is hidden behind another guest surface.
-
-Likely areas:
-- z-order composition,
-- child window clipping,
-- stale presenter surface after modal transitions.
-
 ## Worker Thread SendMessage Routing Was Crashing GPS Update Path
 
 The GPS worker path reached a synchronous `SendMessageW` to the main UI window
