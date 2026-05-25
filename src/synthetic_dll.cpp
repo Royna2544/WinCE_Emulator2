@@ -1229,9 +1229,9 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
         const bool servicingQueuedMessages = std::strcmp(reason, "queued-message") == 0;
         const bool synchronousQueuedMessage = servicingQueuedMessages && hasPendingSynchronousMessage();
         const bool pendingUserInput = hasPendingUserInput() || recentlyQueuedUserInput();
-        const bool backloggedQueuedWork = servicingQueuedMessages && guestMessages_.size() > 32;
+        const bool backloggedQueuedWork = servicingQueuedMessages && guestMessages_.size() > 8;
         if (synchronousQueuedMessage) {
-            instructionBudget = std::min<uint64_t>(instructionBudget, 3000u);
+            instructionBudget = std::min<uint64_t>(instructionBudget, backloggedQueuedWork ? 50000u : 12000u);
         } else if (pendingUserInput) {
             instructionBudget = std::min<uint64_t>(instructionBudget, backloggedQueuedWork ? 50000u : 12000u);
         } else if (servicingQueuedMessages && !activeGuestThread_) {
@@ -1242,7 +1242,7 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
             instructionBudget = std::min<uint64_t>(instructionBudget, 250000u);
         }
         const auto wallBudget = synchronousQueuedMessage
-            ? std::chrono::milliseconds(12)
+            ? (backloggedQueuedWork ? std::chrono::milliseconds(60) : std::chrono::milliseconds(12))
             : (pendingUserInput
                    ? (backloggedQueuedWork ? std::chrono::milliseconds(60) : std::chrono::milliseconds(12))
                    : (servicingQueuedMessages ? std::chrono::milliseconds(60)
