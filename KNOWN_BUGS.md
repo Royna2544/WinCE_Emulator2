@@ -4,121 +4,150 @@ Last refreshed: 2026-05-25.
 
 ## Route Search Does Not Complete
 
-Pressing the route-search path can show delayed popups or transient helper windows, then stall without presenting the expected full-screen route-search/result UI.
+Symptom:
+
+- Pressing route search can show delayed dialogs or transient helper windows,
+  then stalls without the expected full-screen route-search/result flow.
 
 Current evidence:
-- `captures/inavi_autodrive_20260525_125523` shows `iSearch.exe` starts and
-  posts back to the parent app.
-- The parent creates a full-screen `TGNaviDlg`, then repeatedly polls
-  `FindWindowW(NULL, L"MultiTBT")`.
-- No guest `CreateProcessW` call for `\TBT\MultiTBT.exe` is visible in the
+
+- `iSearch.exe` can start and post back to the parent app.
+- The parent app creates a full-screen `TGNaviDlg`.
+- Logs show repeated `FindWindowW(NULL, L"MultiTBT") -> 0`.
+- No guest `CreateProcessW` for `\TBT\MultiTBT.exe` has been observed in the
   current logs.
 
-Likely areas:
-- missing startup/session companion process behavior for `MultiTBT`,
-- modal/window z-order routing after the helper window exists,
-- blocking helper/file/serial work on the UI thread.
+Current hypothesis:
 
-Status: narrowed, not fixed. Do not hardcode `MultiTBT` launch in emulator
-logic; wait for real-device evidence or implement a generic session-companion
-configuration if the device dump supports it.
+- The route stack expects a companion/session window or process that the
+  emulator is not starting or discovering.
+- Window ordering may also hide the route-search UI behind another guest
+  surface, but the missing `MultiTBT` evidence is the current lead.
 
-## Window Title Propagation Was Broken
+Status:
 
-The emulator previously treated `coredll #0x0100` as a second
-`ScreenToClient` alias. The CE 4.2 MIPSII SDK import library identifies
-`#0x0100` as `SetWindowTextW`.
-
-Impact:
-- Main iNavi windows were created with empty titles even after the app tried to
-  set them.
-- `happyway_win.exe` received cross-process messages but failed
-  `FindWindowW(NULL, L"iNavi")`, blocking later helper communication.
-
-Status: fixed in the working tree. `SetWindowTextW` now updates the guest
-window title and republishes the shared guest window registry. The 12:55 run
-shows `happyway_win.exe` resolving the `iNavi` window successfully.
+- Not fixed. Do not hardcode a `MultiTBT` launch. Use real-device evidence or a
+  generic external companion configuration if one is justified.
 
 ## Modal And Overlay Routing Is Still Wrong
 
-Top-level or full-screen overlays do not always own input. Underlying buttons can still receive touch when an overlay says the app is searching or waiting.
+Symptom:
 
-Likely areas:
-- hit-test target selection,
-- topmost/modal guest window tracking,
-- host presenter ownership for child/full-screen windows.
+- Under-layer controls can receive clicks while a popup, safety screen, or
+  searching overlay is visible.
+- Some overlays can remain in front after they should dismiss.
+- Bottom bar/right-side controls can disappear or appear in the wrong order
+  after transitions.
+
+Current hypothesis:
+
+- Guest z-order, topmost/modal ownership, host presenter activation, and
+  hit-test target selection are not yet faithful enough.
+
+Status:
+
+- Partially improved, not fixed.
 
 ## Popup UI Can Lag Behind Audio
 
-The app can play the confirmation/error sound without the popup becoming visible immediately. Sometimes the popup appears only after other windows are dismissed.
+Symptom:
 
-Likely areas:
-- synchronous message delivery,
-- `ShowWindow`/activation ordering,
-- paint invalidation timing.
+- The app can play the confirmation/error sound while the matching popup UI is
+  delayed, hidden, or only appears after another window is dismissed.
 
-## Worker Thread SendMessage Routing Was Crashing GPS Update Path
+Current hypothesis:
 
-The GPS worker path reached a synchronous `SendMessageW` to the main UI window
-and previously entered the UI wndproc on the worker thread. That exposed a
-`pc=0` / unaligned-read crash after `msg=0x577d`.
+- Audio is not the broken path. The likely problem is synchronous message
+  delivery, activation, `ShowWindow`/`SetWindowPos`, or paint invalidation
+  ordering.
 
-Status: partially fixed. Guest windows now track owner thread, cross-thread
-`SendMessageW` to main-owned windows is queued/yielded, and resumed guest waits
-restore the saved return PC. Recent live-input runs no longer hit the prior
-`pc=0` crash, but the queuing is still only cooperative and may contribute to
-UI lag when guest code expects a strictly synchronous `SendMessageW` return.
+Status:
 
-## Stub Device Behavior Is Incomplete
+- Not fixed.
 
-Known real stream devices are now present as stubs or named JSON-selected
-handlers, but most device-specific `DeviceIoControl` behavior is not
-implemented yet.
+## GPS Profile Still Selects COM7 In This Dump
+
+Symptom:
+
+- Real hardware report confirms GPS NMEA on `COM1:`, but the current app data
+  can still launch/use `COM7:`.
+
+Current evidence:
+
+- Real device `COM1:` is `VSP.dll`, serial API yes, `9600 8N1`, with passive
+  NMEA RX.
+- Runtime command line has been observed as
+  `iNavi|SDMMC Disk\mapdata|SDMMC Disk\inavidata|11|7|0|1`.
+- Disassembly/runtime diagnostics show setting key `0xc3=4` before
+  `happyway_win.exe` launch.
+- `values.dat` supplies `0xc3=4`.
+- `iNaviData\config.bin` offset `0x80` contains `06 00`, yielding zero-based
+  port `6` and later `COM7:`.
+- A/B external data patches can make the app choose `COM1:`, but those patches
+  are evidence only.
+
+Rejected explanation:
+
+- Registry is not the current explanation for COM7. The current evidence points
+  at app data/profile flow.
+
+Status:
+
+- Not fixed. Temporary `COM7:` host mapping is allowed only for diagnostics.
+
+## Custom Stream Devices Are Mostly Stubs
+
+Symptom:
+
+- Real stream devices exist in registry/report but the emulator does not yet
+  implement most device-specific `DeviceIoControl` protocols.
 
 Affected devices:
-- `UID1:` NAND UUID now has a narrow `NANDUUID_RETURN` backend for ioctls
-  `0xa00100cc` and `0xa00100d0`, but any other UID1 ioctl remains unsupported,
-- `PIC1:` MCU/PIC candidate,
-- `BTN1:` buttons,
-- `LSD1:` light sensor,
-- `MFS1:` e-compass candidate,
-- `SMB1:` accelerometer candidate,
-- `CAM1:` camera,
-- `TWV1:` video decoder/input candidate.
 
-## GPS Port Selection Still Chooses COM7
+- `UID1:` has a narrow `NANDUUID_RETURN` backend for observed NAND UUID ioctls.
+- `SMB1:` / `SMB380.dll` is accelerometer-related and internally I2C/SPI.
+- `MFS1:` / `YAS526B.dll` is magnetic/e-compass-related and internally I2C.
+- `PIC1:`, `BTN1:`, `LSD1:`, `CAM1:`, and `TWV1:` are known but still stubs.
 
-The real device report identifies GPS NMEA output as `COM1:` via `VSP.dll`, but
-the current app run can still open `COM7:`.
+Status:
 
-Evidence:
-- Runtime launched `happyway_win.exe` with command line
-  `iNavi|SDMMC Disk\mapdata|SDMMC Disk\inavidata|11|7|0|1`.
-- The child opened `COM7:` immediately afterward.
-- A/B patches of obvious `config.bin` candidate dwords at `0x34`, `0x4c`, and
-  `0xb4` did not change the launch command, so those offsets are not the
-  direct runtime source of the current `11|7` values.
-- `DeviceParser.exe` runs earlier in startup, before the `happyway_win.exe`
-  command line is built, so the emulator may be missing the hardware/profile
-  detection path that should produce GPS port `1`.
-- Disassembly shows `iNavi.exe` reads setting key `0xc3`; value `4` maps to
-  `happyway_win.exe ...|11|7|0|1`.
-- Runtime diagnostic confirms `0xc3` returns `4` at the launcher callsites
-  immediately before the `happyway_win.exe` `11|7|0|1` command line is built.
-- `captures/inavi_autodrive_20260525_002848` confirms the original SDMMC data
-  already contains the bad selection: `values.dat` kind `47` key `0xc3` loads
-  as value `4`, and `iNaviData\config.bin` disk offset `0x80` contains
-  `06 00`, which fills the parent app's GPS-port table slot as zero-based port
-  `6`.
-- The same run saw no `WriteFile` to `values.dat` or `iNaviData\config.bin`.
-  `DeviceParser.exe` launches after `values.dat` has already supplied
-  `0xc3=4`, and direct execution only showed `.bat`/`autorun.inf` probing
-  before the emulator hit a process-return gap.
-- `UID1:` with backend `NANDUUID_RETURN` successfully returns the SDMMC
-  `Device.uid` value (`022794806836GN`) for ioctl `0xa00100d0`. The parent
-  app also probes `UID1:` with ioctl `0xa00100cc`; that path is now implemented
-  but was not exercised in the 2026-05-24 23:27 harness run.
+- Expected limitation. Add real handlers only after callsite/ioctl evidence is
+  captured.
 
-Registry-based explanations are rejected. Next fix should come from correcting
-the SDMMC config/profile data or finding the real device-profile source that
-should override this value.
+## Cooperative Cross-Thread SendMessage Is Still Risky
+
+Symptom:
+
+- Earlier GPS/private-message paths crashed when worker-thread `SendMessageW`
+  entered a main-owned UI wndproc directly.
+
+Current evidence:
+
+- Owner-thread tracking and queued/yielded cross-thread `SendMessageW` reduced
+  the previous `pc=0`/unaligned crash.
+- The model is still cooperative and may contribute to UI lag when guest code
+  expects strict synchronous behavior.
+
+Status:
+
+- Partially fixed. Keep watching for lag, dead waits, and wrong return timing.
+
+## Performance Is Still Not Representative
+
+Symptom:
+
+- Startup, GPS/map updates, and route search can lag badly compared with real
+  hardware expectations.
+
+Likely areas:
+
+- Route/file helper work on the UI thread.
+- Excessive file I/O or small reads.
+- Redraw/present frequency and invalidation behavior.
+- Software floating-point overhead for map math.
+- Diagnostic logging volume.
+
+Status:
+
+- Not optimized. Correctness and faithful blocking/message behavior remain the
+  priority before broad threading changes.

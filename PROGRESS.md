@@ -2,132 +2,110 @@
 
 Last refreshed: 2026-05-25.
 
-## Working
+## Current State
 
-- The main iNavi map renders again after earlier white-map regressions.
-- Touch delivery is more responsive than the earlier busy-loop/frozen state, though modal routing is still incomplete.
-- The Windows CE SDK-confirmed `SetWindowTextW` ordinal is now implemented at
-  `coredll #0x0100`. This fixed a real title propagation bug where
-  `happyway_win.exe` could not resolve `FindWindowW(NULL, L"iNavi")`.
-- Cross-process guest window discovery/message routing is active for child
-  emulators. `happyway_win.exe` can publish its `happyway_win` window and
-  receive posted/sent guest messages through the shared window registry queue.
-- `report_serial.txt` from the real device has been imported into the emulator model:
-  - `COM1:` is `Drivers\BuiltIn\VSP`, `VSP.dll`, GPS NMEA output, 9600 8N1.
-  - `COM3:` is `Drivers\BuiltIn\Serial3`, `au16550.dll`, UART candidate, 9600 8N1, no automatic RX observed.
-  - `UID1:`, `PIC1:`, `BTN1:`, `LSD1:`, `MFS1:`, `SMB1:`, `CAM1:`, and `TWV1:` are known stream devices. `UID1:` now has a narrow named handler; the others remain stubs.
-- `regs.json` now includes the reported `Drivers\BuiltIn` stream-device keys and values.
-- Serial devices are configured through `--serial-map`.
-- `serial_devices.json` is the default host/guest device map used by `tools/autodrive_inavi.ps1`.
-- `serial_devices.json` now supports the `NANDUUID_RETURN` ioctl backend for
-  `UID1:`. It returns a compact 8-digit id for the parent app's
-  `0xa00100cc` probe and the host-backed `Device.uid` bytes for the
-  `0xa00100d0` read instead of hardcoding behavior by guest device name.
-- `--sdmmc-path` now names the host directory backing the guest `\SDMMC Disk`
-  contents. The guest mount name is fixed inside the emulator; the old
-  `--fs-root` argument has been removed.
+- The main iNavi map renders again.
+- Touch input is more responsive than the earlier frozen/busy-loop state, but
+  modal and overlay input routing is still incomplete.
+- Route search still does not complete.
+- The emulator is using real-ish CE API and device boundaries rather than
+  hardcoded app behavior.
+- `README.md`, `DEVICES.md`, `PROGRESS.md`, `TODO.md`, and `KNOWN_BUGS.md`
+  have been refreshed to match the current investigation state.
 
-## Current Runtime Shape
+## Confirmed Emulator Capabilities
 
-- `--serial-map <json>` accepts document version `1` only.
-- `--sdmmc-path <host_dir>` points at the files visible under guest
-  `\SDMMC Disk`.
-- Serial devices may use `backend: "win32_com"` or `backend: "stub"`.
-- IOCTL-style stream devices support `backend: "stub"` and
-  `backend: "NANDUUID_RETURN"`.
-- Defaults are inherited from `defaults.baud` and `defaults.mode`, with per-device override support.
-- The intended real-device map bridges guest `COM1:` to host `COM21` at 9600
-  8N1. The working tree currently has a temporary diagnostic override that maps
-  guest `COM7:` to host `COM21`, because this SDMMC dump still selects COM7.
-- The default map uses `NANDUUID_RETURN` for guest `UID1:`.
+- Loads Windows CE MIPS R4000 PE32 guest images.
+- Maps real guest DLLs when available through DLL search paths.
+- Uses synthetic DLLs for important OS/API boundaries:
+  `coredll.dll`, `commctrl.dll`, `winsock.dll`, `ole32.dll`, and `oleaut32.dll`.
+- Runs guest MIPS code through Unicorn.
+- Provides host presenter windows for guest UI output.
+- Reads registry data from `regs.json`.
+- Backs guest `\SDMMC Disk` with the host directory passed through
+  `--sdmmc-path`.
+- Uses `--serial-map` JSON version `1` for host/guest serial and stream-device
+  mapping.
+- The old `--fs-root` and GPS-specific comm argument are gone.
 
-## Known Recent Observations
+## Recent Fixes
 
-- `captures/inavi_autodrive_20260525_125523` proves the title fix:
-  `SetWindowTextW guest=0x00010007 title="iNavi"` is logged in the parent, and
-  the child later resolves `FindWindowW class="" title="iNavi" -> 0x00010021`.
-- In the same run, `iSearch.exe` starts in-process and posts back to the parent
-  app. The parent creates a full-screen `TGNaviDlg` at `12:56:08`, so the route
-  path now gets past the earlier parent-window discovery failure.
-- The current route-search stall is now narrowed to a missing `MultiTBT`
-  companion window. The parent repeatedly logs
-  `FindWindowW class="" title="MultiTBT" -> 0x00000000`; no corresponding
-  `CreateProcessW` for `\TBT\MultiTBT.exe` has been observed in the guest logs.
-- A manual diagnostic launch of the real `\TBT\MultiTBT.exe` in the shared
-  guest desktop was started to verify the route-search dependency. That is
-  evidence gathering only, not a committed emulator behavior or hardcoded fix.
-- Popup audio can occur before the matching UI becomes visible, which suggests window ordering or modal presentation is still wrong.
-- Under-layer controls can still receive clicks while a searching/overlay state is visible.
+- `coredll #0x0100` is correctly treated as `SetWindowTextW`, based on CE 4.2
+  MIPSII SDK evidence.
+- `SetWindowTextW` updates guest window titles and republishes the shared
+  guest-window registry.
+- Cross-process guest window discovery/message routing exists for child
+  emulator processes.
+- `happyway_win.exe` can now resolve the parent `iNavi` window by title in the
+  capture where title propagation was verified.
+- `UID1:` has a named JSON-selected `NANDUUID_RETURN` backend for the observed
+  NAND UUID IOCTLs.
+- `serial_devices.json` supports `serial` and `ioctl_device` entries with
+  explicit backends.
+- `DEVICES.md` now records current COM1 GPS, SMB380, and YAS526B evidence.
+
+## Device Evidence
+
+- Real device report path: `D:\INAVI_Emulator\report_serial.txt`.
+- `COM1:` is `Drivers\BuiltIn\VSP`, `VSP.dll`, GPS NMEA output,
+  `9600 8N1`.
+- `COM3:` is `Drivers\BuiltIn\Serial3`, `au16550.dll`, UART candidate,
+  `9600 8N1`, with no automatic RX observed in the report.
+- `UID1:` is `NANDUUID.dll`, a NAND UUID custom stream device.
+- `SMB1:` is `SMB380.dll`, an accelerometer stream driver. Disassembly shows
+  `I2C2:`/optional `SPI1:` internals and a broad `IOCTL_SMB380_*` surface.
+- `MFS1:` is `YAS526B.dll`, a magnetic field/e-compass stream driver.
+  Disassembly shows two `I2C2:` handles for XY and Z chip paths and IOCTLs
+  around `0xb0000000..0xb0000010`.
+- `PIC1:`, `BTN1:`, `LSD1:`, `CAM1:`, and `TWV1:` remain known stream devices
+  but are still stubs.
+
+## GPS And Profile Selection
+
+- Real hardware GPS is on `COM1:`. This is confirmed by the real-device report
+  and passive NMEA RX sample.
+- The current SDMMC/profile data can still make the app select `COM7:`.
 - `captures/inavi_autodrive_20260525_091237` confirmed that temporary
-  `COM7:` -> host `COM21` opens successfully and reads valid NMEA from the
-  host feeder. The parent app consumed `$GPGGA`/`$GPRMC`/`$GPVTG` and posted
-  private GPS/update messages afterward.
-- `captures/inavi_autodrive_20260525_092830` exposed missing CE SDK ordinals
-  on the GPS path: `coredll #2010` (`__ll_to_d`) and `#26`
-  (`SetSystemTime`). Those are now implemented, along with `__ull_to_d` and
-  `pow` (`#1051`) after the next GPS/math step exposed it.
-- `captures/inavi_autodrive_20260525_094818` no longer hits the prior
-  `pc=0`/unaligned crash after GPS/private message dispatch. The fix tracks
-  guest window owner threads, queues worker-thread `SendMessageW` calls to
-  main-owned UI windows, and resumes guest waits at the saved return PC. That
-  run completed the route preset without crashing, but the host feeder returned
-  zero serial bytes during the verification window, so GPS status UI behavior
-  still needs a live-NMEA retest.
-- `captures/inavi_autodrive_20260525_100904` added serial queue diagnostics.
-  The app opens guest `COM7:` through host `COM21`, sets mask `0x1`, calls
-  `SetupComm(4096,4096)`, then immediately calls `PurgeComm(..., 0x0f)`.
-  Later `ClearCommError` reports `cbInQue=0` before every read, and reads
-  return `transferred=0`. This supports a dry host endpoint or pre-open burst
-  getting purged, not a failed `CreateFileW`/baud setup path.
-- The same 09:48 run shows a modal `TGNaviDlg` destination/current-position
-  information popup remains in front of the map. Later route-preset taps were
-  delivered to that modal, so the route-search result path was not actually
-  exercised in that capture.
-- COM7 selection is coming from app data/profile flow, not registry. In the
-  2026-05-24 harness runs, `iNavi` launched `happyway_win.exe` with
-  `iNavi|SDMMC Disk\mapdata|SDMMC Disk\inavidata|11|7|0|1`, then the child
-  opened `COM7:`.
-- A/B patches of obvious `config.bin` dwords at offsets `0x34`, `0x4c`, and
-  `0xb4` did not change the `happyway_win.exe` command line, so those offsets
-  are not the direct runtime source of the current `11|7` launch values.
-- `DeviceParser.exe` launches before the `happyway_win.exe` command line is
-  built. On real hardware this likely participates in selecting the device
-  profile/config that should make GPS port `1`; in the emulator run the later
-  `happyway_win.exe` command line still contains port `7`.
-- Returning the SDMMC `Device.uid` value through `UID1:`/`NANDUUID_RETURN` is
-  verified, but it is not sufficient to change the `happyway_win.exe` command
-  line; the 2026-05-24 23:27 harness run still launched with `11|7|0|1`.
-- Disassembly of `iNavi.exe` shows the `happyway_win.exe` launcher reads
-  setting key `0xc3` through `0x1d13c`; when that value is `4`, the launcher
-  emits `11|7|0|1`. The parent app also probes `UID1:` with ioctl
-  `0xa00100cc`, so both the compact probe and full UID read now need to be
-  present before re-testing whether hardware/profile detection changes key
-  `0xc3`. In the 2026-05-24 23:27 harness run, only the `0xa00100d0`
-  path was observed; the disassembled `0xa00100cc` branch did not execute.
-- Runtime diagnostic in the 2026-05-24 23:42 harness run confirmed setting
-  key `0xc3` returns value `4` immediately before `happyway_win.exe` launch,
-  at the five launcher callsites `0x59a28`, `0x59a50`, `0x59a78`,
-  `0x59aa0`, and `0x59ac4`.
-- Runtime diagnostic in `captures/inavi_autodrive_20260525_002848` restored
-  the original SDMMC data and confirmed no process wrote `values.dat` or
-  `iNaviData\config.bin` during startup/search. `iNavi.exe` loads
-  `\SDMMC Disk\INavi\res\values.dat` before `DeviceParser.exe`, inserts
-  setting key `0xc3` with value `4`, launches `DeviceParser.exe`, then still
-  reads `0xc3=4` before launching `happyway_win.exe` as
-  `...|11|7|0|1`.
-- The same run confirmed the parent app fills GPS-port table slot
-  `0x0079233c` from `iNaviData\config.bin`: file offset `0x0c` is read into
-  guest buffer `0x007922c8`, and payload offset `0x74` contains bytes
-  `06 00`, yielding zero-based port value `6` and later `COM7:`.
-- Directly running `DeviceParser.exe` under the emulator showed it probes
-  `\SDMMC Disk\*.bat` and `\SDMMC Disk\autorun.inf`; it did not write the
-  profile/config files before hitting the emulator's current process-return
-  gap at `pc=0`. Current evidence does not support treating `DeviceParser.exe`
-  as the active COM profile selector in this dump.
-- A/B external data patches remain diagnostic evidence only: changing
-  `values.dat` kind `47` key `0xc3` from `4` to `1` changes the
-  `happyway_win.exe` launch profile to `...|2|1|0|1`; changing
-  `iNaviData\config.bin` disk offset `0x80` from `06 00` to `00 00` makes the
-  parent select `COM1:`. The real emulator should not rewrite these bytes at
-  runtime; the next decision is whether the SDMMC dump is from the wrong
-  device/profile or whether another real probe/config source is still missing.
+  `COM7:` -> host `COM21` opens and reads valid `$GPGGA`/`$GPRMC`/`$GPVTG`
+  input when the host feeder is live.
+- The COM7 selection is not explained by registry. Current evidence points to
+  app data/profile flow:
+  - `happyway_win.exe` was launched as
+    `iNavi|SDMMC Disk\mapdata|SDMMC Disk\inavidata|11|7|0|1`.
+  - Disassembly showed the launcher reading setting key `0xc3`.
+  - Runtime diagnostics showed key `0xc3=4` immediately before launch.
+  - `values.dat` supplied `0xc3=4`.
+  - `iNaviData\config.bin` disk offset `0x80` contained `06 00`, which filled
+    the parent app GPS-port table as zero-based port `6`, later `COM7:`.
+- A/B external data patches showed:
+  - changing `values.dat` key `0xc3` from `4` to `1` changes the launch profile,
+  - changing `iNaviData\config.bin` offset `0x80` from `06 00` to `00 00`
+    makes the parent select `COM1:`.
+- These A/B patches are evidence only. The emulator should not rewrite those
+  bytes at runtime.
+
+## Route Search Evidence
+
+- `iSearch.exe` can start in-process and post back to the parent app.
+- The parent creates a full-screen `TGNaviDlg` on the route-search path.
+- Current route-search stall is narrowed to the app repeatedly polling
+  `FindWindowW(NULL, L"MultiTBT")`.
+- No corresponding guest `CreateProcessW` for `\TBT\MultiTBT.exe` has been
+  observed in the current logs.
+- Manual launch experiments for `MultiTBT.exe` are diagnostics only, not an
+  emulator fix.
+
+## Known False Leads / Constraints
+
+- Do not explain the COM1/COM7 mismatch through registry. The current evidence
+  points at SDMMC profile/config data.
+- Do not hardcode process names or app paths as final behavior.
+- Do not fake route-search success or paint UI state manually.
+- Do not invent sensor values for `SMB1:` or `MFS1:` before guest IOCTL usage
+  is captured.
+
+## Current Dirty Worktree Note
+
+The working tree may include documentation refreshes and active emulator fixes
+from the current debugging session. Do not revert unrelated user or prior
+session edits.

@@ -1,70 +1,81 @@
 # TODO
 
-Current priority order after the 2026-05-25 window-title and route-helper
-diagnostics.
+Last refreshed: 2026-05-25.
 
-1. Route-search UI/process behavior
-   - Wait for the real-device dump that may identify how `\TBT\MultiTBT.exe`
-     is launched or registered. Current logs show the app polling for a
-     top-level `MultiTBT` window but do not show a guest `CreateProcessW` for
-     it.
-   - If the real dump proves `MultiTBT` is a session companion, add a generic
-     external session-companion manifest/argument. Do not hardcode
-     `MultiTBT.exe`, app names, or paths in emulator logic.
-   - Keep the manual `MultiTBT` launch as diagnostic evidence only; remove any
-     temporary launch scripts/log assumptions before committing a real fix.
-   - Confirm the full-screen "searching route" UI is raised before long helper work begins.
+## Immediate
 
-2. Popup and modal ordering
-   - Ensure topmost/modal guest windows receive touch first.
-   - Prevent clicks from reaching underlays while overlays or route-search windows are active.
-   - Keep the bottom bar and right-side controls in their guest z-order without host-layer leaks.
+1. Route-search stall
+   - Capture a fresh route-search run with focused logging for
+     `CreateProcessW`, `FindWindowW`, `SetWindowTextW`, `ShowWindow`,
+     `SetWindowPos`, `SendMessageW`, `PostMessageW`, and `DeviceIoControl`.
+   - Determine why the app polls for `MultiTBT` but no guest launch for
+     `\TBT\MultiTBT.exe` appears in logs.
+   - Wait for or use real-device evidence if it proves `MultiTBT` is a session
+     companion.
+   - If needed, design a generic session-companion configuration. Do not
+     hardcode `MultiTBT.exe`, `iSearch.exe`, `happyway_win.exe`, or app paths in
+     emulator logic.
+   - Confirm the expected full-screen route-search/searching UI is raised
+     before long helper work begins.
 
-3. Serial and stream-device follow-up
-   - Re-test `serial_devices.json` with a live host NMEA feeder on `COM21`
-     after the `__ll_to_d`, `SetSystemTime`, `pow`, cross-thread
-     `SendMessageW`, and wait-resume fixes. The 09:48 verification run opened
-     COM7 successfully but read zero bytes, so GPS status UI behavior was
-     inconclusive.
-   - During GPS retests, keep the NMEA feeder continuously writing after the
-     emulator opens the port. The guest calls `PurgeComm(..., 0x0f)` after
-     setup, so pre-open bursts can be cleared before the first `ReadFile`.
-   - Use `tools/autodrive_inavi.ps1 -NoTaps -KeepAlive` for human-driven
-     logging runs so scripted taps do not accidentally drive the wrong modal.
-   - Decide whether the serial read cap of 128 bytes should remain as a
-     faithful UART-style behavior or become a configurable diagnostic limit.
-   - Capture logs for `CreateFileW("COM1:")`, `GetCommState`, `SetCommState`, and `ReadFile` to confirm NMEA reaches the app.
-   - Continue tracing the device-profile source that makes `iNavi.exe` choose
-     profile code `4`, which produces `happyway_win.exe ...|11|7|0|1`.
-     Disassembly shows this comes from setting key `0xc3`; the full UID ioctl
-     `0xa00100d0` succeeds, and the compact ioctl `0xa00100cc` is now
-     implemented but was not exercised in the latest harness run.
-   - Decide the non-fake COM1 path from evidence: either correct the external
-     SDMMC profile/config data to the real-device COM1 profile, or identify the
-     missing real hardware/config probe that should rewrite/select those files.
-     Do not add runtime byte rewriting in the emulator.
-   - Temporary diagnostic hook: `main.cpp` logs entry/return of the
-     `iNavi.exe` key `0xc3` getter at `0x1d13c..0x1d170`, plus config load
-     entry at `0x6bd18` and key `0xc3` insertions at `0x6c1a8`. Remove it
-     after the profile source is identified.
-   - Temporary diagnostic file trace: `coredll_fs.cpp` logs opens/reads/writes
-     for `INavi\res\values.dat` and `iNaviData\config.bin`, including caller
-     RA and file offsets. Remove or demote after the COM profile source is
-     settled.
-   - Temporary diagnostic serial mapping: `serial_devices.json` maps guest
-     `COM7:` to host `COM21` while this dump selects COM7. Restore the real
-     `COM1:` map after the profile/config source is settled.
-   - Add real handlers only when a device protocol is understood; stubs must remain honest no-op devices.
+2. Modal and overlay input
+   - Make topmost/modal guest windows receive touch first.
+   - Prevent under-layer controls from receiving clicks while a popup,
+     safety screen, or searching overlay is active.
+   - Keep bottom bar/right-side controls in correct guest z-order after UI
+     transitions.
+   - Diagnose popup-audio-without-popup as a window activation/paint/message
+     ordering issue, not an audio issue.
 
-4. Performance work
-   - Profile route search, file reads, and redraw frequency before adding more threads.
-   - Keep host serial reads nonblocking so missing GPS data cannot freeze the UI.
-   - Revisit expensive software floating-point paths after correctness stabilizes.
+3. GPS retest
+   - Keep using the temporary `COM7:` -> host feeder mapping only while this
+     SDMMC dump selects COM7.
+   - Re-test with the NMEA feeder continuously writing after guest open,
+     because the app calls `PurgeComm(..., 0x0f)` after serial setup.
+   - Capture `CreateFileW`, `GetCommState`, `SetCommState`, `ClearCommError`,
+     and `ReadFile` evidence for the active guest COM path.
+   - After the profile/config source is settled, restore the intended real map:
+     guest `COM1:` -> host NMEA feeder at `9600 8N1`.
 
-5. Build hygiene
-   - Keep `--serial-map` documented in scripts and examples.
-   - Keep `--sdmmc-path` documented as the host directory backing guest `\SDMMC Disk`.
-   - Keep logs specific enough to diagnose routing without flooding every frame.
-   - Keep SDK ordinal evidence in code comments or progress notes when adding
-     new coredll handlers. The `SetWindowTextW` fix was based on the CE 4.2
-     MIPSII SDK import library, not a guessed ordinal.
+## Next
+
+4. COM profile source
+   - Continue from the confirmed app-data/profile evidence:
+     `values.dat` key `0xc3=4` and `iNaviData\config.bin` offset `0x80=06 00`.
+   - Decide whether the current SDMMC dump is from the wrong device/profile or
+     whether a still-missing hardware/config probe should rewrite/select those
+     files before launch.
+   - Keep A/B byte patches as evidence only. Do not add runtime byte rewriting
+     to the emulator.
+
+5. Stream-device tracing
+   - Use `DEVICES.md` as the current evidence index.
+   - Add bounded `DeviceIoControl` tracing for `SMB1:` and `MFS1:`:
+     control code, input size, output size, return value, transferred count,
+     and small buffer previews.
+   - Implement sensor handlers only after real guest callsites are observed.
+   - Keep `SMB1:` and `MFS1:` as ioctl/stream devices, not serial ports.
+   - Leave stubs honest: unsupported device behavior should fail/no-op
+     consistently instead of inventing app-specific state.
+
+6. Performance
+   - Profile route search, file reads, serial reads, and redraw frequency before
+     adding more threads.
+   - Keep host serial reads nonblocking.
+   - Revisit heavy software floating-point paths after correctness stabilizes.
+   - Avoid broad logging that floods every frame or every tight polling loop.
+
+## Later
+
+7. Device backends
+   - Consider an `I2C2:` model if `SMB380.dll`/`YAS526B.dll` behavior becomes
+     necessary through real guest calls.
+   - Add narrow named handlers for `PIC1:`, `BTN1:`, `LSD1:`, `CAM1:`, or
+     `TWV1:` only after their protocol is identified.
+   - Keep `UID1:`/`NANDUUID_RETURN` narrow and evidence-based.
+
+8. Cleanup
+   - Remove or demote temporary diagnostics once each investigation is settled.
+   - Keep CE SDK ordinal evidence near code changes when adding coredll exports.
+   - Keep `README.md`, `PROGRESS.md`, `TODO.md`, `KNOWN_BUGS.md`, and
+     `DEVICES.md` synchronized after meaningful fixes.
