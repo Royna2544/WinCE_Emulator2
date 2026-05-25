@@ -399,16 +399,28 @@ static void writePpm(const fs::path &p, const Framebuffer &fb, int stage) {
 
 static void hookInvalid(uc_engine *uc, uc_mem_type type, uint64_t addr,
                         int size, int64_t value, void *) {
-  uint32_t pc = 0, ra = 0, sp = 0, v0 = 0, a0 = 0, s7 = 0;
+  uint32_t pc = 0, ra = 0, sp = 0, v0 = 0, a0 = 0, a1 = 0, s7 = 0;
   uc_reg_read(uc, UC_MIPS_REG_PC, &pc);
   uc_reg_read(uc, UC_MIPS_REG_RA, &ra);
   uc_reg_read(uc, UC_MIPS_REG_SP, &sp);
   uc_reg_read(uc, UC_MIPS_REG_V0, &v0);
   uc_reg_read(uc, UC_MIPS_REG_A0, &a0);
+  uc_reg_read(uc, UC_MIPS_REG_A1, &a1);
   uc_reg_read(uc, UC_MIPS_REG_S7, &s7);
   spdlog::warn("unmapped memory type={} addr=0x{:08x} size={} pc=0x{:08x} "
-               "ra=0x{:08x} sp=0x{:08x} v0=0x{:08x} a0=0x{:08x} s7=0x{:08x}",
-               int(type), uint32_t(addr), size, pc, ra, sp, v0, a0, s7);
+               "ra=0x{:08x} sp=0x{:08x} v0=0x{:08x} a0=0x{:08x} a1=0x{:08x} s7=0x{:08x}",
+               int(type), uint32_t(addr), size, pc, ra, sp, v0, a0, a1, s7);
+  uint32_t words[8]{};
+  if (a0 && uc_mem_read(uc, a0, words, sizeof(words)) == UC_ERR_OK) {
+    spdlog::warn("unmapped memory a0 words: {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x}",
+                 words[0], words[1], words[2], words[3], words[4], words[5],
+                 words[6], words[7]);
+  }
+  if (a1 && a1 != a0 && uc_mem_read(uc, a1, words, sizeof(words)) == UC_ERR_OK) {
+    spdlog::warn("unmapped memory a1 words: {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x}",
+                 words[0], words[1], words[2], words[3], words[4], words[5],
+                 words[6], words[7]);
+  }
 }
 
 static void hookProfileSettingC3(uc_engine *uc, uint64_t address, uint32_t,
@@ -506,6 +518,28 @@ static void hookSerialOpenWrapper(uc_engine *uc, uint64_t address, uint32_t,
   readGuestU32(uc, sp + 0x14, extra);
   spdlog::info("diag serial open wrapper enter ra=0x{:08x} obj=0x{:08x} name=0x{:08x} \"{}\" access=0x{:08x} share=0x{:08x} flags=0x{:08x} extra=0x{:08x}",
                ra, a0, a1, readGuestWideLossy(uc, a1, 64), a2, a3, flags, extra);
+}
+
+static void hookExitCleanup(uc_engine *uc, uint64_t address, uint32_t, void *) {
+  uint32_t ra = 0, sp = 0, a0 = 0, a1 = 0, a2 = 0, a3 = 0, s5 = 0;
+  uc_reg_read(uc, UC_MIPS_REG_RA, &ra);
+  uc_reg_read(uc, UC_MIPS_REG_SP, &sp);
+  uc_reg_read(uc, UC_MIPS_REG_A0, &a0);
+  uc_reg_read(uc, UC_MIPS_REG_A1, &a1);
+  uc_reg_read(uc, UC_MIPS_REG_A2, &a2);
+  uc_reg_read(uc, UC_MIPS_REG_A3, &a3);
+  uc_reg_read(uc, UC_MIPS_REG_S5, &s5);
+  uint32_t savedRa = 0, savedS5 = 0;
+  readGuestU32(uc, sp + 0x24, savedRa);
+  readGuestU32(uc, sp + 0x1c, savedS5);
+  if (address == 0x0048f964) {
+    spdlog::warn("diag exit cleanup enter pc=0x{:08x} ra=0x{:08x} sp=0x{:08x} a0=0x{:08x} a1=0x{:08x} a2=0x{:08x} a3=0x{:08x}",
+                 uint32_t(address), ra, sp, a0, a1, a2, a3);
+  } else if (address == 0x0048fa98) {
+    spdlog::warn("diag exit cleanup epilogue pc=0x{:08x} ra=0x{:08x} sp=0x{:08x} savedRa=0x{:08x} s5=0x{:08x} savedS5=0x{:08x} stack={}",
+                 uint32_t(address), ra, sp, savedRa, s5, savedS5,
+                 readGuestHex(uc, sp, 0x30));
+  }
 }
 
 struct ModuleLoader {
@@ -719,6 +753,7 @@ struct ModuleLoader {
     bindImports(pe);
     if (synthetic) {
       synthetic->registerLoadedModule(pe.moduleKey, pe.path, pe.loadBase,
+                                      pe.sizeOfImage,
                                       pe.exportsByName, pe.exportsByOrdinal);
     }
     return &pe;
@@ -774,6 +809,7 @@ struct ModuleLoader {
           auto [it, inserted] = modules.emplace(key, std::move(pe));
           synthetic->registerLoadedModule(
               it->second.moduleKey, it->second.path, it->second.loadBase,
+              it->second.sizeOfImage,
               it->second.exportsByName, it->second.exportsByOrdinal);
           spdlog::warn("using synthetic {} because no real DLL was found in "
                        "search paths",
@@ -837,6 +873,7 @@ struct ModuleLoader {
       bindImports(pe);
       if (synthetic) {
         synthetic->registerLoadedModule(pe.moduleKey, pe.path, pe.loadBase,
+                                        pe.sizeOfImage,
                                         pe.exportsByName, pe.exportsByOrdinal);
       }
       existing = it;
@@ -904,6 +941,7 @@ static int runImage(PeImage &pe, const std::vector<fs::path> &dllSearchDirs,
     uc_hook serialOpenWrapperHook{};
     uc_hook serialPortSetterHook{};
     uc_hook gpsPortLookupHook{};
+    uc_hook exitCleanupHook{};
     if (lowerAscii(main->path.filename().string()) == "inavi.exe") {
       const uc_err hookErr =
           uc_hook_add(uc, &profileSettingHook, UC_HOOK_CODE,
@@ -931,6 +969,9 @@ static int runImage(PeImage &pe, const std::vector<fs::path> &dllSearchDirs,
       uc_hook_add(uc, &gpsPortLookupHook, UC_HOOK_CODE,
                   (void *)hookSerialOpenWrapper, nullptr, 0x000319b0,
                   0x000319b0);
+      uc_hook_add(uc, &exitCleanupHook, UC_HOOK_CODE,
+                  (void *)hookExitCleanup, nullptr, 0x0048f964,
+                  0x0048fa9c);
     }
     loader.preloadAvailableDlls();
     constexpr uint32_t STACK_BASE = 0x0f000000, STACK_SIZE = 0x00100000;
@@ -948,6 +989,8 @@ static int runImage(PeImage &pe, const std::vector<fs::path> &dllSearchDirs,
     uc_reg_write(uc, UC_MIPS_REG_A1, &hPrevInstance);
     uc_reg_write(uc, UC_MIPS_REG_A2, &commandLine);
     uc_reg_write(uc, UC_MIPS_REG_A3, &nCmdShow);
+    uint32_t mainReturn = synthetic.threadExitStubAddress();
+    if (mainReturn) uc_reg_write(uc, UC_MIPS_REG_RA, &mainReturn);
     uc_hook h2{};
     uc_hook_add(uc, &h2, UC_HOOK_MEM_INVALID, (void *)hookInvalid, nullptr, 1,
                 0);

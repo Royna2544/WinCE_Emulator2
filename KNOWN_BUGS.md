@@ -12,22 +12,49 @@ Symptom:
 Current evidence:
 
 - `iSearch.exe` can start and post back to the parent app.
+- `captures/inavi_autodrive_20260525_171500` shows `iSearch.exe` launching as
+  a separate headless child emulator process and receiving cross-process guest
+  messages.
 - The parent app creates a full-screen `TGNaviDlg`.
 - Logs show repeated `FindWindowW(NULL, L"MultiTBT") -> 0`.
+- If `MultiTBT.exe` is manually started with the parent
+  `INAVI_EMU_WINDOW_REGISTRY`, the parent imports the external `MultiTBT`
+  guest window and broadcasts/messages reach the helper.
+- `captures/inavi_autodrive_20260525_173452` confirms the generic headless
+  companion diagnostic resolves `FindWindowW(NULL, L"MultiTBT")`.
+- `captures/inavi_autodrive_20260525_173931` shows route/result child windows
+  being created after the final search tap, but the screenshot remains on a
+  destination/current-position information dialog.
+- `captures/inavi_autodrive_20260525_191308` showed a now-fixed emulator
+  regression where empty blocking `GetMessageW` returned `0` and caused MFC to
+  enter shutdown/CRT cleanup.
+- `captures/inavi_autodrive_20260525_191809` showed no repeat of that route
+  `pc=0` crash after fixing `GetMessageW` empty-queue blocking and preserving
+  guest `$ra` across cooperative `Sleep`/wait wake-ups.
 - No guest `CreateProcessW` for `\TBT\MultiTBT.exe` has been observed in the
   current logs.
+- `coredll #1049` was verified as `_msize` in the CE 4.2 MIPSII SDK and is now
+  implemented; this removed one unsupported CRT call from the route path.
+- The previous shared in-runtime `iSearch.exe` path could crash at `pc=0` after
+  a synchronous message returned. Defaulting guest `CreateProcessW` to real
+  separate child emulator processes avoids that specific crash in the latest
+  bounded run.
 
 Current hypothesis:
 
 - The route stack expects a companion/session window or process that the
   emulator is not starting or discovering.
-- Window ordering may also hide the route-search UI behind another guest
-  surface, but the missing `MultiTBT` evidence is the current lead.
+- The emulator may need a generic companion-process configuration if real-device
+  evidence confirms `MultiTBT` is normally launched outside the observed
+  `CreateProcessW` path.
+- After `MultiTBT` is present, the current lead moves to wrong hit target or
+  paint/z-order/compositing for the route-result windows.
 
 Status:
 
-- Not fixed. Do not hardcode a `MultiTBT` launch. Use real-device evidence or a
-  generic external companion configuration if one is justified.
+- Still not complete, but the route `pc=0` crash is fixed in the current
+  working tree. Do not hardcode a `MultiTBT` launch. Use real-device evidence
+  or a generic external companion configuration if one is justified.
 
 ## Modal And Overlay Routing Is Still Wrong
 
@@ -125,8 +152,13 @@ Current evidence:
 
 - Owner-thread tracking and queued/yielded cross-thread `SendMessageW` reduced
   the previous `pc=0`/unaligned crash.
-- The model is still cooperative and may contribute to UI lag when guest code
-  expects strict synchronous behavior.
+- Cross-thread `SendMessageW` now blocks the sender until the owner-thread
+  wndproc returns, instead of letting the sender continue immediately.
+- A separate scheduler bug was fixed: blocked guest-thread waits now preserve
+  `$ra`; wake-up resumes from the saved `PC` return slot instead of overwriting
+  the guest call-return register.
+- The model is still cooperative and may contribute to UI lag or dead waits in
+  edge cases.
 
 Status:
 
@@ -138,9 +170,15 @@ Symptom:
 
 - Startup, GPS/map updates, and route search can lag badly compared with real
   hardware expectations.
+- Host mouse input can be queued quickly but not delivered until much later.
 
 Likely areas:
 
+- Long guest slices while input is pending.
+- Synchronous `SendMessageW`/wndproc work that cannot be interrupted without
+  breaking call semantics.
+- Large startup/route UI message bursts, including child window creation and
+  cross-process companion messages.
 - Route/file helper work on the UI thread.
 - Excessive file I/O or small reads.
 - Redraw/present frequency and invalidation behavior.

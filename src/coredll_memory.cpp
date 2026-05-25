@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <vector>
 
+#include <spdlog/spdlog.h>
+
 namespace {
 
 uint32_t heapFlags(uint32_t flags) {
@@ -35,6 +37,7 @@ void SyntheticDllRuntime::registerCoredllMemoryExports(SyntheticModule& module) 
                     {0x02DD, {"LocalAllocTrace", Code::CoreDllLocalAllocTrace, &SyntheticDllRuntime::handleLocalAllocTrace}},
                     {0x03FA, {"free", Code::CoreDllFree, &SyntheticDllRuntime::handleFree}},
                     {0x0411, {"malloc", Code::CoreDllMalloc, &SyntheticDllRuntime::handleMalloc}},
+                    {0x0419, {"_msize", Code::CoreDllMsize, &SyntheticDllRuntime::handleMsize}},
                     {0x041E, {"realloc", Code::CoreDllRealloc, &SyntheticDllRuntime::handleRealloc}},
                     {0x0446, {"operator_delete", Code::CoreDllOperatorDelete, &SyntheticDllRuntime::handleOperatorDelete}},
                     {0x0447, {"operator_new", Code::CoreDllOperatorNew, &SyntheticDllRuntime::handleOperatorNew}},
@@ -67,6 +70,10 @@ bool SyntheticDllRuntime::handleLocalAlloc(SyntheticExportCode code, const Guest
 bool SyntheticDllRuntime::handleMalloc(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
     (void)code;
     ret = allocate(args.a0, false);
+    if (args.ra == 0x00327e60u || args.ra == 0x00327e6cu) {
+        spdlog::info("diag double-buffer malloc ra=0x{:08x} size=0x{:x} -> 0x{:08x} activeThread=0x{:08x}",
+                     args.ra, args.a0, ret, activeGuestThread_);
+    }
     return true;
 }
 
@@ -89,6 +96,10 @@ bool SyntheticDllRuntime::handleLocalFree(SyntheticExportCode code, const GuestC
 }
 
 bool SyntheticDllRuntime::handleFree(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
+    if (args.ra == 0x00327ee8u || args.ra == 0x00327ef0u) {
+        spdlog::info("diag double-buffer free ra=0x{:08x} ptr=0x{:08x} size={} activeThread=0x{:08x}",
+                     args.ra, args.a0, allocationSize(args.a0), activeGuestThread_);
+    }
     return handleLocalFree(code, args, ret);
 }
 
@@ -141,6 +152,12 @@ bool SyntheticDllRuntime::handleRealloc(SyntheticExportCode code, const GuestCal
         uc_mem_write(uc_, ret, bytes.data(), bytes.size());
         releaseAllocation(args.a0);
     }
+    return true;
+}
+
+bool SyntheticDllRuntime::handleMsize(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
+    (void)code;
+    ret = allocationSize(args.a0);
     return true;
 }
 

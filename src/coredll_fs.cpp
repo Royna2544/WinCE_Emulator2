@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cwctype>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -88,6 +89,53 @@ void writeGuestFileAttributeData(uc_engine* uc, uint32_t guestAddress, const WIN
     uc_mem_write(uc, guestAddress + 20, &data.ftLastWriteTime, sizeof(data.ftLastWriteTime));
     uc_mem_write(uc, guestAddress + 28, &data.nFileSizeHigh, sizeof(data.nFileSizeHigh));
     uc_mem_write(uc, guestAddress + 32, &data.nFileSizeLow, sizeof(data.nFileSizeLow));
+}
+
+std::wstring attributeCacheKey(const std::filesystem::path& path) {
+    std::wstring key = path.lexically_normal().wstring();
+    std::replace(key.begin(), key.end(), L'/', L'\\');
+    std::transform(key.begin(), key.end(), key.begin(),
+                   [](wchar_t ch) { return wchar_t(std::towlower(ch)); });
+    return key;
+}
+
+SyntheticDllRuntime::CachedFileAttributes makeCachedAttributes(const WIN32_FILE_ATTRIBUTE_DATA& data) {
+    SyntheticDllRuntime::CachedFileAttributes cached{};
+    cached.ok = true;
+    cached.attributes = data.dwFileAttributes;
+    cached.creationLow = data.ftCreationTime.dwLowDateTime;
+    cached.creationHigh = data.ftCreationTime.dwHighDateTime;
+    cached.accessLow = data.ftLastAccessTime.dwLowDateTime;
+    cached.accessHigh = data.ftLastAccessTime.dwHighDateTime;
+    cached.writeLow = data.ftLastWriteTime.dwLowDateTime;
+    cached.writeHigh = data.ftLastWriteTime.dwHighDateTime;
+    cached.sizeHigh = data.nFileSizeHigh;
+    cached.sizeLow = data.nFileSizeLow;
+    return cached;
+}
+
+WIN32_FILE_ATTRIBUTE_DATA makeFileAttributeData(const SyntheticDllRuntime::CachedFileAttributes& cached) {
+    WIN32_FILE_ATTRIBUTE_DATA data{};
+    data.dwFileAttributes = cached.attributes;
+    data.ftCreationTime.dwLowDateTime = cached.creationLow;
+    data.ftCreationTime.dwHighDateTime = cached.creationHigh;
+    data.ftLastAccessTime.dwLowDateTime = cached.accessLow;
+    data.ftLastAccessTime.dwHighDateTime = cached.accessHigh;
+    data.ftLastWriteTime.dwLowDateTime = cached.writeLow;
+    data.ftLastWriteTime.dwHighDateTime = cached.writeHigh;
+    data.nFileSizeHigh = cached.sizeHigh;
+    data.nFileSizeLow = cached.sizeLow;
+    return data;
+}
+
+bool createMayMutateFile(uint32_t desiredAccess, uint32_t creationDisposition) {
+    constexpr uint32_t kGenericWrite = 0x40000000u;
+    constexpr uint32_t kGenericAll = 0x10000000u;
+    constexpr uint32_t kFileWriteData = 0x00000002u;
+    constexpr uint32_t kFileAppendData = 0x00000004u;
+    constexpr uint32_t kDelete = 0x00010000u;
+    return (desiredAccess & (kGenericWrite | kGenericAll | kFileWriteData | kFileAppendData | kDelete)) != 0 ||
+           creationDisposition != OPEN_EXISTING;
 }
 
 void writeGuestFindData(uc_engine* uc, uint32_t guestAddress, const WIN32_FIND_DATAW& data) {
@@ -196,6 +244,9 @@ bool SyntheticDllRuntime::handleCreateFileW(SyntheticExportCode code, const Gues
     if (!hostPath.empty()) {
         host = CreateFileW(hostPath.wstring().c_str(), args.a1, args.a2, nullptr, stackArg(4), stackArg(5), nullptr);
     }
+    if (!hostPath.empty() && createMayMutateFile(args.a1, stackArg(4))) {
+        fileAttributeCache_.erase(attributeCacheKey(hostPath));
+    }
     if (host == INVALID_HANDLE_VALUE) {
         lastError_ = normalizeVirtualFileMiss(hostPath, hostPath.empty() ? ERROR_PATH_NOT_FOUND : GetLastError());
         ret = 0xffffffffu;
@@ -238,6 +289,7 @@ bool SyntheticDllRuntime::handleCreateDirectoryW(SyntheticExportCode code, const
     (void)code;
     const std::string guestPath = readUtf16(args.a0);
     const std::filesystem::path hostPath = resolveGuestPath(guestPath);
+    if (!hostPath.empty()) fileAttributeCache_.erase(attributeCacheKey(hostPath));
     const BOOL ok = !hostPath.empty() && CreateDirectoryW(hostPath.wstring().c_str(), nullptr);
     if (ok) {
         ret = 1;
@@ -257,12 +309,33 @@ bool SyntheticDllRuntime::handleGetFileAttributesW(SyntheticExportCode code, con
     (void)code;
     const std::string guestPath = readUtf16(args.a0);
     const std::filesystem::path hostPath = resolveGuestPath(guestPath);
-    ret = hostPath.empty() ? INVALID_FILE_ATTRIBUTES : GetFileAttributesW(hostPath.wstring().c_str());
-    lastError_ = ret == INVALID_FILE_ATTRIBUTES
-        ? normalizeVirtualFileMiss(hostPath, hostPath.empty() ? ERROR_PATH_NOT_FOUND : GetLastError())
-        : 0;
-    spdlog::info("GetFileAttributesW guest=\"{}\" host=\"{}\" -> 0x{:08x} lastError={}",
-                 guestPath, pathToUtf8(hostPath), ret, lastError_);
+    const std::wstring key = hostPath.empty() ? std::wstring{} : attributeCacheKey(hostPath);
+    auto cached = key.empty() ? fileAttributeCache_.end() : fileAttributeCache_.find(key);
+    if (cached != fileAttributeCache_.end()) {
+        ret = cached->second.ok ? cached->second.attributes : INVALID_FILE_ATTRIBUTES;
+        lastError_ = cached->second.ok ? 0 : cached->second.error;
+    } else {
+        WIN32_FILE_ATTRIBUTE_DATA data{};
+        const BOOL ok = !hostPath.empty() &&
+                        GetFileAttributesExW(hostPath.wstring().c_str(), GetFileExInfoStandard, &data);
+        if (ok) {
+            auto value = makeCachedAttributes(data);
+            ret = value.attributes;
+            lastError_ = 0;
+            if (!key.empty()) fileAttributeCache_[key] = value;
+        } else {
+            ret = INVALID_FILE_ATTRIBUTES;
+            lastError_ = normalizeVirtualFileMiss(hostPath, hostPath.empty() ? ERROR_PATH_NOT_FOUND : GetLastError());
+            if (!key.empty()) fileAttributeCache_[key] = CachedFileAttributes{false, lastError_};
+        }
+    }
+    if (ret == INVALID_FILE_ATTRIBUTES) {
+        spdlog::warn("GetFileAttributesW miss guest=\"{}\" host=\"{}\" lastError={}",
+                     guestPath, pathToUtf8(hostPath), lastError_);
+    } else {
+        spdlog::debug("GetFileAttributesW guest=\"{}\" host=\"{}\" -> 0x{:08x}",
+                      guestPath, pathToUtf8(hostPath), ret);
+    }
     return true;
 }
 
@@ -271,27 +344,51 @@ bool SyntheticDllRuntime::handleGetFileAttributesExW(SyntheticExportCode code, c
     const std::string guestPath = readUtf16(args.a0);
     const std::filesystem::path hostPath = resolveGuestPath(guestPath);
     WIN32_FILE_ATTRIBUTE_DATA data{};
-    const BOOL ok = !hostPath.empty() && args.a1 == GetFileExInfoStandard &&
-                    GetFileAttributesExW(hostPath.wstring().c_str(), GetFileExInfoStandard, &data);
+    const std::wstring key = hostPath.empty() ? std::wstring{} : attributeCacheKey(hostPath);
+    auto cached = key.empty() ? fileAttributeCache_.end() : fileAttributeCache_.find(key);
+    bool ok = false;
+    if (args.a1 == GetFileExInfoStandard && cached != fileAttributeCache_.end()) {
+        ok = cached->second.ok;
+        if (ok) {
+            data = makeFileAttributeData(cached->second);
+        } else {
+            lastError_ = cached->second.error;
+        }
+    } else if (!hostPath.empty() && args.a1 == GetFileExInfoStandard &&
+               GetFileAttributesExW(hostPath.wstring().c_str(), GetFileExInfoStandard, &data)) {
+        ok = true;
+        if (!key.empty()) fileAttributeCache_[key] = makeCachedAttributes(data);
+    }
     if (ok) {
         writeGuestFileAttributeData(uc_, args.a2, data);
         ret = 1;
         lastError_ = 0;
     } else {
         ret = 0;
-        const uint32_t error = hostPath.empty()
-            ? ERROR_PATH_NOT_FOUND
-            : (args.a1 == GetFileExInfoStandard ? GetLastError() : ERROR_INVALID_PARAMETER);
-        lastError_ = normalizeVirtualFileMiss(hostPath, error);
+        if (cached == fileAttributeCache_.end()) {
+            const uint32_t error = hostPath.empty()
+                ? ERROR_PATH_NOT_FOUND
+                : (args.a1 == GetFileExInfoStandard ? GetLastError() : ERROR_INVALID_PARAMETER);
+            lastError_ = normalizeVirtualFileMiss(hostPath, error);
+            if (!key.empty() && args.a1 == GetFileExInfoStandard) {
+                fileAttributeCache_[key] = CachedFileAttributes{false, lastError_};
+            }
+        }
     }
-    spdlog::info("GetFileAttributesExW guest=\"{}\" host=\"{}\" level={} out=0x{:08x} -> {} lastError={}",
-                 guestPath, pathToUtf8(hostPath), args.a1, args.a2, ret, lastError_);
+    if (ret) {
+        spdlog::debug("GetFileAttributesExW guest=\"{}\" host=\"{}\" level={} out=0x{:08x} -> 1",
+                      guestPath, pathToUtf8(hostPath), args.a1, args.a2);
+    } else {
+        spdlog::warn("GetFileAttributesExW miss guest=\"{}\" host=\"{}\" level={} out=0x{:08x} lastError={}",
+                     guestPath, pathToUtf8(hostPath), args.a1, args.a2, lastError_);
+    }
     return true;
 }
 
 bool SyntheticDllRuntime::handleDeleteFileW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
     (void)code;
     const std::filesystem::path hostPath = resolveGuestPath(readUtf16(args.a0));
+    if (!hostPath.empty()) fileAttributeCache_.erase(attributeCacheKey(hostPath));
     const BOOL ok = !hostPath.empty() && DeleteFileW(hostPath.wstring().c_str());
     ret = ok ? 1 : 0;
     lastError_ = ret ? 0 : GetLastError();

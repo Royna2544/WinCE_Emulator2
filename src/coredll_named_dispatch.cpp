@@ -1477,7 +1477,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             : resolveGuestPath(application);
         spdlog::info("CreateProcessW callsite ra=0x{:08x} app=\"{}\" cmd=\"{}\" pi=0x{:08x}",
                      args.ra, application, commandLine, processInfo);
-        const bool shouldRunInRuntime = !hostApplication.empty();
+        const bool shouldRunInRuntime = inRuntimeChildProcessesEnabled() && !hostApplication.empty();
         if (!application.empty() && (hostApplication.empty() || !std::filesystem::exists(hostApplication))) {
             lastError_ = 2;
             ret = 0;
@@ -1560,6 +1560,8 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
                     buildQuietChildEnvironmentBlock(captureChildLog, childEnvironmentEntries);
                 STARTUPINFOW startup{};
                 startup.cb = sizeof(startup);
+                startup.dwFlags = STARTF_USESHOWWINDOW;
+                startup.wShowWindow = SW_HIDE;
                 HANDLE childStdin = nullptr;
                 HANDLE childStdout = nullptr;
                 HANDLE childStderr = nullptr;
@@ -1711,6 +1713,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
                 registerLoadedModule(syntheticModule->moduleName,
                                      std::filesystem::path("[synthetic]") / syntheticModule->moduleName,
                                      syntheticModule->imageBase,
+                                     syntheticModule->imageSize,
                                      syntheticModule->exportsByName,
                                      syntheticModule->exportsByOrdinal);
                 ret = syntheticModule->imageBase;
@@ -2948,6 +2951,16 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
         ret = a0 ? 1 : 0;
     } else if (ordinal == ord(CoredllOrdinal::PostQuitMessage)) {
         quitPosted_ = true;
+        std::string visibleRoots;
+        for (const auto& [hwnd, window] : windows_) {
+            if (window.destroyed || !window.visible || window.parent) {
+                continue;
+            }
+            if (!visibleRoots.empty()) visibleRoots += ", ";
+            visibleRoots += fmt::format("0x{:08x}:{}", hwnd, window.title);
+        }
+        spdlog::warn("PostQuitMessage exitCode=0x{:08x} ra=0x{:08x} activeThread=0x{:08x} queued={} visibleRoots=[{}]",
+                     a0, args.ra, activeGuestThread_, guestMessages_.size(), visibleRoots);
         GuestMessage message{};
         message.message = 0x0012; // WM_QUIT
         message.wParam = a0;
@@ -3128,6 +3141,13 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastMessagePos_ = uint32_t(uint16_t(message.x) | (uint32_t(uint16_t(message.y)) << 16));
             lastMessageTime_ = message.time;
             writeGuestMessage(a0, message);
+            if ((!peek || (removeFlags & 1)) && a0) {
+                if (message.synchronousSender) {
+                    retrievedSyncSendersByMsgPtr_[a0] = message.synchronousSender;
+                } else {
+                    retrievedSyncSendersByMsgPtr_.erase(a0);
+                }
+            }
             ret = 0;
         } else {
             if (message.message == 0x0007 || message.message == 0x0008 ||
@@ -3140,6 +3160,13 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastMessagePos_ = uint32_t(uint16_t(message.x) | (uint32_t(uint16_t(message.y)) << 16));
             lastMessageTime_ = message.time;
             writeGuestMessage(a0, message);
+            if ((!peek || (removeFlags & 1)) && a0) {
+                if (message.synchronousSender) {
+                    retrievedSyncSendersByMsgPtr_[a0] = message.synchronousSender;
+                } else {
+                    retrievedSyncSendersByMsgPtr_.erase(a0);
+                }
+            }
             ret = 1;
         }
     } else if (ordinal == ord(CoredllOrdinal::GetSystemInfo)) {

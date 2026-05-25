@@ -15,6 +15,7 @@ param(
     [int]$AfterTapMs = 4500,
     [AllowEmptyString()]
     [string]$Taps = "",
+    [string[]]$CompanionTarget = @(),
     [switch]$NoTaps,
     [switch]$RoutePreset,
     [string]$OutputRoot = ".\captures",
@@ -252,6 +253,25 @@ function Parse-TapPlan([string]$Plan) {
     }
 }
 
+function Stop-EmulatorProcessTree([int]$RootPid) {
+    if ($RootPid -le 0) { return }
+    $children = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$RootPid" -ErrorAction SilentlyContinue)
+    foreach ($child in $children) {
+        Stop-EmulatorProcessTree ([int]$child.ProcessId)
+    }
+    $processToStop = Get-Process -Id $RootPid -ErrorAction SilentlyContinue
+    if ($processToStop -and -not $processToStop.HasExited) {
+        try {
+            [void]$processToStop.CloseMainWindow()
+            if (-not $processToStop.WaitForExit(2000)) {
+                $processToStop.Kill()
+                $processToStop.WaitForExit()
+            }
+        } catch {
+        }
+    }
+}
+
 $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
 $runDir = Join-Path $OutputRoot "inavi_autodrive_$timestamp"
 New-Item -ItemType Directory -Force -Path $runDir | Out-Null
@@ -283,6 +303,7 @@ $emulatorPath = (Resolve-Path $Emulator).Path
 $workingDirectory = (Resolve-Path ".").Path
 $argumentString = ($argumentList | ForEach-Object { Quote-Arg $_ }) -join " "
 $process = $null
+$companionProcesses = [System.Collections.Generic.List[Diagnostics.Process]]::new()
 
 $events = [System.Collections.Generic.List[object]]::new()
 $exitCode = $null
@@ -296,6 +317,49 @@ try {
                              -RedirectStandardError $stderrPath `
                              -PassThru
     $events.Add([pscustomobject]@{ kind="launch"; pid=$process.Id; args=$argumentList; time=(Get-Date).ToString("o") })
+
+    if ($CompanionTarget.Count -gt 0) {
+        $windowRegistryPath = Join-Path $runDir ("inavi_emu_windows_{0}.json" -f $process.Id)
+        $previousWindowRegistry = [Environment]::GetEnvironmentVariable("INAVI_EMU_WINDOW_REGISTRY", "Process")
+        [Environment]::SetEnvironmentVariable("INAVI_EMU_WINDOW_REGISTRY", (Resolve-Path $runDir).Path + "\" + (Split-Path -Leaf $windowRegistryPath), "Process")
+        try {
+            $companionIndex = 1
+            foreach ($companion in $CompanionTarget) {
+                $companionPath = (Resolve-Path $companion).Path
+                $companionArgs = @($companionPath, "--registry", $Registry, "--sdmmc-path", $SdmmcPath)
+                if ($SerialMap) {
+                    $companionArgs += @("--serial-map", $SerialMap)
+                }
+                $companionArgs += @("--instructions", "250000000", "--headless")
+                $companionArgs += $DllSearchDir
+                $companionArgString = ($companionArgs | ForEach-Object { Quote-Arg $_ }) -join " "
+                $companionBase = [IO.Path]::GetFileNameWithoutExtension($companionPath)
+                $companionStdout = Join-Path $runDir ("manual_companion_{0}_{1}.stdout.log" -f $companionIndex, $companionBase)
+                $companionStderr = Join-Path $runDir ("manual_companion_{0}_{1}.stderr.log" -f $companionIndex, $companionBase)
+                $companionProcess = Start-Process -FilePath $emulatorPath `
+                                                  -ArgumentList $companionArgString `
+                                                  -WorkingDirectory $workingDirectory `
+                                                  -RedirectStandardOutput $companionStdout `
+                                                  -RedirectStandardError $companionStderr `
+                                                  -WindowStyle Hidden `
+                                                  -PassThru
+                $companionProcesses.Add($companionProcess)
+                $events.Add([pscustomobject]@{
+                    kind="companion_launch"
+                    pid=$companionProcess.Id
+                    target=$companionPath
+                    args=$companionArgs
+                    windowRegistry=$windowRegistryPath
+                    stdout=(Split-Path -Leaf $companionStdout)
+                    stderr=(Split-Path -Leaf $companionStderr)
+                    time=(Get-Date).ToString("o")
+                })
+                $companionIndex++
+            }
+        } finally {
+            [Environment]::SetEnvironmentVariable("INAVI_EMU_WINDOW_REGISTRY", $previousWindowRegistry, "Process")
+        }
+    }
 
     $hwnd = Get-VisibleWindowForProcess $process $StartupTimeoutMs
     if ($hwnd -eq [IntPtr]::Zero) {
@@ -355,6 +419,21 @@ try {
         $exitCode = $process.ExitCode
     }
 } finally {
+    if ($process -and -not $KeepAlive) {
+        Stop-EmulatorProcessTree $process.Id
+    }
+    foreach ($companionProcess in $companionProcesses) {
+        if ($companionProcess -and -not $companionProcess.HasExited) {
+            try {
+                [void]$companionProcess.CloseMainWindow()
+                if (-not $companionProcess.WaitForExit(2000)) {
+                    $companionProcess.Kill()
+                    $companionProcess.WaitForExit()
+                }
+            } catch {
+            }
+        }
+    }
     [Environment]::SetEnvironmentVariable("INAVI_EMU_CHILD_LOG_DIR", $previousChildLogDir, "Process")
     $manifest = [pscustomobject]@{
         runDir = (Resolve-Path $runDir).Path

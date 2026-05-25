@@ -67,6 +67,7 @@ bool SyntheticDllRuntime::handleEndPaint(SyntheticExportCode code, const GuestCa
     }
     ret = windows_.count(args.a0) ? 1 : 0;
     lastError_ = ret ? 0 : 1400;
+    if (ret) presentHostWindows(true);
     return true;
 }
 
@@ -150,6 +151,7 @@ bool SyntheticDllRuntime::handleReleaseDC(SyntheticExportCode code, const GuestC
         guestHandles_.erase(handle);
         lastError_ = 0;
         ret = 1;
+        presentHostWindows(false);
     }
     return true;
 }

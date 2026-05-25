@@ -47,8 +47,9 @@ D:\INAVI_Emulator
 ## Important Current Limits
 
 - Route search still does not complete. Current logs show the app can start
-  `iSearch.exe`, then later polls for a `MultiTBT` window that is not observed
-  launching through guest `CreateProcessW`.
+  `iSearch.exe` as a separate headless child emulator process, then later polls
+  for a `MultiTBT` window that is not observed launching through guest
+  `CreateProcessW`.
 - Modal/window ordering is still incomplete. Popups can lag behind audio, and
   under-layer buttons can still receive touches in some overlay states.
 - The current SDMMC/profile data can still select `COM7:` for GPS even though
@@ -150,6 +151,20 @@ iNavi_Unicorn_Emulator.exe <primary.exe>
   [--headless]
   [dll_search_dir ...]
 ```
+
+Guest `CreateProcessW` children default to separate child emulator processes
+and are launched with `--headless` plus hidden/no-console host startup flags.
+Shared in-runtime child EXE launch is a diagnostic opt-in only through
+`INAVI_EMU_INPROC_CHILD_PROCESS`.
+
+The autodrive harness also supports generic diagnostic companions:
+
+```bash
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/autodrive_inavi.ps1 -CompanionTarget 'D:\INAVI_Emulator\INAVI\TBT\MultiTBT.exe'
+```
+
+This shares the parent run's guest-window registry and keeps the companion
+headless. It is a diagnostic launcher, not an emulator-side app-name shortcut.
 
 Important path rule:
 

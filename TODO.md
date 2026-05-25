@@ -5,18 +5,32 @@ Last refreshed: 2026-05-25.
 ## Immediate
 
 1. Route-search stall
-   - Capture a fresh route-search run with focused logging for
-     `CreateProcessW`, `FindWindowW`, `SetWindowTextW`, `ShowWindow`,
-     `SetWindowPos`, `SendMessageW`, `PostMessageW`, and `DeviceIoControl`.
+   - Continue from `captures/inavi_autodrive_20260525_191809`, not the older
+     `pc=0` route crash. The empty-queue `GetMessageW` false-quit and
+     guest-thread `$ra` corruption are fixed in the current working tree.
    - Determine why the app polls for `MultiTBT` but no guest launch for
      `\TBT\MultiTBT.exe` appears in logs.
+   - Current diagnostic run may manually start `\SDMMC Disk\TBT\MultiTBT.exe`
+     beside `INavi.exe` to test whether the route-search poll is waiting for
+     a companion process/window. This is not a final emulator behavior.
+   - When manually starting `MultiTBT.exe`, pass the parent run's
+     `INAVI_EMU_WINDOW_REGISTRY` and `--headless`; otherwise it publishes to a
+     private registry and/or opens an unnecessary host presenter while the
+     parent still sees `FindWindowW(NULL, L"MultiTBT") -> 0`.
+   - Use the autodrive `-CompanionTarget` option for bounded generic companion
+     diagnostics instead of adding emulator app-name special cases.
+   - Keep normal `CreateProcessW` children as real separate child emulator
+     processes. Use `INAVI_EMU_INPROC_CHILD_PROCESS` only as a diagnostic
+     opt-in for shared in-runtime launch.
    - Wait for or use real-device evidence if it proves `MultiTBT` is a session
      companion.
    - If needed, design a generic session-companion configuration. Do not
      hardcode `MultiTBT.exe`, `iSearch.exe`, `happyway_win.exe`, or app paths in
      emulator logic.
-   - Confirm the expected full-screen route-search/searching UI is raised
-     before long helper work begins.
+   - Continue from `captures/inavi_autodrive_20260525_173931`: the final
+     search tap creates route/result child windows, but the visible UI remains
+     in a destination/current-position information dialog. Separate wrong tap
+     target from paint/z-order/compositing failure.
 
 2. Modal and overlay input
    - Make topmost/modal guest windows receive touch first.
@@ -59,6 +73,11 @@ Last refreshed: 2026-05-25.
      consistently instead of inventing app-specific state.
 
 6. Performance
+   - Reduce input lag caused by queued host mouse messages waiting behind long
+     guest slices and synchronous window/message work.
+   - Re-check input lag after the wait/sleep `$ra` preservation fix, because
+     GPS worker threads now survive repeated serial read/message cycles instead
+     of eventually poisoning the scheduler state.
    - Profile route search, file reads, serial reads, and redraw frequency before
      adding more threads.
    - Keep host serial reads nonblocking.
@@ -77,5 +96,7 @@ Last refreshed: 2026-05-25.
 8. Cleanup
    - Remove or demote temporary diagnostics once each investigation is settled.
    - Keep CE SDK ordinal evidence near code changes when adding coredll exports.
+   - If the `MultiTBT` companion requirement is confirmed, replace the manual
+     launch experiment with a generic configured companion-process mechanism.
    - Keep `README.md`, `PROGRESS.md`, `TODO.md`, `KNOWN_BUGS.md`, and
      `DEVICES.md` synchronized after meaningful fixes.

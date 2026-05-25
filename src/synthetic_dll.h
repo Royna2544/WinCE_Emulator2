@@ -37,6 +37,19 @@ public:
         uint32_t processId{};
         uint32_t threadId{};
     };
+    struct CachedFileAttributes {
+        bool ok{};
+        uint32_t error{};
+        uint32_t attributes{};
+        uint32_t creationLow{};
+        uint32_t creationHigh{};
+        uint32_t accessLow{};
+        uint32_t accessHigh{};
+        uint32_t writeLow{};
+        uint32_t writeHigh{};
+        uint32_t sizeHigh{};
+        uint32_t sizeLow{};
+    };
     using GuestProcessLauncher = std::function<bool(GuestProcessLaunch&)>;
 
     explicit SyntheticDllRuntime(uc_engine* uc);
@@ -48,6 +61,7 @@ public:
     void setSdmmcHostPath(const std::filesystem::path& path);
     void setSerialDeviceMapPath(const std::filesystem::path& path);
     void registerLoadedModule(const std::string& moduleName, const std::filesystem::path& path, uint32_t base,
+                              uint32_t imageSize,
                               const std::map<std::string, uint32_t>& exportsByName = {},
                               const std::map<uint16_t, uint32_t>& exportsByOrdinal = {});
     void setGuestProcessLauncher(GuestProcessLauncher launcher);
@@ -63,6 +77,7 @@ public:
     void flushRegistry();
     bool hasHostWindows() const;
     void runHostMessageLoopUntilClosed(bool showHostWindows = true);
+    uint32_t threadExitStubAddress() const;
     void queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t message, int32_t hostX, int32_t hostY);
     std::optional<SyntheticModule> createModule(const std::string& dllName);
     static void hookCode(uc_engine* uc, uint64_t address, uint32_t size, void* user);
@@ -191,6 +206,7 @@ private:
         CoreDllFree,
         CoreDllMalloc,
         CoreDllRealloc,
+        CoreDllMsize,
         CoreDllOperatorDelete,
         CoreDllOperatorNew,
         CoreDllOperatorVectorNew,
@@ -633,6 +649,7 @@ private:
         std::string name;
         std::filesystem::path path;
         uint32_t base{};
+        uint32_t imageSize{};
         std::map<std::string, uint32_t> exportsByName;
         std::map<uint16_t, uint32_t> exportsByOrdinal;
     };
@@ -683,6 +700,13 @@ private:
         uint32_t stage{};
         std::string sourceName;
     };
+    struct PendingMessageTransfer {
+        uint32_t hwnd{};
+        uint32_t message{};
+        uint32_t originalRa{};
+        uint32_t synchronousSender{};
+        std::string sourceName;
+    };
     struct GuestCpuContext {
         std::map<int, uint32_t> registers;
         bool valid{};
@@ -693,6 +717,7 @@ private:
         Running,
         Waiting,
         WaitingForMessage,
+        WaitingForSendMessage,
         Terminated,
     };
     struct GuestThreadState {
@@ -742,6 +767,7 @@ private:
     uint32_t blockingApiContinuationStub_ = 0;
     uint32_t updateWindowContinuationStub_ = 0;
     uint32_t threadExitStub_ = 0;
+    uint32_t messageTransferContinuationStub_ = 0;
     std::string mainModulePath_ = "\\INavi\\INavi.exe";
     std::string sdmmcGuestRoot_ = "\\SDMMC Disk";
     std::filesystem::path sdmmcHostRoot_;
@@ -785,6 +811,7 @@ private:
     std::vector<CachedWaveOutDevice> cachedWaveOutDevices_;
     std::map<uint32_t, std::string> registryHandles_;
     std::map<uint32_t, std::string> fileHandleDebugNames_;
+    std::map<std::wstring, CachedFileAttributes> fileAttributeCache_;
     std::map<uint32_t, SerialDeviceConfig> guestDeviceConfigsByHandle_;
     std::map<uint32_t, uint32_t> fileReadCounts_;
     std::map<uint32_t, uint32_t> fileSeekCounts_;
@@ -795,13 +822,16 @@ private:
     std::vector<PendingCreateWindow> pendingCreateWindows_;
     std::vector<PendingBlockingApi> pendingBlockingApis_;
     std::vector<PendingUpdateWindow> pendingUpdateWindows_;
+    std::vector<PendingMessageTransfer> pendingMessageTransfers_;
     std::deque<GuestMessage> guestMessages_;
+    std::map<uint32_t, uint32_t> retrievedSyncSendersByMsgPtr_;
     bool interactiveSliceActive_{};
     bool interactiveSliceStopRequested_{};
     uint32_t interactiveSliceBlockCounter_{};
     uint64_t interactiveSliceInstructionBudget_{};
     std::string interactiveSliceReason_;
     std::chrono::steady_clock::time_point interactiveSliceDeadline_{};
+    std::chrono::steady_clock::time_point lastHostInputQueuedAt_{};
     uint32_t lastMessagePos_{};
     uint32_t lastMessageTime_{};
     std::vector<uintptr_t> retainedHostWindows_;
@@ -976,6 +1006,7 @@ private:
     bool handleFree(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleMalloc(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleRealloc(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleMsize(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleOperatorDelete(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleOperatorNew(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleOperatorVectorNew(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);

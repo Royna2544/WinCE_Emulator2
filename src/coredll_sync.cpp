@@ -33,21 +33,21 @@ void SyntheticDllRuntime::registerCoredllSyncExports(SyntheticModule& module) {
 bool SyntheticDllRuntime::handleInitializeCriticalSection(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
     (void)code;
     criticalSectionDepth_[args.a0] = 0;
-    ret = 1;
+    ret = reg(UC_MIPS_REG_V0);
     return true;
 }
 
 bool SyntheticDllRuntime::handleDeleteCriticalSection(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
     (void)code;
     criticalSectionDepth_.erase(args.a0);
-    ret = 1;
+    ret = reg(UC_MIPS_REG_V0);
     return true;
 }
 
 bool SyntheticDllRuntime::handleEnterCriticalSection(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
     (void)code;
     ++criticalSectionDepth_[args.a0];
-    ret = 1;
+    ret = reg(UC_MIPS_REG_V0);
     return true;
 }
 
@@ -55,7 +55,7 @@ bool SyntheticDllRuntime::handleLeaveCriticalSection(SyntheticExportCode code, c
     (void)code;
     auto it = criticalSectionDepth_.find(args.a0);
     if (it != criticalSectionDepth_.end() && it->second) --it->second;
-    ret = 1;
+    ret = reg(UC_MIPS_REG_V0);
     return true;
 }
 
