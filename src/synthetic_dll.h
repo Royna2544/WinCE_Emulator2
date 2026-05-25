@@ -62,7 +62,7 @@ public:
                                 uint32_t& threadId);
     void flushRegistry();
     bool hasHostWindows() const;
-    void runHostMessageLoopUntilClosed();
+    void runHostMessageLoopUntilClosed(bool showHostWindows = true);
     void queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t message, int32_t hostX, int32_t hostY);
     std::optional<SyntheticModule> createModule(const std::string& dllName);
     static void hookCode(uc_engine* uc, uint64_t address, uint32_t size, void* user);
@@ -240,7 +240,10 @@ private:
         CoreDllAtoi,
         CoreDllAtof,
         CoreDllAtan,
+        CoreDllCeil,
         CoreDllCos,
+        CoreDllFabs,
+        CoreDllFloor,
         CoreDllHypot,
         CoreDllPow,
         CoreDllRand,
@@ -320,6 +323,8 @@ private:
         CoreDllVsnwprintf,
         CoreDllGetCrtStorageEx,
         CoreDllGetCrtFlags,
+        CoreDllSecurityGenCookie,
+        CoreDllSecurityErrorHandler,
         CoreDllSetjmp,
         CoreDllEhvecCtor,
         CoreDllSprintf,
@@ -362,6 +367,7 @@ private:
         CoreDllBeginPaint,
         CoreDllEndPaint,
         CoreDllGetDC,
+        CoreDllGetPixel,
         CoreDllReleaseDC,
         CoreDllValidateRect,
         CoreDllGetDCEx,
@@ -1013,7 +1019,10 @@ private:
     bool handleAtoi(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleAtof(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleAtan(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleCeil(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleCos(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleFabs(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleFloor(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleHypot(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handlePow(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleRand(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
@@ -1088,6 +1097,7 @@ private:
     bool handleNarrowFormat(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleGetCrtStorageEx(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleGetCrtFlags(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleSecurityCookie(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleSetjmp(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleEhvecCtor(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleWcschr(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
@@ -1125,6 +1135,7 @@ private:
     bool handleBeginPaint(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleEndPaint(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleGetDC(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleGetPixel(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleReleaseDC(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleValidateRect(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleGetDCEx(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);

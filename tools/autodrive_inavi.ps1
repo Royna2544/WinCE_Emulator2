@@ -259,6 +259,8 @@ New-Item -ItemType Directory -Force -Path $runDir | Out-Null
 $stdoutPath = Join-Path $runDir "emulator.stdout.log"
 $stderrPath = Join-Path $runDir "emulator.stderr.log"
 $manifestPath = Join-Path $runDir "manifest.json"
+$previousChildLogDir = [Environment]::GetEnvironmentVariable("INAVI_EMU_CHILD_LOG_DIR", "Process")
+[Environment]::SetEnvironmentVariable("INAVI_EMU_CHILD_LOG_DIR", (Resolve-Path $runDir).Path, "Process")
 
 $defaultTapPlan = "650,430,safety_ok;725,35,current_position;665,35,menu_grid;135,250,route_search;500,445,recent_destination"
 $routeTapPlan = "650,430,safety_ok_1,6000;650,430,safety_ok_2,6000;650,430,safety_ok_3,6000;650,430,safety_ok_4,8000;400,365,serial_popup_ok,5000;650,430,safety_ok_after_serial,12000;760,95,red_search,9000;135,180,destination_tab,7000;500,445,bottom_confirm_1,5000;650,430,confirm_ok_1,5000;675,430,right_confirm_1,5000;650,430,confirm_ok_2,5000"
@@ -353,6 +355,7 @@ try {
         $exitCode = $process.ExitCode
     }
 } finally {
+    [Environment]::SetEnvironmentVariable("INAVI_EMU_CHILD_LOG_DIR", $previousChildLogDir, "Process")
     $manifest = [pscustomobject]@{
         runDir = (Resolve-Path $runDir).Path
         pid = if ($process) { $process.Id } else { $null }

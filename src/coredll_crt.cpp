@@ -78,6 +78,8 @@ void SyntheticDllRuntime::registerCoredllCrtExports(SyntheticModule& module) {
                     {0x047A, {"vsprintf", Code::CoreDllVsprintf, &SyntheticDllRuntime::handleNarrowFormat}},
                     {0x04CB, {"GetCRTStorageEx", Code::CoreDllGetCrtStorageEx, &SyntheticDllRuntime::handleGetCrtStorageEx}},
                     {0x04CC, {"GetCRTFlags", Code::CoreDllGetCrtFlags, &SyntheticDllRuntime::handleGetCrtFlags}},
+                    {0x0753, {"__security_gen_cookie", Code::CoreDllSecurityGenCookie, &SyntheticDllRuntime::handleSecurityCookie}},
+                    {0x0754, {"__security_error_handler", Code::CoreDllSecurityErrorHandler, &SyntheticDllRuntime::handleSecurityCookie}},
                     {0x0582, {"_stricmp", Code::CoreDllStricmp, &SyntheticDllRuntime::handleStricmp}},
                     {0x0583, {"_strnicmp", Code::CoreDllStrnicmp, &SyntheticDllRuntime::handleStrnicmp}},
                     {0x0628, {"__ehvec_ctor", Code::CoreDllEhvecCtor, &SyntheticDllRuntime::handleEhvecCtor}},
@@ -670,6 +672,20 @@ bool SyntheticDllRuntime::handleGetCrtFlags(SyntheticExportCode, const GuestCall
 
 bool SyntheticDllRuntime::handleGetCrtStorageEx(SyntheticExportCode, const GuestCallArgs& args, uint32_t& ret) {
     ret = args.a1 && args.a2 == 0x38 ? 0 : allocate(0x100, true);
+    return true;
+}
+
+bool SyntheticDllRuntime::handleSecurityCookie(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
+    if (code == SyntheticExportCode::CoreDllSecurityErrorHandler) {
+        spdlog::warn("__security_error_handler invoked a0=0x{:08x} a1=0x{:08x} a2=0x{:08x} a3=0x{:08x} ra=0x{:08x}",
+                     args.a0, args.a1, args.a2, args.a3, args.ra);
+        ret = 0;
+        return true;
+    }
+
+    uint32_t cookie = 0x6d2b79f5u ^ args.ra ^ uint32_t(++tick_ * 0x45d9f3bu);
+    if (cookie == 0 || cookie == 0xbb40e64eu) cookie ^= 0x47114711u;
+    ret = cookie;
     return true;
 }
 

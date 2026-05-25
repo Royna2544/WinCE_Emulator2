@@ -90,6 +90,7 @@ bool SyntheticDllRuntime::handleRegisterWindowMessageW(SyntheticExportCode, cons
     const std::wstring wide(value.begin(), value.end());
     ret = RegisterWindowMessageW(wide.c_str());
     if (!ret) lastError_ = GetLastError();
+    spdlog::info("RegisterWindowMessageW name=\"{}\" -> 0x{:08x} lastError={}", value, ret, lastError_);
     return true;
 }
 

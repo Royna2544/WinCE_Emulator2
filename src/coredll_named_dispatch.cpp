@@ -12,6 +12,7 @@
 #include <cstring>
 #include <cwctype>
 #include <filesystem>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -41,6 +42,7 @@ enum class CoredllOrdinal : uint16_t {
     GetClientRect = 0x00F9,
     InvalidateRect = 0x00FA,
     GetWindow = 0x00FB,
+    ClientToScreen = 0x00FE,
     ScreenToClient = 0x00FF,
     ScreenToClientCompat = 0x0100,
     SetWindowLongW = 0x0102,
@@ -50,6 +52,7 @@ enum class CoredllOrdinal : uint16_t {
     ShowWindow = 0x010A,
     UpdateWindow = 0x010B,
     GetParent = 0x010D,
+    IsWindow = 0x010F,
     MoveWindow = 0x0110,
     FindWindowW = 0x011E,
     GetStoreInformation = 0x0143,
@@ -59,6 +62,7 @@ enum class CoredllOrdinal : uint16_t {
     CreateProcessW = 0x01ED,
     WaitForSingleObject = 0x01F1,
     LoadLibraryW = 0x0210,
+    FreeLibrary = 0x0211,
     GetProcAddressW = 0x0212,
     GetModuleFileNameW = 0x0219,
     OutputDebugStringW = 0x021D,
@@ -69,6 +73,7 @@ enum class CoredllOrdinal : uint16_t {
     FlushViewOfFile = 0x0227,
     CloseHandle = 0x0229,
     KernelIoControl = 0x022D,
+    CreateDialogIndirectParamW = 0x02B0,
     IsDialogMessageW = 0x02BA,
     GetVersionExW = 0x02CD,
     DispatchMessageW = 0x035B,
@@ -211,7 +216,19 @@ std::wstring buildCommandLine(const std::vector<std::wstring>& args) {
     return commandLine;
 }
 
-std::vector<wchar_t> buildQuietChildEnvironmentBlock() {
+std::wstring sanitizeLogFileStem(std::wstring value) {
+    if (value.empty()) return L"child";
+    for (wchar_t& ch : value) {
+        const bool ok = (ch >= L'0' && ch <= L'9') ||
+                        (ch >= L'A' && ch <= L'Z') ||
+                        (ch >= L'a' && ch <= L'z') ||
+                        ch == L'_' || ch == L'-' || ch == L'.';
+        if (!ok) ch = L'_';
+    }
+    return value;
+}
+
+std::vector<wchar_t> buildQuietChildEnvironmentBlock(bool verboseChildLog) {
     std::vector<std::wstring> entries;
 #if defined(_WIN32)
     LPWCH rawEnvironment = GetEnvironmentStringsW();
@@ -234,7 +251,7 @@ std::vector<wchar_t> buildQuietChildEnvironmentBlock() {
         FreeEnvironmentStringsW(rawEnvironment);
     }
 #endif
-    entries.emplace_back(L"INAVI_EMU_LOG=error");
+    entries.emplace_back(verboseChildLog ? L"INAVI_EMU_LOG=info" : L"INAVI_EMU_LOG=error");
     entries.emplace_back(L"INAVI_EMU_DUMPS=0");
     std::sort(entries.begin(), entries.end(), [](const std::wstring& lhs, const std::wstring& rhs) {
         return _wcsicmp(lhs.c_str(), rhs.c_str()) < 0;
@@ -247,6 +264,13 @@ std::vector<wchar_t> buildQuietChildEnvironmentBlock() {
     }
     block.push_back(L'\0');
     return block;
+}
+
+std::filesystem::path childLogDirectoryFromEnvironment() {
+    wchar_t buffer[32768]{};
+    const DWORD chars = GetEnvironmentVariableW(L"INAVI_EMU_CHILD_LOG_DIR", buffer, DWORD(std::size(buffer)));
+    if (!chars || chars >= DWORD(std::size(buffer))) return {};
+    return std::filesystem::path(buffer);
 }
 
 bool realChildProcessesEnabled() {
@@ -709,6 +733,130 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
         }
         return 0;
     };
+    auto ensureExternalWindowProxy =
+        [&](const std::string& proxyClass, const std::string& proxyTitle, int32_t width, int32_t height) -> uint32_t {
+        for (const auto& [hwnd, window] : windows_) {
+            if (!window.destroyed &&
+                (proxyClass.empty() || lowerAscii(window.className) == proxyClass) &&
+                window.title == proxyTitle) {
+                return hwnd;
+            }
+        }
+        const uint32_t hwnd = makeGuestHandle({GuestHandle::Kind::GuestWindow, 0, 0});
+        GuestWindow window;
+        window.hwnd = hwnd;
+        window.className = proxyClass;
+        window.title = proxyTitle;
+        window.width = width;
+        window.height = height;
+        window.ownerThread = activeGuestThread_ ? activeGuestThread_ : mainThreadPseudoHandle_;
+        window.visible = false;
+        window.enabled = true;
+        windows_[hwnd] = window;
+        spdlog::info("registered external guest window proxy hwnd=0x{:08x} class=\"{}\" title=\"{}\"",
+                     hwnd, proxyClass, proxyTitle);
+        return hwnd;
+    };
+
+    if (ordinal == ord(CoredllOrdinal::CreateDialogIndirectParamW)) {
+        auto read16 = [&](uint32_t address) -> uint16_t {
+            uint16_t value = 0;
+            if (address) uc_mem_read(uc_, address, &value, sizeof(value));
+            return value;
+        };
+        auto readI16 = [&](uint32_t address) -> int16_t {
+            return int16_t(read16(address));
+        };
+        auto skipTemplateString = [&](uint32_t address) -> uint32_t {
+            const uint16_t first = read16(address);
+            if (first == 0xffffu) return address + 4;
+            uint32_t cursor = address;
+            for (uint32_t i = 0; i < 512; ++i, cursor += 2) {
+                if (read16(cursor) == 0) return cursor + 2;
+            }
+            return cursor;
+        };
+        auto readTemplateString = [&](uint32_t address) -> std::string {
+            const uint16_t first = read16(address);
+            if (first == 0xffffu) {
+                std::ostringstream oss;
+                oss << "#" << read16(address + 2);
+                return oss.str();
+            }
+            std::string result;
+            uint32_t cursor = address;
+            for (uint32_t i = 0; i < 512; ++i, cursor += 2) {
+                const uint16_t ch = read16(cursor);
+                if (!ch) break;
+                result.push_back(ch < 0x80 ? char(ch) : '?');
+            }
+            return result;
+        };
+
+        const uint32_t instance = a0;
+        const uint32_t templ = a1;
+        const uint32_t parent = a2;
+        const uint32_t dlgProc = a3;
+        const uint32_t initParam = stackArg(4);
+        if (!templ || !isGuestRangeReadable(templ, 18)) {
+            ret = 0;
+            lastError_ = 87;
+            return true;
+        }
+
+        const uint32_t style = readU32(templ);
+        const uint32_t exStyle = readU32(templ + 4);
+        const uint16_t itemCount = read16(templ + 8);
+        const int32_t x = readI16(templ + 10);
+        const int32_t y = readI16(templ + 12);
+        int32_t width = readI16(templ + 14);
+        int32_t height = readI16(templ + 16);
+        uint32_t cursor = templ + 18;
+        const std::string menuName = readTemplateString(cursor);
+        cursor = skipTemplateString(cursor);
+        const std::string dialogClass = readTemplateString(cursor);
+        cursor = skipTemplateString(cursor);
+        const std::string title = readTemplateString(cursor);
+        if (width <= 0) width = framebufferWidth_ > 0 ? framebufferWidth_ : 800;
+        if (height <= 0) height = framebufferHeight_ > 0 ? framebufferHeight_ : 480;
+
+        ret = makeGuestHandle({GuestHandle::Kind::GuestWindow, 0, 0});
+        GuestWindow window{};
+        window.hwnd = ret;
+        window.className = dialogClass.empty() || dialogClass == "#0" ? "#32770" : lowerAscii(dialogClass);
+        window.title = title;
+        window.style = style;
+        window.exStyle = exStyle;
+        window.parent = parent;
+        window.instance = instance;
+        window.param = initParam;
+        // A dialog proc is not a normal window proc; dispatching directly into
+        // MFC's dialog thunk without CE dialog-manager state can corrupt the
+        // caller. Keep the HWND real and visible to FindWindow/message code,
+        // then let later evidence drive a fuller dialog-manager shim.
+        window.wndProc = 0;
+        window.ownerThread = activeGuestThread_ ? activeGuestThread_ : mainThreadPseudoHandle_;
+        window.x = x;
+        window.y = y;
+        window.width = width;
+        window.height = height;
+        window.visible = (style & 0x10000000u) != 0;
+        windows_[ret] = window;
+        ensureHostWindow(ret, windows_[ret]);
+
+        GuestMessage size{};
+        size.hwnd = ret;
+        size.message = 0x0005; // WM_SIZE
+        size.lParam = (uint32_t(uint16_t(height)) << 16) | uint16_t(width);
+        size.time = uint32_t(++tick_ * 16);
+        guestMessages_.push_back(size);
+        lastError_ = 0;
+        spdlog::info("CreateDialogIndirectParamW guest=0x{:08x} class=\"{}\" title=\"{}\" parent=0x{:08x} "
+                     "style=0x{:08x} ex=0x{:08x} dlgproc=0x{:08x} init=0x{:08x} rect={},{} {}x{} items={} menu=\"{}\"",
+                     ret, windows_[ret].className, title, parent, style, exStyle, dlgProc, initParam,
+                     x, y, width, height, itemCount, menuName);
+        return true;
+    }
 
     if (ordinal == ord(CoredllOrdinal::IsDialogMessageW)) {
         // CE/MFC uses this in PreTranslateMessage. The emulator queues and
@@ -962,71 +1110,53 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
         const bool childIsHappyway = childFileName == "happyway_win.exe";
         const bool childIsSearch = childFileName == "isearch.exe";
         const bool needsSharedGuestWindowNamespace = childIsHappyway || childIsSearch;
-        const bool shouldRunInRuntime = childIsHappyway &&
-                                        inRuntimeChildProcessesEnabled();
-        auto ensureExternalWindowProxy = [&]() {
-            if (!needsSharedGuestWindowNamespace) return uint32_t{};
-            const std::string proxyClass = childIsHappyway ? "happyway_win" : std::string{};
-            const std::string proxyTitle = childIsHappyway ? "happyway_win" : "iSearch";
-            for (const auto& [hwnd, window] : windows_) {
-                if (!window.destroyed &&
-                    (proxyClass.empty() || lowerAscii(window.className) == proxyClass) &&
-                    window.title == proxyTitle) {
-                    return hwnd;
-                }
-            }
-            const uint32_t hwnd = makeGuestHandle({GuestHandle::Kind::GuestWindow, 0, 0});
-            GuestWindow window;
-            window.hwnd = hwnd;
-            window.className = proxyClass;
-            window.title = proxyTitle;
-            window.width = childIsSearch ? 1 : 150;
-            window.height = childIsSearch ? 1 : 50;
-            window.ownerThread = activeGuestThread_ ? activeGuestThread_ : mainThreadPseudoHandle_;
-            window.visible = false;
-            window.enabled = true;
-            windows_[hwnd] = window;
-            spdlog::info("CreateProcessW registered external guest window proxy hwnd=0x{:08x} class=\"{}\" title=\"{}\"",
-                         hwnd, proxyClass, proxyTitle);
-            return hwnd;
-        };
+        const bool shouldRunInRuntime = !childFileName.empty();
+        const std::string proxyClass = childIsHappyway ? "happyway_win" : std::string{};
+        const std::string proxyTitle = childIsHappyway ? "happyway_win" : "iSearch";
+        const int32_t proxyWidth = childIsSearch ? 1 : 150;
+        const int32_t proxyHeight = childIsSearch ? 1 : 50;
         if (!application.empty() && (hostApplication.empty() || !std::filesystem::exists(hostApplication))) {
             lastError_ = 2;
             ret = 0;
-        } else if (guestProcessLauncher_ && shouldRunInRuntime) {
-            GuestProcessLaunch launch;
-            launch.hostApplication = hostApplication;
-            launch.guestApplication = application;
-            launch.commandLine = commandLine;
-            if (guestProcessLauncher_(launch)) {
+        } else {
+            bool launchedInRuntime = false;
+            if (guestProcessLauncher_ && shouldRunInRuntime) {
+                GuestProcessLaunch launch;
+                launch.hostApplication = hostApplication;
+                launch.guestApplication = application;
+                launch.commandLine = commandLine;
+                if (guestProcessLauncher_(launch)) {
+                    if (processInfo) {
+                        writeU32(processInfo, launch.processHandle);
+                        writeU32(processInfo + 4, launch.threadHandle);
+                        writeU32(processInfo + 8, launch.processId);
+                        writeU32(processInfo + 12, launch.threadId);
+                    }
+                    lastError_ = 0;
+                    ret = 1;
+                    launchedInRuntime = true;
+                } else {
+                    spdlog::info("CreateProcessW shared guest launch unavailable app=\"{}\" host=\"{}\"; falling back to separate process",
+                                 application, pathToUtf8(hostApplication));
+                }
+            }
+            if (!launchedInRuntime && !realChildProcessesEnabled()) {
+                const uint32_t processHandle = makeGuestHandle({GuestHandle::Kind::GuestProcess, 0, 0});
+                const uint32_t threadHandle = makeGuestHandle({GuestHandle::Kind::GuestThread, 0, 0});
                 if (processInfo) {
-                    writeU32(processInfo, launch.processHandle);
-                    writeU32(processInfo + 4, launch.threadHandle);
-                    writeU32(processInfo + 8, launch.processId);
-                    writeU32(processInfo + 12, launch.threadId);
+                    writeU32(processInfo, processHandle);
+                    writeU32(processInfo + 4, threadHandle);
+                    writeU32(processInfo + 8, processHandle);
+                    writeU32(processInfo + 12, threadHandle);
                 }
                 lastError_ = 0;
                 ret = 1;
-            } else {
-                lastError_ = lastError_ ? lastError_ : 8;
-                ret = 0;
-                spdlog::warn("CreateProcessW guest image launch failed app=\"{}\" host=\"{}\" lastError={}",
-                             application, pathToUtf8(hostApplication), lastError_);
-            }
-        } else if (!realChildProcessesEnabled()) {
-            const uint32_t processHandle = makeGuestHandle({GuestHandle::Kind::GuestProcess, 0, 0});
-            const uint32_t threadHandle = makeGuestHandle({GuestHandle::Kind::GuestThread, 0, 0});
-            if (processInfo) {
-                writeU32(processInfo, processHandle);
-                writeU32(processInfo + 4, threadHandle);
-                writeU32(processInfo + 8, processHandle);
-                writeU32(processInfo + 12, threadHandle);
-            }
-            lastError_ = 0;
-            ret = 1;
-            spdlog::info("CreateProcessW synthetic child placeholder app=\"{}\" process=0x{:08x} thread=0x{:08x}",
-                         application, processHandle, threadHandle);
-        } else {
+                if (needsSharedGuestWindowNamespace) {
+                    ensureExternalWindowProxy(proxyClass, proxyTitle, proxyWidth, proxyHeight);
+                }
+                spdlog::info("CreateProcessW synthetic child placeholder app=\"{}\" process=0x{:08x} thread=0x{:08x}",
+                             application, processHandle, threadHandle);
+            } else if (!launchedInRuntime) {
 #if defined(_WIN32)
             wchar_t emulatorPath[MAX_PATH]{};
             const DWORD emulatorPathChars = GetModuleFileNameW(nullptr, emulatorPath, DWORD(std::size(emulatorPath)));
@@ -1039,15 +1169,15 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
                 childArgs.push_back(hostApplication.wstring());
                 if (!sdmmcHostRoot_.empty()) {
                     childArgs.emplace_back(L"--sdmmc-path");
-                    childArgs.push_back(sdmmcHostRoot_.wstring());
+                    childArgs.push_back(std::filesystem::absolute(sdmmcHostRoot_).wstring());
                 }
                 if (!registryPath_.empty()) {
                     childArgs.emplace_back(L"--registry");
-                    childArgs.push_back(registryPath_.wstring());
+                    childArgs.push_back(std::filesystem::absolute(registryPath_).wstring());
                 }
                 if (!serialDeviceMapPath_.empty()) {
                     childArgs.emplace_back(L"--serial-map");
-                    childArgs.push_back(serialDeviceMapPath_.wstring());
+                    childArgs.push_back(std::filesystem::absolute(serialDeviceMapPath_).wstring());
                 }
                 if (!commandLine.empty()) {
                     childArgs.emplace_back(L"--guest-command-line");
@@ -1058,21 +1188,62 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
                 childArgs.emplace_back(L"--headless");
 
                 std::wstring hostCommandLine = buildCommandLine(childArgs);
-                std::vector<wchar_t> childEnvironment = buildQuietChildEnvironmentBlock();
+                const std::filesystem::path childLogDir = childLogDirectoryFromEnvironment();
+                const bool captureChildLog = !childLogDir.empty();
+                std::vector<wchar_t> childEnvironment = buildQuietChildEnvironmentBlock(captureChildLog);
                 STARTUPINFOW startup{};
                 startup.cb = sizeof(startup);
+                HANDLE childStdin = nullptr;
+                HANDLE childStdout = nullptr;
+                HANDLE childStderr = nullptr;
+                if (captureChildLog) {
+                    std::error_code ignored;
+                    std::filesystem::create_directories(childLogDir, ignored);
+                    SECURITY_ATTRIBUTES sa{};
+                    sa.nLength = sizeof(sa);
+                    sa.bInheritHandle = TRUE;
+                    static uint32_t childLogSequence = 0;
+                    const uint32_t sequence = ++childLogSequence;
+                    const std::wstring stem = sanitizeLogFileStem(hostApplication.filename().wstring());
+                    const std::wstring prefix = L"child_" + std::to_wstring(GetCurrentProcessId()) +
+                                                L"_" + std::to_wstring(sequence) + L"_" + stem;
+                    const std::filesystem::path stdoutPath = childLogDir / (prefix + L".stdout.log");
+                    const std::filesystem::path stderrPath = childLogDir / (prefix + L".stderr.log");
+                    childStdin = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                             &sa, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+                    childStdout = CreateFileW(stdoutPath.wstring().c_str(), GENERIC_WRITE,
+                                              FILE_SHARE_READ | FILE_SHARE_WRITE, &sa,
+                                              CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+                    childStderr = CreateFileW(stderrPath.wstring().c_str(), GENERIC_WRITE,
+                                              FILE_SHARE_READ | FILE_SHARE_WRITE, &sa,
+                                              CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+                    if (childStdin == INVALID_HANDLE_VALUE) childStdin = nullptr;
+                    if (childStdout == INVALID_HANDLE_VALUE) childStdout = nullptr;
+                    if (childStderr == INVALID_HANDLE_VALUE) childStderr = nullptr;
+                    if (childStdout || childStderr) {
+                        startup.dwFlags |= STARTF_USESTDHANDLES;
+                        startup.hStdInput = childStdin ? childStdin : GetStdHandle(STD_INPUT_HANDLE);
+                        startup.hStdOutput = childStdout ? childStdout : GetStdHandle(STD_OUTPUT_HANDLE);
+                        startup.hStdError = childStderr ? childStderr : GetStdHandle(STD_ERROR_HANDLE);
+                        spdlog::info("CreateProcessW child log capture app=\"{}\" stdout=\"{}\" stderr=\"{}\"",
+                                     application, pathToUtf8(stdoutPath), pathToUtf8(stderrPath));
+                    }
+                }
                 PROCESS_INFORMATION hostPi{};
                 std::wstring workingDirectory = hostApplication.parent_path().wstring();
                 BOOL ok = CreateProcessW(emulatorPath,
                                          hostCommandLine.data(),
                                          nullptr,
                                          nullptr,
-                                         FALSE,
+                                         captureChildLog && (childStdout || childStderr),
                                          CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
                                          childEnvironment.empty() ? nullptr : childEnvironment.data(),
-                                         workingDirectory.empty() ? nullptr : workingDirectory.c_str(),
-                                         &startup,
-                                         &hostPi);
+                                          workingDirectory.empty() ? nullptr : workingDirectory.c_str(),
+                                          &startup,
+                                          &hostPi);
+                if (childStdin) CloseHandle(childStdin);
+                if (childStdout) CloseHandle(childStdout);
+                if (childStderr) CloseHandle(childStderr);
                 if (!ok) {
                     lastError_ = GetLastError();
                     ret = 0;
@@ -1097,7 +1268,9 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
                     }
                     lastError_ = 0;
                     ret = 1;
-                    ensureExternalWindowProxy();
+                    if (needsSharedGuestWindowNamespace) {
+                        ensureExternalWindowProxy(proxyClass, proxyTitle, proxyWidth, proxyHeight);
+                    }
                     spdlog::info("CreateProcessW launched child emulator app=\"{}\" pid={} tid={} process=0x{:08x} thread=0x{:08x}",
                                  application, hostPi.dwProcessId, hostPi.dwThreadId, processHandle, threadHandle);
                 }
@@ -1109,6 +1282,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
 #if !defined(_WIN32)
             (void)processInfo;
 #endif
+            }
         }
         if (!ret && processInfo) {
             writeU32(processInfo, 0);
@@ -1119,7 +1293,15 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
         spdlog::info("CreateProcessW app=\"{}\" host=\"{}\" cmd=\"{}\" pi=0x{:08x} -> {} lastError={}",
                      application, pathToUtf8(hostApplication), commandLine, processInfo, ret, lastError_);
     } else if (ordinal == ord(CoredllOrdinal::GetModuleFileNameW)) {
-        const std::string modulePath = a0 ? mainModulePath_ : currentProcessModulePath();
+        std::string modulePath = currentProcessModulePath();
+        if (a0) {
+            if (a0 == currentProcessModuleBase()) {
+                modulePath = currentProcessModulePath();
+            } else {
+                const auto module = loadedModulesByBase_.find(a0);
+                modulePath = module != loadedModulesByBase_.end() ? pathToUtf8(module->second.path) : mainModulePath_;
+            }
+        }
         ret = writeUtf16(a1, modulePath, a2);
         lastError_ = ret ? 0 : 122;
         spdlog::info("GetModuleFileNameW module=0x{:08x} path=\"{}\" chars={} lastError={}",
@@ -1176,6 +1358,13 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
         }
         spdlog::info("{} requested=\"{}\" -> 0x{:08x}", name, requested, ret);
         lastError_ = ret ? 0 : 126;
+    } else if (ordinal == ord(CoredllOrdinal::FreeLibrary)) {
+        // Keep loaded images resident for the emulator lifetime. CE callers use
+        // FreeLibrary on modules they dynamically probe; success here preserves
+        // loader semantics without invalidating already-bound guest code.
+        ret = loadedModulesByBase_.count(a0) ? 1 : 0;
+        lastError_ = ret ? 0 : 126;
+        spdlog::info("FreeLibrary module=0x{:08x} -> {}", a0, ret);
     } else if (ordinal == ord(CoredllOrdinal::GetProcAddressA) || ordinal == ord(CoredllOrdinal::GetProcAddressW)) {
         ret = 0;
         auto module = loadedModulesByBase_.find(a0);
@@ -1363,7 +1552,8 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = 0;
             ret = 1;
         }
-    } else if (ordinal == ord(CoredllOrdinal::ScreenToClient) ||
+    } else if (ordinal == ord(CoredllOrdinal::ClientToScreen) ||
+               ordinal == ord(CoredllOrdinal::ScreenToClient) ||
                ordinal == ord(CoredllOrdinal::ScreenToClientCompat)) {
         auto it = windows_.find(a0);
         if (!a1 || it == windows_.end()) {
@@ -1373,8 +1563,13 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             int32_t x = int32_t(readU32(a1));
             int32_t y = int32_t(readU32(a1 + 4));
             const auto [originX, originY] = windowOrigin(a0);
-            writeU32(a1, uint32_t(x - originX));
-            writeU32(a1 + 4, uint32_t(y - originY));
+            if (ordinal == ord(CoredllOrdinal::ClientToScreen)) {
+                writeU32(a1, uint32_t(x + originX));
+                writeU32(a1 + 4, uint32_t(y + originY));
+            } else {
+                writeU32(a1, uint32_t(x - originX));
+                writeU32(a1 + 4, uint32_t(y - originY));
+            }
             lastError_ = 0;
             ret = 1;
         }
@@ -1809,7 +2004,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
         } else {
             const bool drawTextCall = ordinal == ord(CoredllOrdinal::DrawTextW);
             const bool ok = drawTextCall
-                ? drawHostTextToDc(*dc, 0, 0, 0, a2, a1, int32_t(a3), stackArg(4), true)
+                ? drawHostTextToDc(*dc, 0, 0, 0, a3, a1, int32_t(a2), stackArg(4), true)
                 : drawHostTextToDc(*dc, int32_t(a1), int32_t(a2), a3, stackArg(4),
                                    stackArg(5), int32_t(stackArg(6)), 0, false);
             lastError_ = ok ? 0 : 120;
@@ -2022,6 +2217,10 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = 0;
             ret = it->second.parent;
         }
+    } else if (ordinal == ord(CoredllOrdinal::IsWindow)) {
+        auto it = windows_.find(a0);
+        ret = it != windows_.end() && !it->second.destroyed ? 1 : 0;
+        lastError_ = 0;
     } else if (ordinal == ord(CoredllOrdinal::GetWindow)) {
         auto it = windows_.find(a0);
         if (it == windows_.end() || it->second.destroyed) {
@@ -2383,6 +2582,31 @@ ensureHostWindow(a0, it->second);
         wakeGuestThreadsWaitingForMessage();
         ret = 0;
     } else if (ordinal == ord(CoredllOrdinal::PostMessageW)) {
+        auto logPostMessagePointer = [&](const char* label, uint32_t ptr) {
+            if (!ptr || !isGuestRangeReadable(ptr, 4)) return;
+            std::array<uint8_t, 64> bytes{};
+            size_t byteCount = 0;
+            if (uc_mem_read(uc_, ptr, bytes.data(), bytes.size()) == UC_ERR_OK) {
+                byteCount = bytes.size();
+            }
+            std::string hex;
+            hex.reserve(byteCount * 3);
+            for (size_t i = 0; i < byteCount; ++i) {
+                char tmp[4]{};
+                std::snprintf(tmp, sizeof(tmp), "%02x", bytes[i]);
+                if (!hex.empty()) hex.push_back(' ');
+                hex.append(tmp);
+            }
+            spdlog::info("PostMessageW ptr {}=0x{:08x} msg=0x{:08x} ascii=\"{}\" utf16=\"{}\" bytes={}",
+                         label, ptr, a1, readAscii(ptr, 128), readUtf16(ptr, 128), hex);
+        };
+        const bool tracePostMessage = a0 == 0xffff || (a1 >= 0x5700 && a1 <= 0x58ff);
+        if (tracePostMessage) {
+            spdlog::info("PostMessageW call hwnd=0x{:08x} msg=0x{:08x} wparam=0x{:08x} lparam=0x{:08x}",
+                         a0, a1, a2, a3);
+            logPostMessagePointer("wparam", a2);
+            logPostMessagePointer("lparam", a3);
+        }
         if (a0 == 0xffff) {
             bool posted = false;
             for (const auto& [hwnd, window] : windows_) {
@@ -2400,6 +2624,10 @@ ensureHostWindow(a0, it->second);
             }
             lastError_ = posted ? 0 : 1400;
             ret = posted ? 1 : 0;
+            if (tracePostMessage) {
+                spdlog::info("PostMessageW broadcast msg=0x{:08x} posted={} queued={}",
+                             a1, posted, guestMessages_.size());
+            }
         } else if (a0 == 0) {
             GuestMessage message{};
             message.hwnd = 0;
@@ -2410,9 +2638,15 @@ ensureHostWindow(a0, it->second);
             guestMessages_.push_back(message);
             lastError_ = 0;
             ret = 1;
+            if (tracePostMessage) {
+                spdlog::info("PostMessageW thread msg=0x{:08x} queued={}", a1, guestMessages_.size());
+            }
         } else if (!windows_.count(a0)) {
             lastError_ = 1400;
             ret = 0;
+            if (tracePostMessage) {
+                spdlog::info("PostMessageW target missing hwnd=0x{:08x} msg=0x{:08x}", a0, a1);
+            }
         } else {
             GuestMessage message{};
             message.hwnd = a0;
@@ -2428,6 +2662,12 @@ ensureHostWindow(a0, it->second);
                 postedWindow->second.className == "happyway_win") {
                 spdlog::info("PostMessageW target=happyway hwnd=0x{:08x} msg=0x{:08x} wparam=0x{:08x} lparam=0x{:08x} queued={}",
                              a0, a1, a2, a3, guestMessages_.size());
+            }
+            if (tracePostMessage) {
+                const std::string className = postedWindow == windows_.end() ? std::string{} : postedWindow->second.className;
+                const std::string title = postedWindow == windows_.end() ? std::string{} : postedWindow->second.title;
+                spdlog::info("PostMessageW target hwnd=0x{:08x} class=\"{}\" title=\"{}\" msg=0x{:08x} queued={}",
+                             a0, className, title, a1, guestMessages_.size());
             }
         }
         if (ret) wakeGuestThreadsWaitingForMessage();

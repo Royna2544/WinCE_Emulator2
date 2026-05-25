@@ -416,7 +416,7 @@ bool SyntheticDllRuntime::handleReadFile(SyntheticExportCode code, const GuestCa
     } else {
         DWORD transferred = 0;
         const DWORD requested = handle->kind == GuestHandle::Kind::HostSerialDevice
-            ? std::min<DWORD>(args.a2, 128)
+            ? std::min<DWORD>(args.a2, 1024)
             : args.a2;
         static thread_local std::vector<uint8_t> bytes;
         bytes.resize(requested);

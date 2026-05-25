@@ -1103,7 +1103,7 @@ bool SyntheticDllRuntime::hasHostWindows() const {
     return false;
 }
 
-void SyntheticDllRuntime::runHostMessageLoopUntilClosed() {
+void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
 #if defined(_WIN32)
     if (!hasHostWindows()) return;
     struct HookGuard {
@@ -1119,20 +1119,23 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed() {
         spdlog::warn("interactive basic-block watchdog hook failed: {} ({})",
                      int(hookErr), uc_strerror(hookErr));
     }
-    for (auto& [guestHwnd, window] : windows_) {
-        (void)guestHwnd;
-        HWND hwnd = reinterpret_cast<HWND>(window.hostHwnd);
-        if (!hwnd || !IsWindow(hwnd)) continue;
-        ShowWindow(hwnd, SW_SHOWNORMAL);
-        presentHostWindowNow(hwnd);
+    if (showHostWindows) {
+        for (auto& [guestHwnd, window] : windows_) {
+            (void)guestHwnd;
+            HWND hwnd = reinterpret_cast<HWND>(window.hostHwnd);
+            if (!hwnd || !IsWindow(hwnd)) continue;
+            ShowWindow(hwnd, SW_SHOWNORMAL);
+            presentHostWindowNow(hwnd);
+        }
+        for (uintptr_t hostHwnd : retainedHostWindows_) {
+            HWND hwnd = reinterpret_cast<HWND>(hostHwnd);
+            if (!hwnd || !IsWindow(hwnd)) continue;
+            ShowWindow(hwnd, SW_SHOWNORMAL);
+            presentHostWindowNow(hwnd);
+        }
     }
-    for (uintptr_t hostHwnd : retainedHostWindows_) {
-        HWND hwnd = reinterpret_cast<HWND>(hostHwnd);
-        if (!hwnd || !IsWindow(hwnd)) continue;
-        ShowWindow(hwnd, SW_SHOWNORMAL);
-        presentHostWindowNow(hwnd);
-    }
-    spdlog::info("entering host GUI message loop; close the presenter window to exit");
+    spdlog::info("entering host GUI message loop mode={}; close the presenter window to exit",
+                 showHostWindows ? "visible" : "headless");
     MSG message{};
     auto hasPendingUserInput = [&]() {
         return std::any_of(guestMessages_.begin(), guestMessages_.end(), [](const GuestMessage& message) {
@@ -1272,6 +1275,7 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x00F9, "GetClientRect");
     registerExport(module, 0x00FA, "InvalidateRect");
     registerExport(module, 0x00FB, "GetWindow");
+    registerExport(module, 0x00FE, "ClientToScreen");
     registerExport(module, 0x00FF, "ScreenToClient");
     registerExport(module, 0x0102, "SetWindowLongW");
     registerExport(module, 0x0103, "GetWindowLongW");
@@ -6677,6 +6681,30 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         if (mutableEntry.calls <= 128 || traceWindowMessage) {
             spdlog::info("synthetic coredll.dll!{} transfer wndproc=0x{:08x} hwnd=0x{:08x} msg=0x{:08x} wparam=0x{:08x} lparam=0x{:08x}",
                          name, wndProc, hwnd, msg, wParam, lParam);
+        }
+        if (msg >= 0x5700 && msg <= 0x58ff) {
+            auto describePointer = [&](const char* label, uint32_t ptr) {
+                if (!ptr || !isGuestRangeReadable(ptr, 4)) return;
+                std::array<uint8_t, 64> bytes{};
+                size_t byteCount = 0;
+                if (uc_mem_read(uc_, ptr, bytes.data(), bytes.size()) == UC_ERR_OK) {
+                    byteCount = bytes.size();
+                }
+                std::string hex;
+                hex.reserve(byteCount * 3);
+                for (size_t i = 0; i < byteCount; ++i) {
+                    char tmp[4]{};
+                    std::snprintf(tmp, sizeof(tmp), "%02x", bytes[i]);
+                    if (!hex.empty()) hex.push_back(' ');
+                    hex.append(tmp);
+                }
+                const std::string ascii = readAscii(ptr, 128);
+                const std::string utf16 = readUtf16(ptr, 128);
+                spdlog::info("private-msg ptr {}=0x{:08x} msg=0x{:08x} ascii=\"{}\" utf16=\"{}\" bytes={}",
+                             label, ptr, msg, ascii, utf16, hex);
+            };
+            describePointer("wparam", wParam);
+            describePointer("lparam", lParam);
         }
         if (ordinal == 0x0364 && msg == 0x0201 && wParam == 0 && lParam == 0) {
             auto target = windows_.find(hwnd);

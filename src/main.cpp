@@ -177,6 +177,7 @@ struct PeImage {
   std::map<uint16_t, uint32_t> exportsByOrdinal;
   std::map<uint16_t, std::string> exportNamesByOrdinal;
   std::map<uint16_t, std::string> forwardersByOrdinal;
+  bool relocationsStripped{};
   bool mapped{};
   bool importsBound{};
 };
@@ -289,6 +290,7 @@ static PeImage parsePe(const fs::path &path) {
   uint16_t machine = u16(pe.file, nt + 4);
   uint16_t sections = u16(pe.file, nt + 6);
   uint16_t optSize = u16(pe.file, nt + 20);
+  uint16_t characteristics = u16(pe.file, nt + 22);
   uint32_t opt = nt + 24;
   if (u16(pe.file, opt) != 0x10b)
     throw std::runtime_error("only PE32 supported");
@@ -296,6 +298,7 @@ static PeImage parsePe(const fs::path &path) {
   pe.imageBase = u32(pe.file, opt + 28);
   pe.sizeOfImage = u32(pe.file, opt + 56);
   pe.sizeOfHeaders = u32(pe.file, opt + 60);
+  pe.relocationsStripped = (characteristics & 0x0001u) != 0;
   uint32_t numDirs = std::min<uint32_t>(16, u32(pe.file, opt + 92));
   for (uint32_t i = 0; i < numDirs; i++) {
     pe.dirVa[i] = u32(pe.file, opt + 96 + i * 8);
@@ -605,6 +608,24 @@ struct ModuleLoader {
                  pe.moduleKey, pe.imageBase, pe.loadBase, pe.sizeOfImage);
   }
 
+  bool preferredRangeIsFree(const PeImage &pe) const {
+    if (!pe.imageBase || !pe.sizeOfImage)
+      return true;
+    const uint32_t wantStart = alignDown(pe.imageBase, 0x1000);
+    const uint32_t wantEnd = alignUp(pe.imageBase + pe.sizeOfImage, 0x1000);
+    for (const auto &[key, module] : modules) {
+      (void)key;
+      if (!module.mapped || !module.loadBase || !module.sizeOfImage)
+        continue;
+      const uint32_t haveStart = alignDown(module.loadBase, 0x1000);
+      const uint32_t haveEnd =
+          alignUp(module.loadBase + module.sizeOfImage, 0x1000);
+      if (wantStart < haveEnd && haveStart < wantEnd)
+        return false;
+    }
+    return true;
+  }
+
   void applyRelocations(PeImage &pe) {
     int64_t delta64 = int64_t(pe.loadBase) - int64_t(pe.imageBase);
     if (!delta64 || !pe.dirVa[5] || !pe.dirSize[5])
@@ -791,6 +812,50 @@ struct ModuleLoader {
                    realBindings);
     }
   }
+
+  bool launchGuestProcessInSharedRuntime(
+      SyntheticDllRuntime::GuestProcessLaunch &launch) {
+    if (launch.hostApplication.empty())
+      return false;
+
+    const std::string key = moduleKeyFromPath(launch.hostApplication);
+    auto existing = modules.find(key);
+    if (existing == modules.end()) {
+      PeImage parsed = parsePe(launch.hostApplication);
+      if (parsed.relocationsStripped && !preferredRangeIsFree(parsed)) {
+        spdlog::info("CreateProcessW shared guest launch skipped for {}: "
+                     "relocations stripped and preferred range "
+                     "0x{:08x}-0x{:08x} is unavailable",
+                     parsed.moduleKey, parsed.imageBase,
+                     parsed.imageBase + parsed.sizeOfImage);
+        return false;
+      }
+      auto [it, inserted] = modules.emplace(key, std::move(parsed));
+      (void)inserted;
+      PeImage &pe = it->second;
+      mapImage(pe, false);
+      bindImports(pe);
+      if (synthetic) {
+        synthetic->registerLoadedModule(pe.moduleKey, pe.path, pe.loadBase,
+                                        pe.exportsByName, pe.exportsByOrdinal);
+      }
+      existing = it;
+    }
+
+    PeImage &child = existing->second;
+    if (child.relocationsStripped && child.loadBase != child.imageBase) {
+      spdlog::info("CreateProcessW shared guest launch skipped for {}: "
+                   "relocations stripped but loaded at 0x{:08x}, preferred "
+                   "0x{:08x}",
+                   child.moduleKey, child.loadBase, child.imageBase);
+      return false;
+    }
+    return synthetic->startGuestProcessImage(
+        launch.guestApplication, launch.hostApplication, child.loadBase,
+        child.loadBase + child.entryRva, launch.commandLine,
+        launch.processHandle, launch.threadHandle, launch.processId,
+        launch.threadId);
+  }
 };
 
 static int runImage(PeImage &pe, const std::vector<fs::path> &dllSearchDirs,
@@ -825,16 +890,7 @@ static int runImage(PeImage &pe, const std::vector<fs::path> &dllSearchDirs,
                 0x70ffffff);
     ModuleLoader loader(uc, &synthetic, pe.path, dllSearchDirs);
     synthetic.setGuestProcessLauncher([&](SyntheticDllRuntime::GuestProcessLaunch &launch) {
-      if (launch.hostApplication.empty())
-        return false;
-      PeImage *child = loader.loadModuleByPath(launch.hostApplication, false);
-      if (!child)
-        return false;
-      return synthetic.startGuestProcessImage(
-          launch.guestApplication, launch.hostApplication, child->loadBase,
-          child->loadBase + child->entryRva, launch.commandLine,
-          launch.processHandle, launch.threadHandle, launch.processId,
-          launch.threadId);
+      return loader.launchGuestProcessInSharedRuntime(launch);
     });
     PeImage *main = loader.loadModuleByPath(pe.path, true);
     if (!main)
@@ -905,8 +961,7 @@ static int runImage(PeImage &pe, const std::vector<fs::path> &dllSearchDirs,
     spdlog::warn("emulation stopped err={} ({}) pc=0x{:08x} ra=0x{:08x}",
                  int(err), uc_strerror(err), pc, ra);
     synthetic.flushRegistry();
-    if (!headless)
-      synthetic.runHostMessageLoopUntilClosed();
+    synthetic.runHostMessageLoopUntilClosed(!headless);
     close();
     return err == UC_ERR_OK ? 0 : 2;
   } catch (...) {

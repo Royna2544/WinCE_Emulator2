@@ -1,6 +1,18 @@
 #include "synthetic_dll.h"
 
 #include <array>
+#include <cstdlib>
+#include <vector>
+
+namespace {
+
+uint32_t pixelToColorRef(uint32_t pixel) {
+    return ((pixel >> 16) & 0x000000ffu) |
+           (pixel & 0x0000ff00u) |
+           ((pixel & 0x000000ffu) << 16);
+}
+
+}
 
 void SyntheticDllRuntime::registerCoredllPaintExports(SyntheticModule& module) {
     struct CoreDllPaint {
@@ -14,6 +26,7 @@ void SyntheticDllRuntime::registerCoredllPaintExports(SyntheticModule& module) {
                     {0x0106, {"GetDC", Code::CoreDllGetDC, &SyntheticDllRuntime::handleGetDC}},
                     {0x0107, {"ReleaseDC", Code::CoreDllReleaseDC, &SyntheticDllRuntime::handleReleaseDC}},
                     {0x0116, {"ValidateRect", Code::CoreDllValidateRect, &SyntheticDllRuntime::handleValidateRect}},
+                    {0x03A8, {"GetPixel", Code::CoreDllGetPixel, &SyntheticDllRuntime::handleGetPixel}},
                     {0x04A1, {"GetDCEx", Code::CoreDllGetDCEx, &SyntheticDllRuntime::handleGetDCEx}},
                 },
             };
@@ -71,6 +84,59 @@ bool SyntheticDllRuntime::handleGetDC(SyntheticExportCode code, const GuestCallA
 
 bool SyntheticDllRuntime::handleGetDCEx(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
     return handleGetDC(code, args, ret);
+}
+
+bool SyntheticDllRuntime::handleGetPixel(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
+    (void)code;
+    const auto dcIt = dcs_.find(args.a0);
+    if (dcIt == dcs_.end()) {
+        lastError_ = 6;
+        ret = 0xffffffffu;
+        return true;
+    }
+
+    const GuestDc& dc = dcIt->second;
+    uint32_t pixel = 0xff000000u;
+    if (dc.selectedBitmap) {
+        const auto bitmapIt = bitmaps_.find(dc.selectedBitmap);
+        if (bitmapIt == bitmaps_.end() || !bitmapIt->second.bits ||
+            bitmapIt->second.width <= 0 || bitmapIt->second.heightRaw == 0 ||
+            bitmapIt->second.stride == 0) {
+            lastError_ = 6;
+            ret = 0xffffffffu;
+            return true;
+        }
+
+        const GuestBitmap& bitmap = bitmapIt->second;
+        const int32_t height = std::abs(bitmap.heightRaw);
+        const uint64_t byteCount = uint64_t(bitmap.stride) * uint64_t(height);
+        if (!byteCount || byteCount > 0x2000000ull) {
+            lastError_ = 87;
+            ret = 0xffffffffu;
+            return true;
+        }
+
+        std::vector<uint8_t> raw(static_cast<size_t>(byteCount));
+        if (uc_mem_read(uc_, bitmap.bits, raw.data(), raw.size()) != UC_ERR_OK ||
+            !readBitmapPixel(bitmap, raw, height, int32_t(args.a1), int32_t(args.a2), pixel)) {
+            lastError_ = 87;
+            ret = 0xffffffffu;
+            return true;
+        }
+    } else {
+        int32_t x = int32_t(args.a1);
+        int32_t y = int32_t(args.a2);
+        if (dc.hwnd) {
+            const auto [originX, originY] = guestWindowOrigin(dc.hwnd);
+            x += originX;
+            y += originY;
+        }
+        pixel = readFramebufferTargetPixel(dc.hwnd, x, y);
+    }
+
+    ret = pixelToColorRef(pixel);
+    lastError_ = 0;
+    return true;
 }
 
 bool SyntheticDllRuntime::handleReleaseDC(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
