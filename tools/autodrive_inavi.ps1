@@ -423,7 +423,7 @@ try {
         Stop-EmulatorProcessTree $process.Id
     }
     foreach ($companionProcess in $companionProcesses) {
-        if ($companionProcess -and -not $companionProcess.HasExited) {
+        if ($companionProcess -and -not $KeepAlive -and -not $companionProcess.HasExited) {
             try {
                 [void]$companionProcess.CloseMainWindow()
                 if (-not $companionProcess.WaitForExit(2000)) {

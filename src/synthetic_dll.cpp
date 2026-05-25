@@ -350,6 +350,50 @@ std::string pathToUtf8(const std::filesystem::path& path) {
 #endif
 }
 
+uint64_t fnv1a64(std::string_view text) {
+    uint64_t hash = 14695981039346656037ull;
+    for (unsigned char ch : text) {
+        hash ^= ch;
+        hash *= 1099511628211ull;
+    }
+    return hash;
+}
+
+std::string sanitizeFileNameFragment(std::string_view text) {
+    std::string out;
+    out.reserve(std::min<size_t>(text.size(), 48));
+    for (unsigned char ch : text) {
+        if (out.size() >= 48) break;
+        if (std::isalnum(ch) || ch == '.' || ch == '_' || ch == '-') {
+            out.push_back(char(ch));
+        } else {
+            out.push_back('_');
+        }
+    }
+    while (!out.empty() && out.back() == '_') out.pop_back();
+    if (out.empty()) out = "unnamed";
+    return out;
+}
+
+bool coredllOrdinalTouchesSharedMappingBoundary(uint16_t ordinal) {
+    switch (ordinal) {
+    case 0x011d: // SendMessageW
+    case 0x011e: // FindWindowW
+    case 0x01ed: // CreateProcessW
+    case 0x01f0: // Sleep
+    case 0x01f1: // WaitForSingleObject
+    case 0x0224: // CreateFileMappingW
+    case 0x0225: // MapViewOfFile
+    case 0x0226: // UnmapViewOfFile
+    case 0x0227: // FlushViewOfFile
+    case 0x035b: // DispatchMessageW
+    case 0x0361: // PostMessageW
+        return true;
+    default:
+        return false;
+    }
+}
+
 std::string normalizedPathKey(const std::filesystem::path& path) {
     std::string text = pathToUtf8(path.lexically_normal());
     std::replace(text.begin(), text.end(), '/', '\\');
@@ -1154,6 +1198,11 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
         return lastHostInputQueuedAt_ != std::chrono::steady_clock::time_point{} &&
                (std::chrono::steady_clock::now() - lastHostInputQueuedAt_) < std::chrono::milliseconds(3000);
     };
+    auto hasPendingSynchronousMessage = [&]() {
+        return std::any_of(guestMessages_.begin(), guestMessages_.end(), [](const GuestMessage& message) {
+            return message.synchronousSender != 0;
+        });
+    };
     auto resumeGuestSlice = [&](uint64_t instructionBudget, const char* reason) -> bool {
         uint32_t pc = 0;
         uint32_t ra = 0;
@@ -1165,13 +1214,14 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
         // their slices short so touch input and presenter paints stay live even
         // when a worker performs a long pure-guest loop between API calls.
         const bool servicingQueuedMessages = std::strcmp(reason, "queued-message") == 0;
-        const bool latencySensitive = hasPendingUserInput() || recentlyQueuedUserInput();
+        const bool synchronousQueuedMessage = servicingQueuedMessages && hasPendingSynchronousMessage();
+        const bool latencySensitive = hasPendingUserInput() || recentlyQueuedUserInput() || synchronousQueuedMessage;
         if (latencySensitive) {
             instructionBudget = std::min<uint64_t>(instructionBudget, 12000u);
         } else if (activeGuestThread_) {
             instructionBudget = std::min<uint64_t>(instructionBudget, 250000u);
         } else if (servicingQueuedMessages) {
-            instructionBudget = std::min<uint64_t>(instructionBudget, 250000u);
+            instructionBudget = std::min<uint64_t>(instructionBudget, 12000u);
         }
         const auto wallBudget = latencySensitive
             ? std::chrono::milliseconds(12)
@@ -1255,7 +1305,7 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
         enqueueDueTimers();
         if (!guestMessages_.empty() && hasHostWindows()) {
             compactQueuedPointerMotion();
-            const uint64_t budget = (hasPendingUserInput() || recentlyQueuedUserInput()) ? 12000u : 250000u;
+            const uint64_t budget = 12000u;
             spdlog::debug("resuming guest for queued message queued={} budget={}", guestMessages_.size(), budget);
             if (!resumeGuestSlice(budget, "queued-message")) {
                 return;
@@ -1610,7 +1660,7 @@ void SyntheticDllRuntime::endInteractiveSlice() {
 void SyntheticDllRuntime::hookBasicBlock(uc_engine* uc, uint64_t address, uint32_t, void* user) {
     auto* runtime = static_cast<SyntheticDllRuntime*>(user);
     if (!runtime || !runtime->interactiveSliceActive_) return;
-    if ((++runtime->interactiveSliceBlockCounter_ & 0x00ffu) != 0) return;
+    if ((++runtime->interactiveSliceBlockCounter_ & 0x003fu) != 0) return;
     if (std::chrono::steady_clock::now() < runtime->interactiveSliceDeadline_) return;
 
     if (!runtime->interactiveSliceStopRequested_) {
@@ -2132,7 +2182,11 @@ uint32_t SyntheticDllRuntime::closeGuestHandle(uint32_t guestHandle) {
         waveOutStates_.erase(guestHandle);
         hostWaveBuffers_.clear();
     } else if (it->second.kind == GuestHandle::Kind::GuestFileMapping) {
-        fileMappings_.erase(guestHandle);
+        const bool hasMappedView = std::any_of(mappedViews_.begin(), mappedViews_.end(),
+                                               [&](const auto& entry) {
+                                                   return entry.second.mappingHandle == guestHandle;
+                                               });
+        if (!hasMappedView) fileMappings_.erase(guestHandle);
     } else if (it->second.kind == GuestHandle::Kind::HostBitmap) {
         bitmaps_.erase(guestHandle);
         if (it->second.filePointer) releaseAllocation(it->second.filePointer);
@@ -2759,6 +2813,7 @@ uint32_t SyntheticDllRuntime::makeGuestWindow(const std::string& className, cons
     window.param = param;
     window.wndProc = wndProc;
     window.ownerThread = activeGuestThread_ ? activeGuestThread_ : mainThreadPseudoHandle_;
+    window.zOrder = nextWindowZOrder();
     window.x = x;
     window.y = y;
     window.width = std::max<int32_t>(1, width);
@@ -2768,6 +2823,50 @@ uint32_t SyntheticDllRuntime::makeGuestWindow(const std::string& className, cons
     ensureHostWindow(hwnd, windows_[hwnd]);
     publishGuestWindowState(hwnd);
     return hwnd;
+}
+
+uint64_t SyntheticDllRuntime::nextWindowZOrder() {
+    return ++windowZOrder_;
+}
+
+uint64_t SyntheticDllRuntime::windowZOrder(uint32_t hwnd) const {
+    const auto it = windows_.find(hwnd);
+    return it == windows_.end() ? 0 : it->second.zOrder;
+}
+
+std::vector<uint32_t> SyntheticDllRuntime::orderedWindowsTopToBottom() const {
+    std::vector<uint32_t> ordered;
+    ordered.reserve(windows_.size());
+    for (const auto& [hwnd, _] : windows_) ordered.push_back(hwnd);
+    std::sort(ordered.begin(), ordered.end(), [&](uint32_t left, uint32_t right) {
+        const auto leftIt = windows_.find(left);
+        const auto rightIt = windows_.find(right);
+        const uint64_t leftZ = leftIt == windows_.end() ? 0 : leftIt->second.zOrder;
+        const uint64_t rightZ = rightIt == windows_.end() ? 0 : rightIt->second.zOrder;
+        if (leftZ != rightZ) return leftZ > rightZ;
+        return left > right;
+    });
+    return ordered;
+}
+
+std::vector<uint32_t> SyntheticDllRuntime::orderedSiblingWindows(uint32_t parent,
+                                                                 bool childWindow) const {
+    std::vector<uint32_t> siblings;
+    for (const auto& [hwnd, window] : windows_) {
+        if (!window.destroyed && window.parent == parent &&
+            ((window.style & kWindowStyleChild) != 0) == childWindow) {
+            siblings.push_back(hwnd);
+        }
+    }
+    std::sort(siblings.begin(), siblings.end(), [&](uint32_t left, uint32_t right) {
+        const auto leftIt = windows_.find(left);
+        const auto rightIt = windows_.find(right);
+        const uint64_t leftZ = leftIt == windows_.end() ? 0 : leftIt->second.zOrder;
+        const uint64_t rightZ = rightIt == windows_.end() ? 0 : rightIt->second.zOrder;
+        if (leftZ != rightZ) return leftZ > rightZ;
+        return left > right;
+    });
+    return siblings;
 }
 
 void SyntheticDllRuntime::ensureHostWindow(uint32_t guestHwnd, GuestWindow& window) {
@@ -2957,7 +3056,8 @@ void SyntheticDllRuntime::queueVisibleFullScreenPopupPaint(uint32_t hwnd) {
                                                           [&](const auto& entry) {
                                                               const uint32_t otherHwnd = entry.first;
                                                               const GuestWindow& other = entry.second;
-                                                              return otherHwnd < hwnd && !other.destroyed && other.visible &&
+                                                              return windowZOrder(otherHwnd) < windowZOrder(hwnd) &&
+                                                                     !other.destroyed && other.visible &&
                                                                      isOwnedPopupWindow(otherHwnd) &&
                                                                      guestWindowCoversFramebuffer(otherHwnd);
                                                           });
@@ -3026,7 +3126,7 @@ void SyntheticDllRuntime::queueVisiblePopupPaint(uint32_t hwnd) {
 void SyntheticDllRuntime::queueVisiblePopupPaintsAbove(uint32_t hwnd) {
     std::vector<uint32_t> popups;
     for (const auto& [popupHwnd, window] : windows_) {
-        if (popupHwnd <= hwnd || window.destroyed || !window.visible ||
+        if (windowZOrder(popupHwnd) <= windowZOrder(hwnd) || window.destroyed || !window.visible ||
             (window.style & kWindowStyleChild) || window.width <= 0 || window.height <= 0) {
             continue;
         }
@@ -3150,10 +3250,11 @@ bool SyntheticDllRuntime::isWindowInOwnedPopupStack(uint32_t hwnd, uint32_t ance
 }
 
 uint32_t SyntheticDllRuntime::coveringFullScreenOwnedPopup(uint32_t hwnd) const {
-    for (auto it = windows_.rbegin(); it != windows_.rend(); ++it) {
-        const uint32_t popupHwnd = it->first;
+    for (uint32_t popupHwnd : orderedWindowsTopToBottom()) {
+        const auto it = windows_.find(popupHwnd);
+        if (it == windows_.end()) continue;
         const GuestWindow& popup = it->second;
-        if (popupHwnd <= hwnd || popup.destroyed || !popup.visible ||
+        if (windowZOrder(popupHwnd) <= windowZOrder(hwnd) || popup.destroyed || !popup.visible ||
             !isOwnedPopupWindow(popupHwnd) || !guestWindowCoversFramebuffer(popupHwnd)) {
             continue;
         }
@@ -3172,7 +3273,7 @@ void SyntheticDllRuntime::retireOlderFullScreenOwnedPopupsForPopup(uint32_t popu
 
     std::vector<uint32_t> retired;
     for (auto& [hwnd, window] : windows_) {
-        if (hwnd >= popupHwnd || window.destroyed || !window.visible ||
+        if (window.zOrder >= target->second.zOrder || window.destroyed || !window.visible ||
             !isOwnedPopupWindow(hwnd) || !guestWindowCoversFramebuffer(hwnd)) {
             continue;
         }
@@ -3214,7 +3315,7 @@ bool SyntheticDllRuntime::restoreGuestWindowBacking(uint32_t hwnd,
                    y + candidate.height >= framebufferHeight_;
         };
         for (const auto& [candidateHwnd, candidate] : windows_) {
-            if (candidateHwnd > hwnd && !candidate.destroyed && candidate.visible &&
+            if (candidate.zOrder > windowZOrder(hwnd) && !candidate.destroyed && candidate.visible &&
                 candidate.parent && !(candidate.style & kWindowStyleChild) && coversFramebuffer(candidate)) {
                 spdlog::info("skipped stale full-screen owned popup backing restore hwnd=0x{:08x} newer=0x{:08x}",
                              hwnd, candidateHwnd);
@@ -3347,7 +3448,7 @@ bool SyntheticDllRuntime::hasCoveringRootPopup(uint32_t hwnd) const {
     const int32_t rootRight = rootX + rootWindow->second.width;
     const int32_t rootBottom = rootY + rootWindow->second.height;
     for (const auto& [popupHwnd, popup] : windows_) {
-        if (popupHwnd <= hwnd) continue;
+        if (popup.zOrder <= target->second.zOrder) continue;
         if (!popup.visible || popup.destroyed || popup.parent != root ||
             (popup.style & kWindowStyleChild)) {
             continue;
@@ -3380,7 +3481,8 @@ uint32_t SyntheticDllRuntime::readFramebufferTargetPixel(uint32_t targetHwnd,
                 isWindowOrDescendant(targetHwnd, hwnd)) {
                 continue;
             }
-            if (targetHwnd && !isOwnedPopupWindow(hwnd) && hwnd < targetHwnd) continue;
+            if (targetHwnd && !isOwnedPopupWindow(hwnd) &&
+                window.zOrder < windowZOrder(targetHwnd)) continue;
             if (x < window.backingX || y < window.backingY ||
                 x >= window.backingX + window.backingWidth ||
                 y >= window.backingY + window.backingHeight) {
@@ -3414,7 +3516,8 @@ void SyntheticDllRuntime::writeFramebufferTargetPixel(uint32_t targetHwnd,
                 isWindowOrDescendant(targetHwnd, hwnd)) {
                 continue;
             }
-            if (targetHwnd && !isOwnedPopupWindow(hwnd) && hwnd < targetHwnd) continue;
+            if (targetHwnd && !isOwnedPopupWindow(hwnd) &&
+                window.zOrder < windowZOrder(targetHwnd)) continue;
             if (x < window.backingX || y < window.backingY ||
                 x >= window.backingX + window.backingWidth ||
                 y >= window.backingY + window.backingHeight) {
@@ -3508,8 +3611,10 @@ uint32_t SyntheticDllRuntime::windowAtPoint(uint32_t rootGuestHwnd, int32_t x, i
         }
         return std::pair<int32_t, int32_t>{ox, oy};
     };
-    for (auto it = windows_.rbegin(); it != windows_.rend(); ++it) {
-        const uint32_t hwnd = it->first;
+    const std::vector<uint32_t> topToBottom = orderedWindowsTopToBottom();
+    for (uint32_t hwnd : topToBottom) {
+        const auto it = windows_.find(hwnd);
+        if (it == windows_.end()) continue;
         const GuestWindow& window = it->second;
         if (hwnd == rootGuestHwnd || window.destroyed || !window.visible ||
             !window.enabled || window.parent || !(window.style & 0x80000000u)) {
@@ -3532,8 +3637,9 @@ uint32_t SyntheticDllRuntime::windowAtPoint(uint32_t rootGuestHwnd, int32_t x, i
     uint32_t modalPopup = 0;
     int32_t modalX = 0;
     int32_t modalY = 0;
-    for (auto it = windows_.rbegin(); it != windows_.rend(); ++it) {
-        const uint32_t hwnd = it->first;
+    for (uint32_t hwnd : topToBottom) {
+        const auto it = windows_.find(hwnd);
+        if (it == windows_.end()) continue;
         const GuestWindow& window = it->second;
         if (window.destroyed || !window.visible || !window.enabled || !belongsToRoot(hwnd)) continue;
         if (!isOwnedPopupWindow(hwnd) || guestWindowCoversFramebuffer(hwnd)) continue;
@@ -3544,8 +3650,9 @@ uint32_t SyntheticDllRuntime::windowAtPoint(uint32_t rootGuestHwnd, int32_t x, i
         modalY = oy;
         break;
     }
-    for (auto it = windows_.rbegin(); it != windows_.rend(); ++it) {
-        const uint32_t hwnd = it->first;
+    for (uint32_t hwnd : topToBottom) {
+        const auto it = windows_.find(hwnd);
+        if (it == windows_.end()) continue;
         const GuestWindow& window = it->second;
         if (window.destroyed || !window.visible || !window.enabled || !belongsToRoot(hwnd)) continue;
         if (hasCoveringRootPopup(hwnd)) continue;
@@ -3826,7 +3933,8 @@ void SyntheticDllRuntime::fillFramebufferRect(const GuestDc& dc,
                 isWindowOrDescendant(dc.hwnd, hwnd)) {
                 continue;
             }
-            if (dc.hwnd && !isOwnedPopupWindow(hwnd) && hwnd < dc.hwnd) continue;
+            if (dc.hwnd && !isOwnedPopupWindow(hwnd) &&
+                window.zOrder < windowZOrder(dc.hwnd)) continue;
             const int32_t backingRight = window.backingX + window.backingWidth;
             const int32_t backingBottom = window.backingY + window.backingHeight;
             if (left < backingRight && right > window.backingX &&
@@ -5677,15 +5785,173 @@ uint32_t SyntheticDllRuntime::handleWideCharToMultiByte(uint32_t codePageArg, ui
 #endif
 }
 
+std::filesystem::path SyntheticDllRuntime::ensureSharedMappingDirectory() {
+    if (!sharedMappingDirectory_.empty()) {
+        return sharedMappingDirectory_;
+    }
+#if defined(_WIN32)
+    wchar_t buffer[32768]{};
+    DWORD chars = GetEnvironmentVariableW(L"INAVI_EMU_SHARED_MAPPING_DIR", buffer, DWORD(std::size(buffer)));
+    if (chars && chars < DWORD(std::size(buffer))) {
+        sharedMappingDirectory_ = std::filesystem::path(buffer);
+    }
+    if (sharedMappingDirectory_.empty()) {
+        chars = GetEnvironmentVariableW(L"INAVI_EMU_WINDOW_REGISTRY", buffer, DWORD(std::size(buffer)));
+        if (chars && chars < DWORD(std::size(buffer))) {
+            sharedMappingDirectory_ = std::filesystem::path(buffer).parent_path() / L"shared_mappings";
+        }
+    }
+    if (sharedMappingDirectory_.empty()) {
+        chars = GetEnvironmentVariableW(L"INAVI_EMU_CHILD_LOG_DIR", buffer, DWORD(std::size(buffer)));
+        if (chars && chars < DWORD(std::size(buffer))) {
+            sharedMappingDirectory_ = std::filesystem::path(buffer) / L"shared_mappings";
+        }
+    }
+#endif
+    if (sharedMappingDirectory_.empty()) {
+        std::error_code ignored;
+        sharedMappingDirectory_ = std::filesystem::temp_directory_path(ignored) / "inavi_emu_shared_mappings";
+    }
+    std::error_code ignored;
+    std::filesystem::create_directories(sharedMappingDirectory_, ignored);
+#if defined(_WIN32)
+    SetEnvironmentVariableW(L"INAVI_EMU_SHARED_MAPPING_DIR", sharedMappingDirectory_.wstring().c_str());
+#endif
+    return sharedMappingDirectory_;
+}
+
+std::filesystem::path SyntheticDllRuntime::sharedMappingBackingPath(const std::string& name) {
+    const std::string key = lowerAscii(name);
+    std::ostringstream stem;
+    stem << "mapping_" << std::hex << std::setw(16) << std::setfill('0') << fnv1a64(key)
+         << "_" << sanitizeFileNameFragment(key) << ".bin";
+    return ensureSharedMappingDirectory() / stem.str();
+}
+
+uint64_t SyntheticDllRuntime::sharedMappingVersion(const std::filesystem::path& backingPath) const {
+    std::ifstream input(backingPath.string() + ".version");
+    uint64_t version = 0;
+    input >> version;
+    return version;
+}
+
+void SyntheticDllRuntime::writeSharedMappingVersion(const std::filesystem::path& backingPath, uint64_t version) const {
+    std::ofstream output(backingPath.string() + ".version", std::ios::trunc);
+    output << version << "\n";
+}
+
+bool SyntheticDllRuntime::ensureSharedMappingBacking(const std::filesystem::path& backingPath,
+                                                     uint64_t requestedSize,
+                                                     uint64_t& actualSize,
+                                                     bool& existed) {
+    std::error_code ec;
+    existed = std::filesystem::exists(backingPath, ec);
+    actualSize = existed ? std::filesystem::file_size(backingPath, ec) : 0;
+    if (ec) {
+        existed = false;
+        actualSize = 0;
+        ec.clear();
+    }
+    if (!existed) {
+        std::ofstream create(backingPath, std::ios::binary);
+        if (!create.good()) {
+            return false;
+        }
+    }
+    if (actualSize < requestedSize) {
+        std::filesystem::resize_file(backingPath, requestedSize, ec);
+        if (ec) {
+            return false;
+        }
+        actualSize = requestedSize;
+    }
+    if (!existed) {
+        writeSharedMappingVersion(backingPath, 1);
+    } else if (!std::filesystem::exists(backingPath.string() + ".version", ec)) {
+        writeSharedMappingVersion(backingPath, 1);
+    }
+    return true;
+}
+
+bool SyntheticDllRuntime::readSharedMappingBytes(const std::filesystem::path& backingPath,
+                                                 uint64_t offset,
+                                                 std::vector<uint8_t>& bytes) const {
+    if (bytes.empty()) return true;
+    std::ifstream input(backingPath, std::ios::binary);
+    if (!input.good()) return false;
+    input.seekg(std::streamoff(offset), std::ios::beg);
+    input.read(reinterpret_cast<char*>(bytes.data()), std::streamsize(bytes.size()));
+    const std::streamsize read = input.gcount();
+    if (read < std::streamsize(bytes.size())) {
+        std::fill(bytes.begin() + std::max<std::streamsize>(0, read), bytes.end(), 0);
+    }
+    return true;
+}
+
+bool SyntheticDllRuntime::writeSharedMappingBytes(const std::filesystem::path& backingPath,
+                                                  uint64_t offset,
+                                                  const std::vector<uint8_t>& bytes) {
+    if (bytes.empty()) return true;
+    std::fstream file(backingPath, std::ios::binary | std::ios::in | std::ios::out);
+    if (!file.good()) return false;
+    file.seekp(std::streamoff(offset), std::ios::beg);
+    file.write(reinterpret_cast<const char*>(bytes.data()), std::streamsize(bytes.size()));
+    if (!file.good()) return false;
+    writeSharedMappingVersion(backingPath, sharedMappingVersion(backingPath) + 1);
+    return true;
+}
+
+bool SyntheticDllRuntime::syncNamedMappedView(uint32_t baseAddress, GuestMappedView& view, bool forceWrite) {
+    auto mapping = fileMappings_.find(view.mappingHandle);
+    if (mapping == fileMappings_.end() || !mapping->second.namedShared || mapping->second.backingPath.empty()) {
+        return false;
+    }
+    std::vector<uint8_t> current(view.size);
+    if (view.size && uc_mem_read(uc_, baseAddress, current.data(), current.size()) != UC_ERR_OK) {
+        return false;
+    }
+    if (forceWrite || current != view.shadow) {
+        if (!writeSharedMappingBytes(mapping->second.backingPath, view.offset, current)) {
+            return false;
+        }
+        view.shadow = std::move(current);
+        view.backingVersion = sharedMappingVersion(mapping->second.backingPath);
+        return true;
+    }
+    const uint64_t version = sharedMappingVersion(mapping->second.backingPath);
+    if (version != view.backingVersion) {
+        std::vector<uint8_t> remote(view.size);
+        if (!readSharedMappingBytes(mapping->second.backingPath, view.offset, remote)) {
+            return false;
+        }
+        if (view.size) uc_mem_write(uc_, baseAddress, remote.data(), remote.size());
+        view.shadow = std::move(remote);
+        view.backingVersion = version;
+        return true;
+    }
+    return false;
+}
+
+void SyntheticDllRuntime::syncNamedMappedViews(bool forceWrite) {
+    for (auto& [base, view] : mappedViews_) {
+        syncNamedMappedView(base, view, forceWrite);
+    }
+}
+
 uint32_t SyntheticDllRuntime::handleCreateFileMappingW(uint32_t fileHandle, uint32_t, uint32_t protect,
                                                        uint32_t sizeHigh) {
     const uint32_t sizeLow = stackArg(4);
     const uint32_t namePtr = stackArg(5);
+    const std::string name = readUtf16(namePtr, 260);
+    auto debugName = fileHandleDebugNames_.find(fileHandle);
+    const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
     uint64_t mappingSize = (uint64_t(sizeHigh) << 32) | sizeLow;
     if (fileHandle != 0xffffffffu) {
         auto* file = lookupGuestHandle(fileHandle);
         if (!file || file->kind != GuestHandle::Kind::HostFile || !file->hostValue) {
             lastError_ = 6;
+            spdlog::info("CreateFileMappingW failed invalid file handle=0x{:08x} path=\"{}\" protect=0x{:08x} size={} name=\"{}\" lastError={}",
+                         fileHandle, debugPath, protect, mappingSize, name, lastError_);
             return 0;
         }
 #if defined(_WIN32)
@@ -5699,55 +5965,104 @@ uint32_t SyntheticDllRuntime::handleCreateFileMappingW(uint32_t fileHandle, uint
     }
     if (!mappingSize) {
         lastError_ = 87;
+        spdlog::info("CreateFileMappingW failed zero size file=0x{:08x} path=\"{}\" protect=0x{:08x} name=\"{}\" lastError={}",
+                     fileHandle, debugPath, protect, name, lastError_);
         return 0;
     }
+    std::filesystem::path backingPath;
+    bool namedShared = false;
+    bool alreadyExists = false;
+    if (!name.empty()) {
+        backingPath = sharedMappingBackingPath(name);
+        uint64_t actualSize = mappingSize;
+        if (!ensureSharedMappingBacking(backingPath, mappingSize, actualSize, alreadyExists)) {
+            lastError_ = 8;
+            spdlog::info("CreateFileMappingW failed shared backing file=0x{:08x} path=\"{}\" protect=0x{:08x} size={} name=\"{}\" backing=\"{}\" lastError={}",
+                         fileHandle, debugPath, protect, mappingSize, name, pathToUtf8(backingPath), lastError_);
+            return 0;
+        }
+        mappingSize = actualSize;
+        namedShared = true;
+    }
     const uint32_t handle = makeGuestHandle({GuestHandle::Kind::GuestFileMapping, 0, 0});
-    fileMappings_[handle] = GuestFileMapping{fileHandle, mappingSize, protect, readUtf16(namePtr, 260)};
-    lastError_ = 0;
+    fileMappings_[handle] = GuestFileMapping{fileHandle, mappingSize, protect, name, backingPath, namedShared};
+    fileHandleDebugNames_[handle] = "mapping name=\"" + name + "\" file=\"" + debugPath + "\" backing=\"" +
+                                    pathToUtf8(backingPath) + "\"";
+    lastError_ = alreadyExists ? 183 : 0;
+    spdlog::info("CreateFileMappingW file=0x{:08x} path=\"{}\" protect=0x{:08x} size={} name=\"{}\" shared={} existing={} backing=\"{}\" -> 0x{:08x} lastError={}",
+                 fileHandle, debugPath, protect, mappingSize, name, namedShared, alreadyExists,
+                 pathToUtf8(backingPath), handle, lastError_);
     return handle;
 }
 
-uint32_t SyntheticDllRuntime::handleMapViewOfFile(uint32_t mappingHandle, uint32_t, uint32_t offsetHigh,
+uint32_t SyntheticDllRuntime::handleMapViewOfFile(uint32_t mappingHandle, uint32_t desiredAccess, uint32_t offsetHigh,
                                                   uint32_t offsetLow) {
     const uint32_t bytesToMap = stackArg(4);
     auto mapping = fileMappings_.find(mappingHandle);
     if (mapping == fileMappings_.end()) {
         lastError_ = 6;
+        spdlog::info("MapViewOfFile failed unknown mapping=0x{:08x} offsetHigh=0x{:08x} offsetLow=0x{:08x} bytes={} lastError={}",
+                     mappingHandle, offsetHigh, offsetLow, bytesToMap, lastError_);
         return 0;
     }
     const uint64_t offset = (uint64_t(offsetHigh) << 32) | offsetLow;
     if (offset >= mapping->second.size) {
         lastError_ = 87;
+        spdlog::info("MapViewOfFile failed range mapping=0x{:08x} name=\"{}\" offset={} size={} bytes={} lastError={}",
+                     mappingHandle, mapping->second.name, offset, mapping->second.size, bytesToMap, lastError_);
         return 0;
     }
     const uint64_t viewSize64 = bytesToMap ? bytesToMap : mapping->second.size - offset;
     if (!viewSize64 || viewSize64 > 0x02000000u) {
         lastError_ = 87;
+        spdlog::info("MapViewOfFile failed view size mapping=0x{:08x} name=\"{}\" offset={} viewSize={} bytes={} lastError={}",
+                     mappingHandle, mapping->second.name, offset, viewSize64, bytesToMap, lastError_);
         return 0;
     }
     const uint32_t viewSize = uint32_t(viewSize64);
     const uint32_t base = allocate(viewSize, true);
-    if (!base) return 0;
-    mappedViews_[base] = GuestMappedView{mappingHandle, offset, viewSize};
-#if defined(_WIN32)
-    auto* file = lookupGuestHandle(mapping->second.fileHandle);
-    if (file && file->kind == GuestHandle::Kind::HostFile && file->hostValue) {
-        HANDLE host = reinterpret_cast<HANDLE>(file->hostValue);
-        LARGE_INTEGER oldPos{};
-        LARGE_INTEGER wanted{};
-        wanted.QuadPart = LONGLONG(offset);
-        SetFilePointerEx(host, {}, &oldPos, FILE_CURRENT);
-        if (SetFilePointerEx(host, wanted, nullptr, FILE_BEGIN)) {
-            std::vector<uint8_t> bytes(viewSize);
-            DWORD read = 0;
-            if (ReadFile(host, bytes.data(), viewSize, &read, nullptr) && read) {
-                uc_mem_write(uc_, base, bytes.data(), read);
-            }
-        }
-        SetFilePointerEx(host, oldPos, nullptr, FILE_BEGIN);
+    if (!base) {
+        spdlog::info("MapViewOfFile failed guest allocation mapping=0x{:08x} name=\"{}\" viewSize={}",
+                     mappingHandle, mapping->second.name, viewSize);
+        return 0;
     }
+    GuestMappedView mappedView{mappingHandle, offset, viewSize};
+    if (mapping->second.namedShared && !mapping->second.backingPath.empty()) {
+        std::vector<uint8_t> bytes(viewSize);
+        if (readSharedMappingBytes(mapping->second.backingPath, offset, bytes)) {
+            if (!bytes.empty()) uc_mem_write(uc_, base, bytes.data(), bytes.size());
+            mappedView.shadow = std::move(bytes);
+            mappedView.backingVersion = sharedMappingVersion(mapping->second.backingPath);
+        }
+    } else {
+#if defined(_WIN32)
+        auto* file = lookupGuestHandle(mapping->second.fileHandle);
+        if (file && file->kind == GuestHandle::Kind::HostFile && file->hostValue) {
+            HANDLE host = reinterpret_cast<HANDLE>(file->hostValue);
+            LARGE_INTEGER oldPos{};
+            LARGE_INTEGER wanted{};
+            wanted.QuadPart = LONGLONG(offset);
+            SetFilePointerEx(host, {}, &oldPos, FILE_CURRENT);
+            if (SetFilePointerEx(host, wanted, nullptr, FILE_BEGIN)) {
+                std::vector<uint8_t> bytes(viewSize);
+                DWORD read = 0;
+                if (ReadFile(host, bytes.data(), viewSize, &read, nullptr) && read) {
+                    uc_mem_write(uc_, base, bytes.data(), read);
+                }
+            }
+            SetFilePointerEx(host, oldPos, nullptr, FILE_BEGIN);
+        }
 #endif
+    }
+    if (mappedView.shadow.empty()) {
+        mappedView.shadow.resize(viewSize);
+        if (viewSize) uc_mem_read(uc_, base, mappedView.shadow.data(), mappedView.shadow.size());
+    }
+    mappedViews_[base] = std::move(mappedView);
     lastError_ = 0;
+    spdlog::info("MapViewOfFile mapping=0x{:08x} name=\"{}\" access=0x{:08x} offset={} bytes={} shared={} backing=\"{}\" -> base=0x{:08x} viewSize={}",
+                 mappingHandle, mapping->second.name, desiredAccess, offset, bytesToMap,
+                 mapping->second.namedShared, pathToUtf8(mapping->second.backingPath), base, viewSize);
     return base;
 }
 
@@ -5755,9 +6070,22 @@ uint32_t SyntheticDllRuntime::handleUnmapViewOfFile(uint32_t baseAddress) {
     auto view = mappedViews_.find(baseAddress);
     if (view == mappedViews_.end()) {
         lastError_ = 487;
+        spdlog::info("UnmapViewOfFile failed base=0x{:08x} lastError={}", baseAddress, lastError_);
         return 0;
     }
+    const auto mapping = fileMappings_.find(view->second.mappingHandle);
+    const std::string name = mapping == fileMappings_.end() ? std::string{} : mapping->second.name;
+    const uint32_t mappingHandle = view->second.mappingHandle;
+    const bool synced = syncNamedMappedView(baseAddress, view->second, true);
+    spdlog::info("UnmapViewOfFile base=0x{:08x} mapping=0x{:08x} name=\"{}\" size={} synced={}",
+                 baseAddress, mappingHandle, name, view->second.size, synced);
     mappedViews_.erase(view);
+    const bool mappingHandleOpen = guestHandles_.find(mappingHandle) != guestHandles_.end();
+    const bool hasMappedView = std::any_of(mappedViews_.begin(), mappedViews_.end(),
+                                           [&](const auto& entry) {
+                                               return entry.second.mappingHandle == mappingHandle;
+                                           });
+    if (!mappingHandleOpen && !hasMappedView) fileMappings_.erase(mappingHandle);
     lastError_ = 0;
     return 1;
 }
@@ -5766,13 +6094,24 @@ uint32_t SyntheticDllRuntime::handleFlushViewOfFile(uint32_t baseAddress, uint32
     auto view = mappedViews_.find(baseAddress);
     if (view == mappedViews_.end()) {
         lastError_ = 487;
+        spdlog::info("FlushViewOfFile failed base=0x{:08x} bytes={} lastError={}",
+                     baseAddress, bytesToFlush, lastError_);
         return 0;
     }
     const auto mapping = fileMappings_.find(view->second.mappingHandle);
     const uint32_t bytes = bytesToFlush ? std::min(bytesToFlush, view->second.size) : view->second.size;
     if (mapping == fileMappings_.end() || !bytes) {
         lastError_ = 0;
+        spdlog::info("FlushViewOfFile ignored base=0x{:08x} bytes={} mappingKnown={} effectiveBytes={}",
+                     baseAddress, bytesToFlush, mapping != fileMappings_.end(), bytes);
         return 1;
+    }
+    if (mapping->second.namedShared) {
+        const bool synced = syncNamedMappedView(baseAddress, view->second, true);
+        lastError_ = synced ? 0 : 1;
+        spdlog::info("FlushViewOfFile base=0x{:08x} mapping=0x{:08x} name=\"{}\" shared=1 bytes={} effectiveBytes={} synced={}",
+                     baseAddress, view->second.mappingHandle, mapping->second.name, bytesToFlush, bytes, synced);
+        return synced ? 1 : 0;
     }
 #if defined(_WIN32)
     auto* file = lookupGuestHandle(mapping->second.fileHandle);
@@ -5798,6 +6137,8 @@ uint32_t SyntheticDllRuntime::handleFlushViewOfFile(uint32_t baseAddress, uint32
     }
 #endif
     lastError_ = 0;
+    spdlog::info("FlushViewOfFile base=0x{:08x} mapping=0x{:08x} name=\"{}\" bytes={} effectiveBytes={}",
+                 baseAddress, view->second.mappingHandle, mapping->second.name, bytesToFlush, bytes);
     return 1;
 }
 
@@ -6088,6 +6429,10 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
     const bool isCoredll = mutableEntry.moduleKind == SyntheticModuleKind::Coredll;
     const uint16_t ordinal = mutableEntry.ordinal;
     const uint32_t pc = reg(UC_MIPS_REG_PC);
+    const bool syncSharedMappings = isCoredll && coredllOrdinalTouchesSharedMappingBoundary(ordinal);
+    if (syncSharedMappings) {
+        syncNamedMappedViews();
+    }
     if (mutableEntry.calls <= 128) {
         spdlog::debug("synthetic {}!{} call {} a0=0x{:08x} a1=0x{:08x} a2=0x{:08x} a3=0x{:08x} ra=0x{:08x}",
                       mutableEntry.moduleName, name, mutableEntry.calls, a0, a1, a2, a3, ra);
@@ -6099,6 +6444,7 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         }
         setReg(UC_MIPS_REG_V0, value);
         setReg(UC_MIPS_REG_PC, ra);
+        if (syncSharedMappings) syncNamedMappedViews();
         pumpHostMessages();
         if (cooperateThreads) cooperateGuestThreadsAfterCall(name);
     };
@@ -6918,12 +7264,13 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         const bool traceWindowMessage =
             msg == 0x0007 || msg == 0x0008 ||
             msg == 0x0200 || msg == 0x0201 || msg == 0x0202 ||
-            msg == 0x032f0 || (msg >= 0x5700 && msg <= 0x58ff);
+            msg == 0x032f0 || (msg >= 0x0600 && msg <= 0x07ff) ||
+            (msg >= 0x5700 && msg <= 0x58ff);
         if (mutableEntry.calls <= 128 || traceWindowMessage) {
             spdlog::info("synthetic coredll.dll!{} transfer wndproc=0x{:08x} hwnd=0x{:08x} msg=0x{:08x} wparam=0x{:08x} lparam=0x{:08x}",
                          name, wndProc, hwnd, msg, wParam, lParam);
         }
-        if (msg >= 0x5700 && msg <= 0x58ff) {
+        if ((msg >= 0x0600 && msg <= 0x07ff) || (msg >= 0x5700 && msg <= 0x58ff)) {
             auto describePointer = [&](const char* label, uint32_t ptr) {
                 if (!ptr || !isGuestRangeReadable(ptr, 4)) return;
                 std::array<uint8_t, 64> bytes{};
@@ -6984,8 +7331,8 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
     if (isCoredll &&
         (dispatchHostWin32(ordinal, args, ret) || dispatchGuestMemoryApi(ordinal, args, ret))) {
         if (ordinal == 0x035D && ret == 0 && !quitPosted_) {
-            spdlog::info("GetMessageW empty queue blocks main context pc=0x{:08x} ra=0x{:08x} queued={}",
-                         pc, ra, guestMessages_.size());
+            spdlog::debug("GetMessageW empty queue blocks main context pc=0x{:08x} ra=0x{:08x} queued={}",
+                          pc, ra, guestMessages_.size());
             setReg(UC_MIPS_REG_PC, pc);
             pumpHostMessages();
             if (!switchToRunnableGuestThread("GetMessageW-blocking", pc)) {

@@ -8,6 +8,9 @@ Last refreshed: 2026-05-25.
    - Continue from `captures/inavi_autodrive_20260525_191809`, not the older
      `pc=0` route crash. The empty-queue `GetMessageW` false-quit and
      guest-thread `$ra` corruption are fixed in the current working tree.
+   - Continue live route testing from `captures/inavi_autodrive_20260525_201627`.
+     The previous `200812` run was invalid for route-search diagnosis because
+     the autodrive runner killed the `MultiTBT` companion during `-KeepAlive`.
    - Determine why the app polls for `MultiTBT` but no guest launch for
      `\TBT\MultiTBT.exe` appears in logs.
    - Current diagnostic run may manually start `\SDMMC Disk\TBT\MultiTBT.exe`

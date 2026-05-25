@@ -53,6 +53,12 @@ Last refreshed: 2026-05-25.
   process/MFC/CRT state.
 - Child emulator processes are launched with `--headless` by the generic
   `CreateProcessW` fallback and use hidden/no-console host startup flags.
+- The autodrive diagnostic runner no longer kills companion processes when
+  `-KeepAlive` is set. This fixed a false route-search stall where the parent
+  stayed alive but `MultiTBT.exe` was terminated by the runner cleanup.
+- Cross-process guest-window discovery/posting now skips external windows whose
+  host process has already exited, preventing stale registry entries from
+  receiving route/private messages.
 - `happyway_win.exe` can now resolve the parent `iNavi` window by title in the
   capture where title propagation was verified.
 - `UID1:` has a named JSON-selected `NANDUUID_RETURN` backend for the observed
@@ -142,6 +148,12 @@ Last refreshed: 2026-05-25.
   observed in the current logs.
 - Manual launch experiments for `MultiTBT.exe` are diagnostics only, not an
   emulator fix.
+- `captures/inavi_autodrive_20260525_200812` identified a diagnostic-runner
+  bug: `MultiTBT` PID `12588` was killed by `autodrive_inavi.ps1` even under
+  `-KeepAlive`, while its shared-window registry entry remained. Route/private
+  messages such as `0x06ee` then queued to the dead PID.
+- `captures/inavi_autodrive_20260525_201627` is the fresh post-fix run with
+  parent PID `35580` and companion PID `36440` both alive/responding.
 
 ## Known False Leads / Constraints
 

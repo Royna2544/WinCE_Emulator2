@@ -258,6 +258,7 @@ private:
         CoreDllAtan,
         CoreDllCeil,
         CoreDllCos,
+        CoreDllDifftime,
         CoreDllFabs,
         CoreDllFloor,
         CoreDllHypot,
@@ -522,6 +523,7 @@ private:
         uint32_t userData{};
         uint32_t createStruct{};
         uint32_t ownerThread{};
+        uint64_t zOrder{};
         int32_t x{};
         int32_t y{};
         int32_t width{800};
@@ -658,11 +660,15 @@ private:
         uint64_t size{};
         uint32_t protect{};
         std::string name;
+        std::filesystem::path backingPath;
+        bool namedShared{};
     };
     struct GuestMappedView {
         uint32_t mappingHandle{};
         uint64_t offset{};
         uint32_t size{};
+        std::vector<uint8_t> shadow;
+        uint64_t backingVersion{};
     };
     struct GuestTimer {
         uint32_t hwnd{};
@@ -751,6 +757,7 @@ private:
     uint32_t nextHandle_ = 0x10000;
     uint32_t processHeapHandle_ = 0;
     uint64_t tick_ = 0;
+    uint64_t windowZOrder_ = 0;
     bool quitPosted_ = false;
     uint32_t currentCursor_ = 0;
     uint32_t focusedWindow_ = 0;
@@ -773,6 +780,7 @@ private:
     std::filesystem::path sdmmcHostRoot_;
     std::filesystem::path hostMainModulePath_;
     std::filesystem::path crossProcessWindowRegistryPath_;
+    std::filesystem::path sharedMappingDirectory_;
     uint32_t mainModuleBase_ = 0;
     std::filesystem::path hostBaseDir_;
     uint16_t nextAtom_ = 0xc000;
@@ -1058,6 +1066,7 @@ private:
     bool handleAtan(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleCeil(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleCos(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleDifftime(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleFabs(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleFloor(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleHypot(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
@@ -1218,6 +1227,15 @@ private:
     uint32_t handleMapViewOfFile(uint32_t mappingHandle, uint32_t desiredAccess, uint32_t offsetHigh, uint32_t offsetLow);
     uint32_t handleUnmapViewOfFile(uint32_t baseAddress);
     uint32_t handleFlushViewOfFile(uint32_t baseAddress, uint32_t bytesToFlush);
+    std::filesystem::path ensureSharedMappingDirectory();
+    std::filesystem::path sharedMappingBackingPath(const std::string& name);
+    uint64_t sharedMappingVersion(const std::filesystem::path& backingPath) const;
+    void writeSharedMappingVersion(const std::filesystem::path& backingPath, uint64_t version) const;
+    bool ensureSharedMappingBacking(const std::filesystem::path& backingPath, uint64_t requestedSize, uint64_t& actualSize, bool& existed);
+    bool readSharedMappingBytes(const std::filesystem::path& backingPath, uint64_t offset, std::vector<uint8_t>& bytes) const;
+    bool writeSharedMappingBytes(const std::filesystem::path& backingPath, uint64_t offset, const std::vector<uint8_t>& bytes);
+    bool syncNamedMappedView(uint32_t baseAddress, GuestMappedView& view, bool forceWrite);
+    void syncNamedMappedViews(bool forceWrite = false);
     uint32_t handleRegEnumValueW(uint32_t hkey, uint32_t index, uint32_t valueNamePtr, uint32_t valueNameSizePtr);
     uint32_t openGuestSerialDevice(const std::string& guestPath, uint32_t access, uint32_t share);
     uint32_t dispatchDeviceIoControl(uint32_t handle, uint32_t controlCode, uint32_t inPtr, uint32_t inSize);
@@ -1263,6 +1281,10 @@ private:
     void syncHostWindowPlacement(GuestWindow& window, bool present);
     std::filesystem::path ensureCrossProcessWindowRegistryPath();
     void publishGuestWindowState(uint32_t hwnd);
+    uint64_t nextWindowZOrder();
+    uint64_t windowZOrder(uint32_t hwnd) const;
+    std::vector<uint32_t> orderedWindowsTopToBottom() const;
+    std::vector<uint32_t> orderedSiblingWindows(uint32_t parent, bool childWindow) const;
     std::optional<uint32_t> findExternalGuestWindow(const std::string& className,
                                                     const std::string& title,
                                                     bool matchClass,

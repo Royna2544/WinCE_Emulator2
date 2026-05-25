@@ -49,6 +49,7 @@ void SyntheticDllRuntime::registerCoredllMathExports(SyntheticModule& module) {
                     {0x03DF, {"atan", Code::CoreDllAtan, &SyntheticDllRuntime::handleAtan}},
                     {0x03E7, {"ceil", Code::CoreDllCeil, &SyntheticDllRuntime::handleCeil}},
                     {0x03EC, {"cos", Code::CoreDllCos, &SyntheticDllRuntime::handleCos}},
+                    {0x03EE, {"difftime", Code::CoreDllDifftime, &SyntheticDllRuntime::handleDifftime}},
                     {0x03F2, {"fabs", Code::CoreDllFabs, &SyntheticDllRuntime::handleFabs}},
                     {0x03F5, {"floor", Code::CoreDllFloor, &SyntheticDllRuntime::handleFloor}},
                     {0x03FF, {"_hypot", Code::CoreDllHypot, &SyntheticDllRuntime::handleHypot}},
@@ -133,6 +134,12 @@ bool SyntheticDllRuntime::handleCeil(SyntheticExportCode code, const GuestCallAr
 bool SyntheticDllRuntime::handleCos(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
     (void)code;
     setGuestDoubleReturn(uc_, std::cos(doubleFromGuestPair(args.a0, args.a1)), ret);
+    return true;
+}
+
+bool SyntheticDllRuntime::handleDifftime(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
+    (void)code;
+    setGuestDoubleReturn(uc_, static_cast<double>(int32_t(args.a0) - int32_t(args.a1)), ret);
     return true;
 }
 

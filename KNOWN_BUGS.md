@@ -22,6 +22,11 @@ Current evidence:
   guest window and broadcasts/messages reach the helper.
 - `captures/inavi_autodrive_20260525_173452` confirms the generic headless
   companion diagnostic resolves `FindWindowW(NULL, L"MultiTBT")`.
+- `captures/inavi_autodrive_20260525_200812` showed a false stall caused by
+  the diagnostic runner, not the guest app: `MultiTBT` was killed despite
+  `-KeepAlive`, leaving stale registry and queued route messages to a dead PID.
+- The runner now preserves companions under `-KeepAlive`, and the emulator
+  skips stale external guest windows whose host process has exited.
 - `captures/inavi_autodrive_20260525_173931` shows route/result child windows
   being created after the final search tap, but the screenshot remains on a
   destination/current-position information dialog.
@@ -49,12 +54,15 @@ Current hypothesis:
   `CreateProcessW` path.
 - After `MultiTBT` is present, the current lead moves to wrong hit target or
   paint/z-order/compositing for the route-result windows.
+- Re-test from `captures/inavi_autodrive_20260525_201627`, where parent and
+  companion are both alive after the runner fix.
 
 Status:
 
-- Still not complete, but the route `pc=0` crash is fixed in the current
-  working tree. Do not hardcode a `MultiTBT` launch. Use real-device evidence
-  or a generic external companion configuration if one is justified.
+- Still not complete, but the route `pc=0` crash and the diagnostic
+  companion-kill false stall are fixed in the current working tree. Do not
+  hardcode a `MultiTBT` launch. Use real-device evidence or a generic external
+  companion configuration if one is justified.
 
 ## Modal And Overlay Routing Is Still Wrong
 

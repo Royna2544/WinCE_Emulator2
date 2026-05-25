@@ -23,6 +23,27 @@
 namespace {
 constexpr uint32_t kWindowStyleChild = 0x40000000u;
 
+bool isHostProcessAlive(uint32_t processId) {
+    if (!processId) {
+        return false;
+    }
+#if defined(_WIN32)
+    if (processId == GetCurrentProcessId()) {
+        return true;
+    }
+    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, processId);
+    if (!process) {
+        return false;
+    }
+    DWORD exitCode = 0;
+    const bool alive = GetExitCodeProcess(process, &exitCode) && exitCode == STILL_ACTIVE;
+    CloseHandle(process);
+    return alive;
+#else
+    return true;
+#endif
+}
+
 enum class CoredllOrdinal : uint16_t {
     GetAPIAddress = 0x002C,
     GlobalMemoryStatus = 0x0058,
@@ -720,7 +741,7 @@ void SyntheticDllRuntime::publishGuestWindowState(uint32_t hwnd) {
         {"y", window.y},
         {"width", window.width},
         {"height", window.height},
-        {"tick", tick_},
+        {"tick", window.zOrder},
     });
 
     std::error_code ignored;
@@ -777,6 +798,11 @@ std::optional<uint32_t> SyntheticDllRuntime::findExternalGuestWindow(const std::
         if (!processId || !externalHwnd || processId == currentPid || it->value("destroyed", false)) {
             continue;
         }
+        if (!isHostProcessAlive(processId)) {
+            spdlog::info("FindWindowW skipped stale external guest window remotePid={} remoteHwnd=0x{:08x}",
+                         processId, externalHwnd);
+            continue;
+        }
         const std::string entryClass = lowerAscii(it->value("class", std::string{}));
         const std::string entryTitle = it->value("title", std::string{});
         if (matchClass && entryClass != className) {
@@ -794,6 +820,8 @@ std::optional<uint32_t> SyntheticDllRuntime::findExternalGuestWindow(const std::
                 existingWindow->second.className = entryClass;
                 existingWindow->second.title = entryTitle;
                 existingWindow->second.visible = it->value("visible", false);
+                existingWindow->second.zOrder = std::max<uint64_t>(existingWindow->second.zOrder,
+                                                                   it->value("tick", 0ull));
                 return existing->second;
             }
         }
@@ -811,6 +839,7 @@ std::optional<uint32_t> SyntheticDllRuntime::findExternalGuestWindow(const std::
         window.width = it->value("width", 0);
         window.height = it->value("height", 0);
         window.visible = it->value("visible", false);
+        window.zOrder = it->value("tick", 0ull);
         window.enabled = true;
         window.externalProcess = true;
         window.externalProcessId = processId;
@@ -838,6 +867,11 @@ bool SyntheticDllRuntime::postCrossProcessGuestMessage(uint32_t processId,
                                                        uint32_t wParam,
                                                        uint32_t lParam) {
     if (!processId || !hwnd || processId == hostProcessId()) {
+        return false;
+    }
+    if (!isHostProcessAlive(processId)) {
+        spdlog::info("cross-process message skipped stale target remotePid={} remoteHwnd=0x{:08x} msg=0x{:08x}",
+                     processId, hwnd, message);
         return false;
     }
     const std::filesystem::path queuePath = crossProcessMessageQueuePath();
@@ -1206,6 +1240,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
         // then let later evidence drive a fuller dialog-manager shim.
         window.wndProc = 0;
         window.ownerThread = activeGuestThread_ ? activeGuestThread_ : mainThreadPseudoHandle_;
+        window.zOrder = nextWindowZOrder();
         window.x = x;
         window.y = y;
         window.width = width;
@@ -1858,6 +1893,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
         window.param = param;
         window.wndProc = wndProc;
         window.ownerThread = activeGuestThread_ ? activeGuestThread_ : mainThreadPseudoHandle_;
+        window.zOrder = nextWindowZOrder();
         window.x = normalizePos(rawX);
         window.y = normalizePos(rawY);
         window.width = normalizeSize(rawWidth, framebufferWidth_ > 0 ? framebufferWidth_ : 800, topLevel);
@@ -2570,6 +2606,11 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
         } else {
             lastError_ = 0;
             ret = getWindowLongValue(it->second, int32_t(a1));
+            if (int32_t(a1) == -4 || int32_t(a1) == -21 ||
+                it->second.className.rfind("afx", 0) == 0) {
+                spdlog::info("GetWindowLongW hwnd=0x{:08x} class=\"{}\" index={} -> 0x{:08x}",
+                             a0, it->second.className, int32_t(a1), ret);
+            }
         }
     } else if (ordinal == ord(CoredllOrdinal::SetWindowLongW)) {
         auto it = windows_.find(a0);
@@ -2579,6 +2620,11 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
         } else {
             lastError_ = 0;
             ret = setWindowLongValue(it->second, int32_t(a1), a2);
+            if (int32_t(a1) == -4 || int32_t(a1) == -21 ||
+                it->second.className.rfind("afx", 0) == 0) {
+                spdlog::info("SetWindowLongW hwnd=0x{:08x} class=\"{}\" index={} value=0x{:08x} previous=0x{:08x}",
+                             a0, it->second.className, int32_t(a1), a2, ret);
+            }
         }
     } else if (ordinal == ord(CoredllOrdinal::GetParent)) {
         auto it = windows_.find(a0);
@@ -2599,14 +2645,8 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = 1400;
             ret = 0;
         } else if (a1 == 5) {
-            ret = 0;
-            for (const auto& [hwnd, window] : windows_) {
-                if (!window.destroyed && window.parent == a0 &&
-                    (window.style & kWindowStyleChild)) {
-                    ret = hwnd;
-                    break;
-                }
-            }
+            const auto children = orderedSiblingWindows(a0, true);
+            ret = children.empty() ? 0 : children.front();
             lastError_ = ret ? 0 : 1400;
         } else if (a1 == 4) {
             const auto owner = windows_.find(it->second.parent);
@@ -2614,13 +2654,8 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
                   owner != windows_.end() && !owner->second.destroyed ? it->second.parent : 0;
             lastError_ = ret ? 0 : 1400;
         } else if (a1 == 2 || a1 == 3) {
-            std::vector<uint32_t> siblings;
-            for (const auto& [hwnd, window] : windows_) {
-                if (!window.destroyed && window.parent == it->second.parent &&
-                    ((window.style & kWindowStyleChild) == (it->second.style & kWindowStyleChild))) {
-                    siblings.push_back(hwnd);
-                }
-            }
+            const bool childWindow = (it->second.style & kWindowStyleChild) != 0;
+            std::vector<uint32_t> siblings = orderedSiblingWindows(it->second.parent, childWindow);
             auto pos = std::find(siblings.begin(), siblings.end(), a0);
             if (pos == siblings.end()) {
                 ret = 0;
@@ -2633,14 +2668,9 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             }
             lastError_ = ret ? 0 : 1400;
         } else if (a1 == 0 || a1 == 1) {
-            ret = 0;
-            for (const auto& [hwnd, window] : windows_) {
-                if (!window.destroyed && window.parent == it->second.parent &&
-                    ((window.style & kWindowStyleChild) == (it->second.style & kWindowStyleChild))) {
-                    ret = hwnd;
-                    if (a1 == 0) break;
-                }
-            }
+            const bool childWindow = (it->second.style & kWindowStyleChild) != 0;
+            std::vector<uint32_t> siblings = orderedSiblingWindows(it->second.parent, childWindow);
+            ret = siblings.empty() ? 0 : (a1 == 0 ? siblings.front() : siblings.back());
             lastError_ = ret ? 0 : 1400;
         } else {
             lastError_ = 1400;
@@ -2702,6 +2732,21 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             if (flags & 0x0080u) {
                 it->second.visible = false; // SWP_HIDEWINDOW
                 it->second.paintBoundsValid = false;
+            }
+            if (!(flags & 0x0004u)) { // SWP_NOZORDER
+                if (a1 == 1) { // HWND_BOTTOM
+                    uint64_t bottom = it->second.zOrder;
+                    const bool childWindow = (it->second.style & kWindowStyleChild) != 0;
+                    for (uint32_t siblingHwnd : orderedSiblingWindows(it->second.parent, childWindow)) {
+                        auto sibling = windows_.find(siblingHwnd);
+                        if (sibling != windows_.end()) bottom = std::min(bottom, sibling->second.zOrder);
+                    }
+                    it->second.zOrder = bottom ? bottom - 1 : 0;
+                } else {
+                    it->second.zOrder = nextWindowZOrder();
+                }
+            } else if (!oldVisible && it->second.visible) {
+                it->second.zOrder = nextWindowZOrder();
             }
             ensureHostWindow(a0, it->second);
             syncHostWindowPlacement(it->second, true);
@@ -2832,6 +2877,9 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
         } else {
             const bool wasVisible = it->second.visible;
             it->second.visible = a1 != 0;
+            if (!wasVisible && it->second.visible) {
+                it->second.zOrder = nextWindowZOrder();
+            }
             size_t discardedInput = 0;
             if (!it->second.visible) {
                 it->second.paintBoundsValid = false;
@@ -2970,10 +3018,24 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
         ret = 0;
     } else if (ordinal == ord(CoredllOrdinal::PostMessageW)) {
         auto logPostMessagePointer = [&](const char* label, uint32_t ptr) {
-            if (!ptr || !isGuestRangeReadable(ptr, 4)) return;
+            if (!ptr) return;
+            uint32_t readablePtr = ptr;
+            const uint32_t slotNormalizedPtr = ptr & (0x02000000u - 1u);
+            bool slotNormalized = false;
+            if (!isGuestRangeReadable(readablePtr, 4) &&
+                slotNormalizedPtr != ptr &&
+                isGuestRangeReadable(slotNormalizedPtr, 4)) {
+                readablePtr = slotNormalizedPtr;
+                slotNormalized = true;
+            }
+            if (!isGuestRangeReadable(readablePtr, 4)) {
+                spdlog::info("PostMessageW ptr {}=0x{:08x} msg=0x{:08x} unreadable slotNormalized=0x{:08x}",
+                             label, ptr, a1, slotNormalizedPtr);
+                return;
+            }
             std::array<uint8_t, 64> bytes{};
             size_t byteCount = 0;
-            if (uc_mem_read(uc_, ptr, bytes.data(), bytes.size()) == UC_ERR_OK) {
+            if (uc_mem_read(uc_, readablePtr, bytes.data(), bytes.size()) == UC_ERR_OK) {
                 byteCount = bytes.size();
             }
             std::string hex;
@@ -2984,10 +3046,13 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
                 if (!hex.empty()) hex.push_back(' ');
                 hex.append(tmp);
             }
-            spdlog::info("PostMessageW ptr {}=0x{:08x} msg=0x{:08x} ascii=\"{}\" utf16=\"{}\" bytes={}",
-                         label, ptr, a1, readAscii(ptr, 128), readUtf16(ptr, 128), hex);
+            spdlog::info("PostMessageW ptr {}=0x{:08x} readable=0x{:08x} slotNormalized={} msg=0x{:08x} ascii=\"{}\" utf16=\"{}\" bytes={}",
+                         label, ptr, readablePtr, slotNormalized, a1,
+                         readAscii(readablePtr, 128), readUtf16(readablePtr, 128), hex);
         };
-        const bool tracePostMessage = a0 == 0xffff || (a1 >= 0x5700 && a1 <= 0x58ff);
+        const bool tracePostMessage =
+            a0 == 0xffff || (a1 >= 0x0600 && a1 <= 0x07ff) ||
+            (a1 >= 0x5700 && a1 <= 0x58ff);
         if (tracePostMessage) {
             spdlog::info("PostMessageW call hwnd=0x{:08x} msg=0x{:08x} wparam=0x{:08x} lparam=0x{:08x}",
                          a0, a1, a2, a3);
@@ -3152,6 +3217,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
         } else {
             if (message.message == 0x0007 || message.message == 0x0008 ||
                 (message.message >= 0x0200 && message.message <= 0x0202) ||
+                (message.message >= 0x0600 && message.message <= 0x07ff) ||
                 (message.message >= 0x5700 && message.message <= 0x58ff)) {
                 spdlog::info("{} retrieved input hwnd=0x{:08x} msg=0x{:08x} wparam=0x{:08x} lparam=0x{:08x} peek={} remove={} queued={}",
                              name, message.hwnd, message.message, message.wParam, message.lParam,
