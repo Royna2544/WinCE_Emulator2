@@ -638,6 +638,7 @@ private:
         uint32_t x{};
         uint32_t y{};
         uint32_t synchronousSender{};
+        bool crossProcess{};
     };
     struct ResourceName {
         bool ordinal{};

@@ -1004,6 +1004,7 @@ void SyntheticDllRuntime::pollCrossProcessGuestMessages() {
             guestMessage.wParam = it->value("wParam", 0u);
             guestMessage.lParam = it->value("lParam", 0u);
             guestMessage.time = it->value("time", uint32_t(++tick_ * 16));
+            guestMessage.crossProcess = true;
             guestMessages_.push_back(guestMessage);
             spdlog::info("cross-process message received hwnd=0x{:08x} msg=0x{:08x} fromPid={} queued={}",
                          hwnd,
@@ -3157,7 +3158,15 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
                 if (a1 == 0xffffffffu) {
                     if (candidate.hwnd != 0) return false;
                 } else if (a1 != 0 && candidate.hwnd != a1 && !isWindowOrDescendant(candidate.hwnd, a1)) {
-                    return false;
+                    if (!candidate.crossProcess) return false;
+                    const auto candidateWindow = windows_.find(candidate.hwnd);
+                    const auto filterWindow = windows_.find(a1);
+                    if (candidateWindow == windows_.end() || filterWindow == windows_.end()) {
+                        return false;
+                    }
+                    if (candidateWindow->second.ownerThread != filterWindow->second.ownerThread) {
+                        return false;
+                    }
                 }
                 if (a2 || a3) {
                     if (candidate.message < a2 || candidate.message > a3) return false;
