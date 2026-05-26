@@ -16,6 +16,9 @@ Last refreshed: 2026-05-26.
   `FindWindowW(NULL, L"MultiTBT")`.
 - The emulator is using real-ish CE API and device boundaries rather than
   hardcoded app behavior.
+- The host presenter can upscale the unchanged guest framebuffer to a 4K host
+  client area with aspect-preserving letterboxing and inverse mouse-coordinate
+  mapping back to guest framebuffer pixels.
 - `README.md`, `DEVICES.md`, `PROGRESS.md`, `TODO.md`, and `KNOWN_BUGS.md`
   have been refreshed to match the current investigation state.
 
@@ -77,6 +80,10 @@ Last refreshed: 2026-05-26.
 - The route autodrive preset now taps the actual first route-method modal
   button at approximately `(405,296)` instead of the explanatory text area at
   `(390,220)`.
+- The host presenter accepts `--host-upscale 4k`/`WxH` for host-only scaled
+  display. Guest screen metrics and framebuffer dimensions remain unchanged,
+  and host mouse events are mapped through the displayed image rectangle before
+  being queued to the guest.
 
 ## Device Evidence
 

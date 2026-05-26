@@ -57,6 +57,7 @@ public:
     void setMainModulePath(std::string path);
     void setMainModuleBase(uint32_t base);
     void setFramebuffer(uint32_t* bgra, int width, int height);
+    void setHostPresenterTargetSize(int width, int height);
     void setRegistryPath(const std::filesystem::path& path);
     void setSdmmcHostPath(const std::filesystem::path& path);
     void setSerialDeviceMapPath(const std::filesystem::path& path);
@@ -860,6 +861,8 @@ private:
     uint32_t* framebuffer_{};
     int32_t framebufferWidth_{};
     int32_t framebufferHeight_{};
+    int32_t hostPresenterTargetWidth_{};
+    int32_t hostPresenterTargetHeight_{};
     uint32_t splashBlitDumpCounter_{};
     uint32_t splashCompositeBitmap_{};
     uint32_t blitProbeLogCounter_{};

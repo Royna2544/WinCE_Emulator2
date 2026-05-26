@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cwctype>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -45,6 +46,38 @@ static std::string narrowWideLossy(const std::wstring &value) {
   for (wchar_t ch : value)
     narrowValue.push_back(ch >= 0 && ch <= 0x7f ? char(ch) : '?');
   return narrowValue;
+}
+
+static std::wstring lowerWideAscii(std::wstring value) {
+  for (wchar_t &ch : value) {
+    if (ch >= 0 && ch <= 0x7f)
+      ch = wchar_t(std::towlower(ch));
+  }
+  return value;
+}
+
+static std::optional<std::pair<int, int>>
+parseHostUpscaleTarget(const std::wstring &value) {
+  const std::wstring text = lowerWideAscii(value);
+  if (text == L"off" || text == L"none" || text == L"native")
+    return std::pair<int, int>{0, 0};
+  if (text == L"4k" || text == L"uhd" || text == L"2160p")
+    return std::pair<int, int>{3840, 2160};
+
+  const size_t separator = text.find(L'x');
+  if (separator == std::wstring::npos || separator == 0 ||
+      separator + 1 >= text.size()) {
+    return std::nullopt;
+  }
+  try {
+    const int width = std::stoi(text.substr(0, separator));
+    const int height = std::stoi(text.substr(separator + 1));
+    if (width <= 0 || height <= 0)
+      return std::nullopt;
+    return std::pair<int, int>{width, height};
+  } catch (...) {
+    return std::nullopt;
+  }
 }
 
 static void writeGuestCommandLine(uc_engine *uc, uint32_t address,
@@ -901,6 +934,7 @@ static int runImage(PeImage &pe, const std::vector<fs::path> &dllSearchDirs,
                     const std::optional<fs::path> &serialMapPath,
                     const fs::path &sdmmcHostPath,
                     const std::wstring &guestCommandLine, bool headless,
+                    std::pair<int, int> hostUpscaleTarget,
                     uint64_t instructionLimit) {
   uc_engine *uc = nullptr;
   uc_err err = uc_open(
@@ -917,6 +951,8 @@ static int runImage(PeImage &pe, const std::vector<fs::path> &dllSearchDirs,
     synthetic.setSdmmcHostPath(sdmmcHostPath);
     synthetic.setMainModulePath(pe.path.string());
     synthetic.setFramebuffer(fb.bgra.data(), fb.w, fb.h);
+    synthetic.setHostPresenterTargetSize(hostUpscaleTarget.first,
+                                         hostUpscaleTarget.second);
     if (registryPath)
       synthetic.setRegistryPath(*registryPath);
     if (serialMapPath)
@@ -1020,7 +1056,8 @@ int wmain(int argc, wchar_t **argv) {
       spdlog::error(
           "usage: iNavi_Unicorn_Emulator.exe <primary.exe> [--registry "
           "regs.json] [--sdmmc-path host_sdmmc_dir] "
-          "[--serial-map devices.json] [--guest-command-line text] [--headless] "
+          "[--serial-map devices.json] [--guest-command-line text] "
+          "[--host-upscale 4k|WxH|off] [--headless] "
           "[dll_search_dir ...]");
       return 1;
     }
@@ -1031,6 +1068,7 @@ int wmain(int argc, wchar_t **argv) {
     std::wstring guestCommandLine;
     std::vector<fs::path> dllSearchDirs;
     bool headless = false;
+    std::pair<int, int> hostUpscaleTarget{0, 0};
     uint64_t instructionLimit = 50000000000ULL;
     for (int i = 2; i < argc; ++i) {
       std::wstring arg = argv[i];
@@ -1064,6 +1102,17 @@ int wmain(int argc, wchar_t **argv) {
           return 1;
         }
         instructionLimit = std::stoull(std::wstring(argv[++i]));
+      } else if (arg == L"--host-upscale") {
+        if (i + 1 >= argc) {
+          spdlog::error("--host-upscale requires 4k, WxH, or off");
+          return 1;
+        }
+        auto target = parseHostUpscaleTarget(argv[++i]);
+        if (!target) {
+          spdlog::error("--host-upscale expects 4k, WxH, or off");
+          return 1;
+        }
+        hostUpscaleTarget = *target;
       } else if (arg == L"--headless") {
         headless = true;
       } else {
@@ -1080,6 +1129,9 @@ int wmain(int argc, wchar_t **argv) {
       spdlog::info("serial map: {}", serialMapPath->string());
     if (!guestCommandLine.empty())
       spdlog::info("guest command line: {}", narrowWideLossy(guestCommandLine));
+    if (hostUpscaleTarget.first > 0 && hostUpscaleTarget.second > 0)
+      spdlog::info("host upscale target: {}x{}",
+                   hostUpscaleTarget.first, hostUpscaleTarget.second);
     spdlog::info("sdmmc host path: {}", sdmmcHostPath->string());
     for (const auto &dir : dllSearchDirs)
       spdlog::info("dll search dir: {}", dir.string());
@@ -1095,6 +1147,7 @@ int wmain(int argc, wchar_t **argv) {
       writePpm("frame_000_loader.ppm", fb, 0);
     int rc = runImage(pe, dllSearchDirs, registryPath, fb,
                       serialMapPath, *sdmmcHostPath, guestCommandLine, headless,
+                      hostUpscaleTarget,
                       instructionLimit);
     if (writeFrameDumps)
       writePpm("frame_001_after_unicorn.ppm", fb, 1);

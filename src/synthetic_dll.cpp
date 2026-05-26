@@ -810,14 +810,60 @@ struct HostPresenterWindow {
     uint32_t* framebuffer{};
     int width{};
     int height{};
+    int targetWidth{};
+    int targetHeight{};
 };
 
 int hostPresenterDisplayWidth(const HostPresenterWindow& presenter) {
-    return std::max(1, presenter.width);
+    return std::max(1, presenter.targetWidth > 0 ? presenter.targetWidth : presenter.width);
 }
 
 int hostPresenterDisplayHeight(const HostPresenterWindow& presenter) {
-    return std::max(1, presenter.height);
+    return std::max(1, presenter.targetHeight > 0 ? presenter.targetHeight : presenter.height);
+}
+
+RECT hostPresenterImageRect(const HostPresenterWindow& presenter, int clientWidth, int clientHeight) {
+    clientWidth = std::max(1, clientWidth);
+    clientHeight = std::max(1, clientHeight);
+    const int sourceWidth = std::max(1, presenter.width);
+    const int sourceHeight = std::max(1, presenter.height);
+
+    int drawWidth = clientWidth;
+    int drawHeight = MulDiv(drawWidth, sourceHeight, sourceWidth);
+    if (drawHeight > clientHeight) {
+        drawHeight = clientHeight;
+        drawWidth = MulDiv(drawHeight, sourceWidth, sourceHeight);
+    }
+    drawWidth = std::clamp(drawWidth, 1, clientWidth);
+    drawHeight = std::clamp(drawHeight, 1, clientHeight);
+
+    const int left = (clientWidth - drawWidth) / 2;
+    const int top = (clientHeight - drawHeight) / 2;
+    return RECT{left, top, left + drawWidth, top + drawHeight};
+}
+
+bool hostPresenterMapPointToGuest(const HostPresenterWindow& presenter,
+                                  int hostX,
+                                  int hostY,
+                                  int clientWidth,
+                                  int clientHeight,
+                                  bool clampOutside,
+                                  int& guestX,
+                                  int& guestY) {
+    if (presenter.width <= 0 || presenter.height <= 0) return false;
+    const RECT image = hostPresenterImageRect(presenter, clientWidth, clientHeight);
+    const int drawWidth = std::max(1L, image.right - image.left);
+    const int drawHeight = std::max(1L, image.bottom - image.top);
+    int relX = hostX - image.left;
+    int relY = hostY - image.top;
+    if (!clampOutside && (relX < 0 || relY < 0 || relX >= drawWidth || relY >= drawHeight)) {
+        return false;
+    }
+    relX = std::clamp(relX, 0, drawWidth - 1);
+    relY = std::clamp(relY, 0, drawHeight - 1);
+    guestX = std::clamp(MulDiv(relX, presenter.width, drawWidth), 0, presenter.width - 1);
+    guestY = std::clamp(MulDiv(relY, presenter.height, drawHeight), 0, presenter.height - 1);
+    return true;
 }
 
 DWORD hostPresenterWindowStyle() {
@@ -892,6 +938,9 @@ LRESULT CALLBACK hostPresenterWndProc(HWND hwnd, UINT message, WPARAM wParam, LP
         if (presenter && presenter->framebuffer && presenter->width > 0 && presenter->height > 0) {
             RECT client{};
             GetClientRect(hwnd, &client);
+            const int clientWidth = std::max(1L, client.right - client.left);
+            const int clientHeight = std::max(1L, client.bottom - client.top);
+            const RECT image = hostPresenterImageRect(*presenter, clientWidth, clientHeight);
             BITMAPINFO info{};
             info.bmiHeader.biSize = sizeof(info.bmiHeader);
             info.bmiHeader.biWidth = presenter->width;
@@ -899,7 +948,11 @@ LRESULT CALLBACK hostPresenterWndProc(HWND hwnd, UINT message, WPARAM wParam, LP
             info.bmiHeader.biPlanes = 1;
             info.bmiHeader.biBitCount = 32;
             info.bmiHeader.biCompression = BI_RGB;
-            StretchDIBits(dc, 0, 0, client.right - client.left, client.bottom - client.top,
+            HBRUSH blackBrush = reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
+            FillRect(dc, &client, blackBrush);
+            SetStretchBltMode(dc, HALFTONE);
+            SetBrushOrgEx(dc, 0, 0, nullptr);
+            StretchDIBits(dc, image.left, image.top, image.right - image.left, image.bottom - image.top,
                           0, 0, presenter->width, presenter->height,
                           presenter->framebuffer, &info, DIB_RGB_COLORS, SRCCOPY);
             GdiFlush();
@@ -917,8 +970,13 @@ LRESULT CALLBACK hostPresenterWndProc(HWND hwnd, UINT message, WPARAM wParam, LP
             const int clientHeight = std::max(1L, client.bottom - client.top);
             const int hostX = int16_t(LOWORD(lParam));
             const int hostY = int16_t(HIWORD(lParam));
-            const int x = std::clamp(MulDiv(hostX, presenter->width, clientWidth), 0, presenter->width - 1);
-            const int y = std::clamp(MulDiv(hostY, presenter->height, clientHeight), 0, presenter->height - 1);
+            int x = 0;
+            int y = 0;
+            const bool pointerCaptured = GetCapture() == hwnd;
+            if (!hostPresenterMapPointToGuest(*presenter, hostX, hostY, clientWidth, clientHeight,
+                                              pointerCaptured, x, y)) {
+                return 0;
+            }
             uint32_t guestMessage = 0;
             if (message == WM_LBUTTONDOWN) {
                 SetFocus(hwnd);
@@ -1113,6 +1171,11 @@ void SyntheticDllRuntime::setFramebuffer(uint32_t* bgra, int width, int height) 
     framebuffer_ = bgra;
     framebufferWidth_ = width;
     framebufferHeight_ = height;
+}
+
+void SyntheticDllRuntime::setHostPresenterTargetSize(int width, int height) {
+    hostPresenterTargetWidth_ = std::max(0, width);
+    hostPresenterTargetHeight_ = std::max(0, height);
 }
 
 void SyntheticDllRuntime::registerLoadedModule(const std::string& moduleName,
@@ -2943,7 +3006,8 @@ void SyntheticDllRuntime::ensureHostWindow(uint32_t guestHwnd, GuestWindow& wind
             spdlog::warn("host presenter RegisterClassW failed error={}", GetLastError());
             return;
         }
-        auto* presenter = new HostPresenterWindow{this, guestHwnd, framebuffer_, framebufferWidth_, framebufferHeight_};
+        auto* presenter = new HostPresenterWindow{this, guestHwnd, framebuffer_, framebufferWidth_, framebufferHeight_,
+                                                  hostPresenterTargetWidth_, hostPresenterTargetHeight_};
         HWND hwnd = CreateWindowExW(hostPresenterWindowExStyle(), hostPresenterClassName(), hostPresenterWindowTitle(),
                                     hostPresenterWindowStyle(),
                                     CW_USEDEFAULT, CW_USEDEFAULT,

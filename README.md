@@ -149,6 +149,7 @@ iNavi_Unicorn_Emulator.exe <primary.exe>
   --serial-map serial_devices.json
   --instructions <count>
   [--guest-command-line text]
+  [--host-upscale 4k|WxH|off]
   [--headless]
   [dll_search_dir ...]
 ```
@@ -185,6 +186,20 @@ Debug builds default to `info`; Release builds default to `error`.
 
 Set `INAVI_EMU_DUMPS=1` in Debug builds to emit simple framebuffer PPM dumps.
 The autodrive harness writes run artifacts under `captures/`.
+
+## Host Presenter Scaling
+
+The guest framebuffer and CE-reported screen metrics remain at the emulated
+device size. For host-only 4K presentation, launch with:
+
+```text
+--host-upscale 4k
+```
+
+`4k` maps to a 3840x2160 host client area. Custom `WxH` values are also
+accepted. The presenter preserves the guest aspect ratio inside the host client
+area and maps host mouse coordinates back through that displayed image rectangle
+before queuing guest mouse messages.
 
 ## Device Knowledge
 

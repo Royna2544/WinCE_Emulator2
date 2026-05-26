@@ -89,6 +89,10 @@ Last refreshed: 2026-05-26.
    - Profile route search, file reads, serial reads, and redraw frequency before
      adding more threads.
    - Keep host serial reads nonblocking.
+   - If 4K host presentation becomes a paint bottleneck, replace the current
+     GDI `StretchDIBits` presenter backend with a GPU path. NVIDIA Image
+     Scaling is the preferred quality target; CUDA NPP/CV-CUDA remain possible
+     resize primitives if a CUDA toolchain is added.
    - Revisit heavy software floating-point paths after correctness stabilizes.
    - Avoid broad logging that floods every frame or every tight polling loop.
 
