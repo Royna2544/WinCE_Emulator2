@@ -1328,6 +1328,7 @@ private:
     void eraseGuestWindowArea(uint32_t hwnd, const GuestWindow& window);
     bool isWindowOrDescendant(uint32_t hwnd, uint32_t ancestor) const;
     bool isOwnedPopupWindow(uint32_t hwnd) const;
+    bool isTopLevelPopupWindow(uint32_t hwnd) const;
     bool hasCoveringRootPopup(uint32_t hwnd) const;
     uint32_t readFramebufferTargetPixel(uint32_t targetHwnd, int32_t x, int32_t y) const;
     void writeFramebufferTargetPixel(uint32_t targetHwnd, int32_t x, int32_t y, uint32_t pixel);

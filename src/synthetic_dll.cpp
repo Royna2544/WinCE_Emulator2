@@ -3251,20 +3251,23 @@ void SyntheticDllRuntime::captureGuestWindowBacking(uint32_t hwnd) {
     if (it == windows_.end()) return;
     const bool childWindow = (it->second.style & kWindowStyleChild) != 0;
     const bool ownedPopup = isOwnedPopupWindow(hwnd);
+    const bool smallTopLevelPopup = isTopLevelPopupWindow(hwnd) && !guestWindowCoversFramebuffer(hwnd);
     const bool fullScreenPopup = ownedPopup && guestWindowCoversFramebuffer(hwnd);
     if (!fullScreenPopup && coveringFullScreenOwnedPopup(hwnd)) return;
     if (fullScreenPopup) {
         retireOlderFullScreenOwnedPopupsForPopup(hwnd);
     }
     const uint32_t visualParent = (childWindow || ownedPopup) ? it->second.parent : 0;
-    if (!visualParent || it->second.backingValid ||
+    if ((!visualParent && !smallTopLevelPopup) || it->second.backingValid ||
         !framebuffer_ || framebufferWidth_ <= 0 || framebufferHeight_ <= 0 ||
         it->second.width <= 0 || it->second.height <= 0) {
         return;
     }
-    auto parent = windows_.find(visualParent);
-    if (parent == windows_.end()) return;
-    if (childWindow && !parent->second.parent) return;
+    if (visualParent) {
+        auto parent = windows_.find(visualParent);
+        if (parent == windows_.end()) return;
+        if (childWindow && !parent->second.parent) return;
+    }
 
     const auto [originX, originY] = guestWindowOrigin(hwnd);
     const int32_t left = std::clamp<int32_t>(originX, 0, framebufferWidth_);
@@ -3476,6 +3479,13 @@ bool SyntheticDllRuntime::isOwnedPopupWindow(uint32_t hwnd) const {
     auto it = windows_.find(hwnd);
     return it != windows_.end() && it->second.parent &&
            !(it->second.style & kWindowStyleChild);
+}
+
+bool SyntheticDllRuntime::isTopLevelPopupWindow(uint32_t hwnd) const {
+    auto it = windows_.find(hwnd);
+    constexpr uint32_t kWindowStylePopup = 0x80000000u;
+    return it != windows_.end() && !it->second.parent &&
+           (it->second.style & kWindowStylePopup);
 }
 
 bool SyntheticDllRuntime::hasCoveringRootPopup(uint32_t hwnd) const {
