@@ -132,6 +132,11 @@ Dependencies are declared in `vcpkg.json`:
 - `spdlog`
 - `nlohmann-json`
 
+The host 4K upscaler also uses Windows SDK Direct3D libraries
+(`d3d11.lib`, `dxgi.lib`, and `d3dcompiler.lib`). NVIDIA Image Scaling is not
+pulled from vcpkg; the MIT-licensed SDK shader/config files are vendored under
+`third_party/NVIDIAImageScaling`.
+
 ## Run
 
 Normal bounded debug harness:
@@ -197,9 +202,11 @@ device size. For host-only 4K presentation, launch with:
 ```
 
 `4k` maps to a 3840x2160 host client area. Custom `WxH` values are also
-accepted. The presenter preserves the guest aspect ratio inside the host client
-area and maps host mouse coordinates back through that displayed image rectangle
-before queuing guest mouse messages.
+accepted. When host upscaling is enabled, the presenter tries the Direct3D 11
+NVIDIA Image Scaling backend first and falls back to the GDI presenter if D3D11
+or shader compilation is unavailable. The presenter preserves the guest aspect
+ratio inside the host client area and maps host mouse coordinates back through
+that displayed image rectangle before queuing guest mouse messages.
 
 ## Device Knowledge
 

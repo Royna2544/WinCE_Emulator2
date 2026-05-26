@@ -18,9 +18,14 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
+#include <d3d11.h>
+#include <d3dcompiler.h>
+#include <dxgi.h>
+#include <wrl/client.h>
 #include <mmsystem.h>
 #include <objbase.h>
 #include <oleauto.h>
+#include "../third_party/NVIDIAImageScaling/NIS/NIS_Config.h"
 #endif
 
 #include <algorithm>
@@ -36,6 +41,7 @@
 #include <fstream>
 #include <functional>
 #include <iomanip>
+#include <memory>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -804,6 +810,484 @@ WinmmBridge& winmmBridge() {
     return bridge;
 }
 
+#if defined(_WIN32)
+std::filesystem::path executableDirectory() {
+    wchar_t buffer[MAX_PATH]{};
+    DWORD chars = GetModuleFileNameW(nullptr, buffer, DWORD(std::size(buffer)));
+    if (!chars || chars >= std::size(buffer)) return {};
+    return std::filesystem::path(buffer).parent_path();
+}
+
+std::optional<std::filesystem::path> findNisShaderPath() {
+    const std::filesystem::path relative = L"third_party/NVIDIAImageScaling/NIS/NIS_Main.hlsl";
+    std::vector<std::filesystem::path> candidates{
+        relative,
+        std::filesystem::path(L"..") / relative,
+        std::filesystem::path(L"..") / L".." / relative,
+    };
+    const std::filesystem::path exeDir = executableDirectory();
+    if (!exeDir.empty()) {
+        candidates.push_back(exeDir / relative);
+        candidates.push_back(exeDir.parent_path() / relative);
+        candidates.push_back(exeDir.parent_path().parent_path() / relative);
+    }
+    for (const auto& path : candidates) {
+        std::error_code ec;
+        if (std::filesystem::is_regular_file(path, ec)) return path;
+    }
+    return std::nullopt;
+}
+
+std::string hresultHex(HRESULT hr) {
+    std::ostringstream out;
+    out << "0x" << std::hex << std::setw(8) << std::setfill('0') << uint32_t(hr);
+    return out.str();
+}
+
+const char* d3dBlitShaderSource() {
+    return R"(
+Texture2D inputTexture : register(t0);
+SamplerState linearClampSampler : register(s0);
+
+struct VertexOut {
+    float4 position : SV_Position;
+    float2 uv : TEXCOORD0;
+};
+
+VertexOut vsMain(uint vertexId : SV_VertexID) {
+    VertexOut output;
+    if (vertexId == 0) {
+        output.position = float4(-1.0f, -1.0f, 0.0f, 1.0f);
+        output.uv = float2(0.0f, 1.0f);
+    } else if (vertexId == 1) {
+        output.position = float4(-1.0f, 3.0f, 0.0f, 1.0f);
+        output.uv = float2(0.0f, -1.0f);
+    } else {
+        output.position = float4(3.0f, -1.0f, 0.0f, 1.0f);
+        output.uv = float2(2.0f, 1.0f);
+    }
+    return output;
+}
+
+float4 psMain(VertexOut input) : SV_Target {
+    return inputTexture.Sample(linearClampSampler, input.uv);
+}
+)";
+}
+
+class HostPresenterD3D11 {
+public:
+    bool render(HWND hwnd,
+                const uint32_t* framebuffer,
+                int sourceWidth,
+                int sourceHeight,
+                int clientWidth,
+                int clientHeight,
+                const RECT& imageRect) {
+        if (!framebuffer || sourceWidth <= 0 || sourceHeight <= 0 ||
+            clientWidth <= 0 || clientHeight <= 0 ||
+            imageRect.right <= imageRect.left || imageRect.bottom <= imageRect.top) {
+            return false;
+        }
+        if (!ensureDevice(hwnd, clientWidth, clientHeight)) return false;
+        const int targetWidth = imageRect.right - imageRect.left;
+        const int targetHeight = imageRect.bottom - imageRect.top;
+        if (!ensureFrameResources(sourceWidth, sourceHeight, targetWidth, targetHeight)) return false;
+
+        context_->UpdateSubresource(inputTexture_.Get(), 0, nullptr, framebuffer,
+                                    UINT(sourceWidth * sizeof(uint32_t)), 0);
+
+        ID3D11ShaderResourceView* sourceSrv = inputSrv_.Get();
+        int currentWidth = sourceWidth;
+        int currentHeight = sourceHeight;
+        for (size_t passIndex = 0; passIndex < passes_.size(); ++passIndex) {
+            PassResource& pass = passes_[passIndex];
+            const float sharpness = passIndex + 1 == passes_.size() ? 0.35f : 0.0f;
+            NISConfig config{};
+            if (!NVScalerUpdateConfig(config, sharpness,
+                                      0, 0, uint32_t(currentWidth), uint32_t(currentHeight),
+                                      uint32_t(currentWidth), uint32_t(currentHeight),
+                                      0, 0, uint32_t(pass.width), uint32_t(pass.height),
+                                      uint32_t(pass.width), uint32_t(pass.height),
+                                      NISHDRMode::None)) {
+                return false;
+            }
+            context_->UpdateSubresource(configBuffer_.Get(), 0, nullptr, &config, 0, 0);
+
+            ID3D11ShaderResourceView* srvs[] = {sourceSrv, coefScalerSrv_.Get(), coefUsmSrv_.Get()};
+            ID3D11UnorderedAccessView* uavs[] = {pass.uav.Get()};
+            ID3D11SamplerState* samplers[] = {sampler_.Get()};
+            ID3D11Buffer* constants[] = {configBuffer_.Get()};
+            context_->CSSetShader(nisShader_.Get(), nullptr, 0);
+            context_->CSSetShaderResources(0, 3, srvs);
+            context_->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
+            context_->CSSetSamplers(0, 1, samplers);
+            context_->CSSetConstantBuffers(0, 1, constants);
+            context_->Dispatch(UINT((pass.width + blockWidth_ - 1) / blockWidth_),
+                               UINT((pass.height + blockHeight_ - 1) / blockHeight_), 1);
+            ID3D11ShaderResourceView* nullSrvs[] = {nullptr, nullptr, nullptr};
+            ID3D11UnorderedAccessView* nullUavs[] = {nullptr};
+            context_->CSSetShaderResources(0, 3, nullSrvs);
+            context_->CSSetUnorderedAccessViews(0, 1, nullUavs, nullptr);
+
+            sourceSrv = pass.srv.Get();
+            currentWidth = pass.width;
+            currentHeight = pass.height;
+        }
+
+        const FLOAT clearColor[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+        context_->ClearRenderTargetView(renderTarget_.Get(), clearColor);
+        D3D11_VIEWPORT viewport{};
+        viewport.TopLeftX = float(imageRect.left);
+        viewport.TopLeftY = float(imageRect.top);
+        viewport.Width = float(targetWidth);
+        viewport.Height = float(targetHeight);
+        viewport.MinDepth = 0.0f;
+        viewport.MaxDepth = 1.0f;
+        context_->RSSetViewports(1, &viewport);
+        ID3D11RenderTargetView* rtvs[] = {renderTarget_.Get()};
+        context_->OMSetRenderTargets(1, rtvs, nullptr);
+        ID3D11ShaderResourceView* psSrvs[] = {passes_.empty() ? inputSrv_.Get() : passes_.back().srv.Get()};
+        ID3D11SamplerState* pixelSamplers[] = {sampler_.Get()};
+        context_->IASetInputLayout(nullptr);
+        context_->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        context_->VSSetShader(blitVs_.Get(), nullptr, 0);
+        context_->PSSetShader(blitPs_.Get(), nullptr, 0);
+        context_->PSSetShaderResources(0, 1, psSrvs);
+        context_->PSSetSamplers(0, 1, pixelSamplers);
+        context_->Draw(3, 0);
+        ID3D11ShaderResourceView* nullPsSrv = nullptr;
+        context_->PSSetShaderResources(0, 1, &nullPsSrv);
+
+        const HRESULT presentHr = swapChain_->Present(0, 0);
+        if (FAILED(presentHr)) {
+            logFailureOnce("D3D11 Present failed " + hresultHex(presentHr));
+            return false;
+        }
+        return true;
+    }
+
+private:
+    struct PassResource {
+        int width{};
+        int height{};
+        Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
+        Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> srv;
+        Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView> uav;
+    };
+
+    bool ensureDevice(HWND hwnd, int clientWidth, int clientHeight) {
+        if (!device_ && !createDeviceAndShaders(hwnd, clientWidth, clientHeight)) return false;
+        if (clientWidth != swapChainWidth_ || clientHeight != swapChainHeight_) {
+            return resizeSwapChain(clientWidth, clientHeight);
+        }
+        return true;
+    }
+
+    bool createDeviceAndShaders(HWND hwnd, int clientWidth, int clientHeight) {
+        DXGI_SWAP_CHAIN_DESC swapDesc{};
+        swapDesc.BufferDesc.Width = UINT(clientWidth);
+        swapDesc.BufferDesc.Height = UINT(clientHeight);
+        swapDesc.BufferDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        swapDesc.SampleDesc.Count = 1;
+        swapDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+        swapDesc.BufferCount = 2;
+        swapDesc.OutputWindow = hwnd;
+        swapDesc.Windowed = TRUE;
+        swapDesc.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+
+        constexpr D3D_FEATURE_LEVEL featureLevels[] = {D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0};
+        D3D_FEATURE_LEVEL chosenFeatureLevel{};
+        HRESULT hr = D3D11CreateDeviceAndSwapChain(
+            nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+            featureLevels, UINT(std::size(featureLevels)), D3D11_SDK_VERSION,
+            &swapDesc, &swapChain_, &device_, &chosenFeatureLevel, &context_);
+        if (FAILED(hr)) {
+            hr = D3D11CreateDeviceAndSwapChain(
+                nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                featureLevels + 1, 1, D3D11_SDK_VERSION,
+                &swapDesc, &swapChain_, &device_, &chosenFeatureLevel, &context_);
+        }
+        if (FAILED(hr)) {
+            logFailureOnce("D3D11 device creation failed " + hresultHex(hr));
+            return false;
+        }
+        if (!createRenderTarget(clientWidth, clientHeight) || !createSampler() ||
+            !createNisShader() || !createBlitShaders() ||
+            !createCoefficientTextures() || !createConfigBuffer()) {
+            return false;
+        }
+        spdlog::info("host presenter D3D11/NIS backend initialized featureLevel=0x{:04x}",
+                     unsigned(chosenFeatureLevel));
+        return true;
+    }
+
+    bool resizeSwapChain(int clientWidth, int clientHeight) {
+        renderTarget_.Reset();
+        context_->OMSetRenderTargets(0, nullptr, nullptr);
+        const HRESULT hr = swapChain_->ResizeBuffers(0, UINT(clientWidth), UINT(clientHeight),
+                                                     DXGI_FORMAT_UNKNOWN, 0);
+        if (FAILED(hr)) {
+            logFailureOnce("D3D11 ResizeBuffers failed " + hresultHex(hr));
+            return false;
+        }
+        return createRenderTarget(clientWidth, clientHeight);
+    }
+
+    bool createRenderTarget(int clientWidth, int clientHeight) {
+        Microsoft::WRL::ComPtr<ID3D11Texture2D> backBuffer;
+        HRESULT hr = swapChain_->GetBuffer(0, IID_PPV_ARGS(&backBuffer));
+        if (FAILED(hr)) {
+            logFailureOnce("D3D11 GetBuffer failed " + hresultHex(hr));
+            return false;
+        }
+        hr = device_->CreateRenderTargetView(backBuffer.Get(), nullptr, &renderTarget_);
+        if (FAILED(hr)) {
+            logFailureOnce("D3D11 CreateRenderTargetView failed " + hresultHex(hr));
+            return false;
+        }
+        swapChainWidth_ = clientWidth;
+        swapChainHeight_ = clientHeight;
+        return true;
+    }
+
+    bool createSampler() {
+        D3D11_SAMPLER_DESC desc{};
+        desc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+        desc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
+        desc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+        desc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+        desc.MaxLOD = D3D11_FLOAT32_MAX;
+        const HRESULT hr = device_->CreateSamplerState(&desc, &sampler_);
+        if (FAILED(hr)) logFailureOnce("D3D11 CreateSamplerState failed " + hresultHex(hr));
+        return SUCCEEDED(hr);
+    }
+
+    bool createNisShader() {
+        const auto shaderPath = findNisShaderPath();
+        if (!shaderPath) {
+            logFailureOnce("NIS shader file not found; using GDI presenter fallback");
+            return false;
+        }
+        NISOptimizer optimizer(true, NISGPUArchitecture::NVIDIA_Generic);
+        blockWidth_ = int(optimizer.GetOptimalBlockWidth());
+        blockHeight_ = int(optimizer.GetOptimalBlockHeight());
+        threadGroupSize_ = int(optimizer.GetOptimalThreadGroupSize());
+        const std::string blockWidth = std::to_string(blockWidth_);
+        const std::string blockHeight = std::to_string(blockHeight_);
+        const std::string threadGroupSize = std::to_string(threadGroupSize_);
+        D3D_SHADER_MACRO macros[] = {
+            {"NIS_SCALER", "1"},
+            {"NIS_HDR_MODE", "0"},
+            {"NIS_BLOCK_WIDTH", blockWidth.c_str()},
+            {"NIS_BLOCK_HEIGHT", blockHeight.c_str()},
+            {"NIS_THREAD_GROUP_SIZE", threadGroupSize.c_str()},
+            {"NIS_HLSL", "1"},
+            {"NIS_VIEWPORT_SUPPORT", "0"},
+            {"NIS_CLAMP_OUTPUT", "1"},
+            {nullptr, nullptr},
+        };
+        Microsoft::WRL::ComPtr<ID3DBlob> shader;
+        Microsoft::WRL::ComPtr<ID3DBlob> errors;
+        const HRESULT hr = D3DCompileFromFile(shaderPath->c_str(), macros,
+                                              D3D_COMPILE_STANDARD_FILE_INCLUDE,
+                                              "main", "cs_5_0", 0, 0, &shader, &errors);
+        if (FAILED(hr)) {
+            std::string message = "NIS shader compile failed " + hresultHex(hr);
+            if (errors && errors->GetBufferPointer()) {
+                message += ": ";
+                message += static_cast<const char*>(errors->GetBufferPointer());
+            }
+            logFailureOnce(message);
+            return false;
+        }
+        const HRESULT createHr = device_->CreateComputeShader(shader->GetBufferPointer(),
+                                                              shader->GetBufferSize(),
+                                                              nullptr, &nisShader_);
+        if (FAILED(createHr)) logFailureOnce("D3D11 CreateComputeShader failed " + hresultHex(createHr));
+        return SUCCEEDED(createHr);
+    }
+
+    bool createBlitShaders() {
+        Microsoft::WRL::ComPtr<ID3DBlob> vs;
+        Microsoft::WRL::ComPtr<ID3DBlob> ps;
+        const char* source = d3dBlitShaderSource();
+        HRESULT hr = D3DCompile(source, std::strlen(source), "host-presenter-blit",
+                                nullptr, nullptr, "vsMain", "vs_5_0", 0, 0, &vs, nullptr);
+        if (FAILED(hr)) {
+            logFailureOnce("D3D11 blit vertex shader compile failed " + hresultHex(hr));
+            return false;
+        }
+        hr = D3DCompile(source, std::strlen(source), "host-presenter-blit",
+                        nullptr, nullptr, "psMain", "ps_5_0", 0, 0, &ps, nullptr);
+        if (FAILED(hr)) {
+            logFailureOnce("D3D11 blit pixel shader compile failed " + hresultHex(hr));
+            return false;
+        }
+        hr = device_->CreateVertexShader(vs->GetBufferPointer(), vs->GetBufferSize(), nullptr, &blitVs_);
+        if (FAILED(hr)) {
+            logFailureOnce("D3D11 CreateVertexShader failed " + hresultHex(hr));
+            return false;
+        }
+        hr = device_->CreatePixelShader(ps->GetBufferPointer(), ps->GetBufferSize(), nullptr, &blitPs_);
+        if (FAILED(hr)) logFailureOnce("D3D11 CreatePixelShader failed " + hresultHex(hr));
+        return SUCCEEDED(hr);
+    }
+
+    bool createCoefficientTextures() {
+        return createCoefficientTexture(coef_scale, &coefScalerSrv_) &&
+               createCoefficientTexture(coef_usm, &coefUsmSrv_);
+    }
+
+    bool createCoefficientTexture(const float (&coefficients)[kPhaseCount][kFilterSize],
+                                  Microsoft::WRL::ComPtr<ID3D11ShaderResourceView>* srvOut) {
+        D3D11_TEXTURE2D_DESC desc{};
+        desc.Width = UINT(kFilterSize / 4);
+        desc.Height = UINT(kPhaseCount);
+        desc.MipLevels = 1;
+        desc.ArraySize = 1;
+        desc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+        desc.SampleDesc.Count = 1;
+        desc.Usage = D3D11_USAGE_IMMUTABLE;
+        desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        D3D11_SUBRESOURCE_DATA data{};
+        data.pSysMem = coefficients;
+        data.SysMemPitch = UINT(kFilterSize * sizeof(float));
+        Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
+        HRESULT hr = device_->CreateTexture2D(&desc, &data, &texture);
+        if (FAILED(hr)) {
+            logFailureOnce("D3D11 coefficient texture creation failed " + hresultHex(hr));
+            return false;
+        }
+        hr = device_->CreateShaderResourceView(texture.Get(), nullptr, srvOut->GetAddressOf());
+        if (FAILED(hr)) logFailureOnce("D3D11 coefficient SRV creation failed " + hresultHex(hr));
+        return SUCCEEDED(hr);
+    }
+
+    bool createConfigBuffer() {
+        D3D11_BUFFER_DESC desc{};
+        desc.ByteWidth = UINT((sizeof(NISConfig) + 15u) & ~15u);
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+        const HRESULT hr = device_->CreateBuffer(&desc, nullptr, &configBuffer_);
+        if (FAILED(hr)) logFailureOnce("D3D11 NIS config buffer creation failed " + hresultHex(hr));
+        return SUCCEEDED(hr);
+    }
+
+    bool ensureFrameResources(int sourceWidth, int sourceHeight, int targetWidth, int targetHeight) {
+        if (sourceWidth == sourceWidth_ && sourceHeight == sourceHeight_ &&
+            targetWidth == targetWidth_ && targetHeight == targetHeight_ && inputTexture_) {
+            return true;
+        }
+        sourceWidth_ = sourceWidth;
+        sourceHeight_ = sourceHeight;
+        targetWidth_ = targetWidth;
+        targetHeight_ = targetHeight;
+        passes_.clear();
+        inputTexture_.Reset();
+        inputSrv_.Reset();
+
+        D3D11_TEXTURE2D_DESC inputDesc{};
+        inputDesc.Width = UINT(sourceWidth);
+        inputDesc.Height = UINT(sourceHeight);
+        inputDesc.MipLevels = 1;
+        inputDesc.ArraySize = 1;
+        inputDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        inputDesc.SampleDesc.Count = 1;
+        inputDesc.Usage = D3D11_USAGE_DEFAULT;
+        inputDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        HRESULT hr = device_->CreateTexture2D(&inputDesc, nullptr, &inputTexture_);
+        if (FAILED(hr)) {
+            logFailureOnce("D3D11 input texture creation failed " + hresultHex(hr));
+            return false;
+        }
+        hr = device_->CreateShaderResourceView(inputTexture_.Get(), nullptr, &inputSrv_);
+        if (FAILED(hr)) {
+            logFailureOnce("D3D11 input SRV creation failed " + hresultHex(hr));
+            return false;
+        }
+
+        int currentWidth = sourceWidth;
+        int currentHeight = sourceHeight;
+        while (currentWidth != targetWidth || currentHeight != targetHeight) {
+            const int nextWidth = std::min(targetWidth, currentWidth * 2);
+            const int nextHeight = std::min(targetHeight, currentHeight * 2);
+            if (nextWidth <= currentWidth && nextHeight <= currentHeight) break;
+            PassResource pass{};
+            pass.width = nextWidth;
+            pass.height = nextHeight;
+            if (!createPassResource(pass)) return false;
+            passes_.push_back(std::move(pass));
+            currentWidth = nextWidth;
+            currentHeight = nextHeight;
+        }
+        if (currentWidth != targetWidth || currentHeight != targetHeight) {
+            logFailureOnce("D3D11/NIS presenter only supports host upscaling targets");
+            return false;
+        }
+        spdlog::info("host presenter D3D11/NIS resources source={}x{} target={}x{} passes={}",
+                     sourceWidth, sourceHeight, targetWidth, targetHeight, passes_.size());
+        return true;
+    }
+
+    bool createPassResource(PassResource& pass) {
+        D3D11_TEXTURE2D_DESC desc{};
+        desc.Width = UINT(pass.width);
+        desc.Height = UINT(pass.height);
+        desc.MipLevels = 1;
+        desc.ArraySize = 1;
+        desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        desc.SampleDesc.Count = 1;
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+        HRESULT hr = device_->CreateTexture2D(&desc, nullptr, &pass.texture);
+        if (FAILED(hr)) {
+            logFailureOnce("D3D11 NIS pass texture creation failed " + hresultHex(hr));
+            return false;
+        }
+        hr = device_->CreateShaderResourceView(pass.texture.Get(), nullptr, &pass.srv);
+        if (FAILED(hr)) {
+            logFailureOnce("D3D11 NIS pass SRV creation failed " + hresultHex(hr));
+            return false;
+        }
+        hr = device_->CreateUnorderedAccessView(pass.texture.Get(), nullptr, &pass.uav);
+        if (FAILED(hr)) logFailureOnce("D3D11 NIS pass UAV creation failed " + hresultHex(hr));
+        return SUCCEEDED(hr);
+    }
+
+    void logFailureOnce(const std::string& message) {
+        if (failureLogged_) return;
+        failureLogged_ = true;
+        spdlog::warn("{}", message);
+    }
+
+    Microsoft::WRL::ComPtr<ID3D11Device> device_;
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext> context_;
+    Microsoft::WRL::ComPtr<IDXGISwapChain> swapChain_;
+    Microsoft::WRL::ComPtr<ID3D11RenderTargetView> renderTarget_;
+    Microsoft::WRL::ComPtr<ID3D11SamplerState> sampler_;
+    Microsoft::WRL::ComPtr<ID3D11ComputeShader> nisShader_;
+    Microsoft::WRL::ComPtr<ID3D11VertexShader> blitVs_;
+    Microsoft::WRL::ComPtr<ID3D11PixelShader> blitPs_;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> inputTexture_;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> inputSrv_;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> coefScalerSrv_;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> coefUsmSrv_;
+    Microsoft::WRL::ComPtr<ID3D11Buffer> configBuffer_;
+    std::vector<PassResource> passes_;
+    int swapChainWidth_{};
+    int swapChainHeight_{};
+    int sourceWidth_{};
+    int sourceHeight_{};
+    int targetWidth_{};
+    int targetHeight_{};
+    int blockWidth_{32};
+    int blockHeight_{24};
+    int threadGroupSize_{128};
+    bool failureLogged_{};
+};
+#endif
+
 struct HostPresenterWindow {
     SyntheticDllRuntime* runtime{};
     uint32_t guestHwnd{};
@@ -812,6 +1296,10 @@ struct HostPresenterWindow {
     int height{};
     int targetWidth{};
     int targetHeight{};
+#if defined(_WIN32)
+    std::unique_ptr<HostPresenterD3D11> d3d11;
+    bool d3d11Unavailable{};
+#endif
 };
 
 int hostPresenterDisplayWidth(const HostPresenterWindow& presenter) {
@@ -948,6 +1436,15 @@ LRESULT CALLBACK hostPresenterWndProc(HWND hwnd, UINT message, WPARAM wParam, LP
             info.bmiHeader.biPlanes = 1;
             info.bmiHeader.biBitCount = 32;
             info.bmiHeader.biCompression = BI_RGB;
+            if ((presenter->targetWidth > 0 || presenter->targetHeight > 0) && !presenter->d3d11Unavailable) {
+                if (!presenter->d3d11) presenter->d3d11 = std::make_unique<HostPresenterD3D11>();
+                if (presenter->d3d11->render(hwnd, presenter->framebuffer, presenter->width, presenter->height,
+                                             clientWidth, clientHeight, image)) {
+                    EndPaint(hwnd, &paint);
+                    return 0;
+                }
+                presenter->d3d11Unavailable = true;
+            }
             HBRUSH blackBrush = reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
             FillRect(dc, &client, blackBrush);
             SetStretchBltMode(dc, HALFTONE);

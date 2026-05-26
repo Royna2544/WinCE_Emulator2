@@ -1,6 +1,6 @@
 # Progress
 
-Last refreshed: 2026-05-26.
+Last refreshed: 2026-05-27.
 
 ## Current State
 
@@ -17,8 +17,9 @@ Last refreshed: 2026-05-26.
 - The emulator is using real-ish CE API and device boundaries rather than
   hardcoded app behavior.
 - The host presenter can upscale the unchanged guest framebuffer to a 4K host
-  client area with aspect-preserving letterboxing and inverse mouse-coordinate
-  mapping back to guest framebuffer pixels.
+  client area through a Direct3D 11 NVIDIA Image Scaling path, with GDI fallback,
+  aspect-preserving letterboxing, and inverse mouse-coordinate mapping back to
+  guest framebuffer pixels.
 - `README.md`, `DEVICES.md`, `PROGRESS.md`, `TODO.md`, and `KNOWN_BUGS.md`
   have been refreshed to match the current investigation state.
 
@@ -81,9 +82,11 @@ Last refreshed: 2026-05-26.
   button at approximately `(405,296)` instead of the explanatory text area at
   `(390,220)`.
 - The host presenter accepts `--host-upscale 4k`/`WxH` for host-only scaled
-  display. Guest screen metrics and framebuffer dimensions remain unchanged,
-  and host mouse events are mapped through the displayed image rectangle before
-  being queued to the guest.
+  display. Guest screen metrics and framebuffer dimensions remain unchanged.
+  The D3D11 backend uploads the guest framebuffer, runs chained NVIDIA Image
+  Scaling passes when the 4K target exceeds NIS's 2x single-pass range, blits
+  the final texture into the host image rectangle, and maps host mouse events
+  through that rectangle before queuing them to the guest.
 
 ## Device Evidence
 

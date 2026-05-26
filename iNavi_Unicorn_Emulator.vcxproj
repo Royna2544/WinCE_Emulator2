@@ -46,7 +46,7 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>user32.lib;gdi32.lib;ws2_32.lib;ole32.lib;oleaut32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>user32.lib;gdi32.lib;d3d11.lib;dxgi.lib;d3dcompiler.lib;ws2_32.lib;ole32.lib;oleaut32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -62,7 +62,7 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>user32.lib;gdi32.lib;ws2_32.lib;ole32.lib;oleaut32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>user32.lib;gdi32.lib;d3d11.lib;dxgi.lib;d3dcompiler.lib;ws2_32.lib;ole32.lib;oleaut32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -92,6 +92,13 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\synthetic_dll.h" />
+    <ClInclude Include="third_party\NVIDIAImageScaling\NIS\NIS_Config.h" />
+    <ClInclude Include="third_party\NVIDIAImageScaling\NIS\NIS_Scaler.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="third_party\NVIDIAImageScaling\NIS\NIS_Main.hlsl" />
+    <None Include="third_party\NVIDIAImageScaling\licence.txt" />
+    <None Include="third_party\NVIDIAImageScaling\third_party_licenses.txt" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="res\iNavi_Unicorn_Emulator.rc" />
