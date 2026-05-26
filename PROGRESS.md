@@ -87,6 +87,10 @@ Last refreshed: 2026-05-27.
   Scaling passes when the 4K target exceeds NIS's 2x single-pass range, blits
   the final texture into the host image rectangle, and maps host mouse events
   through that rectangle before queuing them to the guest.
+- A D3D/GDI paint-order issue in the NIS presenter path was addressed by
+  validating `WM_PAINT` before issuing the D3D present, instead of presenting
+  while a paint HDC is live. `INAVI_EMU_DISABLE_D3D_NIS=1` can force the GDI
+  fallback for comparison.
 
 ## Device Evidence
 

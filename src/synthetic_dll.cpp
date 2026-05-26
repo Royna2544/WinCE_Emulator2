@@ -1421,8 +1421,6 @@ LRESULT CALLBACK hostPresenterWndProc(HWND hwnd, UINT message, WPARAM wParam, LP
     }
     auto* presenter = reinterpret_cast<HostPresenterWindow*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
     if (message == WM_PAINT) {
-        PAINTSTRUCT paint{};
-        HDC dc = BeginPaint(hwnd, &paint);
         if (presenter && presenter->framebuffer && presenter->width > 0 && presenter->height > 0) {
             RECT client{};
             GetClientRect(hwnd, &client);
@@ -1436,25 +1434,45 @@ LRESULT CALLBACK hostPresenterWndProc(HWND hwnd, UINT message, WPARAM wParam, LP
             info.bmiHeader.biPlanes = 1;
             info.bmiHeader.biBitCount = 32;
             info.bmiHeader.biCompression = BI_RGB;
-            if ((presenter->targetWidth > 0 || presenter->targetHeight > 0) && !presenter->d3d11Unavailable) {
+            auto drawGdi = [&] (HDC dc) {
+                HBRUSH blackBrush = reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
+                FillRect(dc, &client, blackBrush);
+                SetStretchBltMode(dc, HALFTONE);
+                SetBrushOrgEx(dc, 0, 0, nullptr);
+                StretchDIBits(dc, image.left, image.top, image.right - image.left, image.bottom - image.top,
+                              0, 0, presenter->width, presenter->height,
+                              presenter->framebuffer, &info, DIB_RGB_COLORS, SRCCOPY);
+                GdiFlush();
+            };
+            static const bool disableD3dNis = envFlagEnabled("INAVI_EMU_DISABLE_D3D_NIS");
+            if ((presenter->targetWidth > 0 || presenter->targetHeight > 0) &&
+                !presenter->d3d11Unavailable && !disableD3dNis) {
+                PAINTSTRUCT paint{};
+                HDC paintDc = BeginPaint(hwnd, &paint);
+                (void)paintDc;
+                EndPaint(hwnd, &paint);
                 if (!presenter->d3d11) presenter->d3d11 = std::make_unique<HostPresenterD3D11>();
                 if (presenter->d3d11->render(hwnd, presenter->framebuffer, presenter->width, presenter->height,
                                              clientWidth, clientHeight, image)) {
-                    EndPaint(hwnd, &paint);
                     return 0;
                 }
                 presenter->d3d11Unavailable = true;
+                HDC fallbackDc = GetDC(hwnd);
+                if (fallbackDc) {
+                    drawGdi(fallbackDc);
+                    ReleaseDC(hwnd, fallbackDc);
+                }
+                return 0;
             }
-            HBRUSH blackBrush = reinterpret_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
-            FillRect(dc, &client, blackBrush);
-            SetStretchBltMode(dc, HALFTONE);
-            SetBrushOrgEx(dc, 0, 0, nullptr);
-            StretchDIBits(dc, image.left, image.top, image.right - image.left, image.bottom - image.top,
-                          0, 0, presenter->width, presenter->height,
-                          presenter->framebuffer, &info, DIB_RGB_COLORS, SRCCOPY);
-            GdiFlush();
+            PAINTSTRUCT paint{};
+            HDC dc = BeginPaint(hwnd, &paint);
+            drawGdi(dc);
+            EndPaint(hwnd, &paint);
+        } else {
+            PAINTSTRUCT paint{};
+            BeginPaint(hwnd, &paint);
+            EndPaint(hwnd, &paint);
         }
-        EndPaint(hwnd, &paint);
         return 0;
     }
     if (message == WM_ERASEBKGND) return 1;

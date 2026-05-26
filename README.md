@@ -208,6 +208,9 @@ or shader compilation is unavailable. The presenter preserves the guest aspect
 ratio inside the host client area and maps host mouse coordinates back through
 that displayed image rectangle before queuing guest mouse messages.
 
+Set `INAVI_EMU_DISABLE_D3D_NIS=1` to force the GDI presenter while keeping the
+same host window size and coordinate mapping.
+
 ## Device Knowledge
 
 The real-device serial/stream report is `D:\INAVI_Emulator\report_serial.txt`.
