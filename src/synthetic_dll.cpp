@@ -8,6 +8,10 @@
 
 #include "synthetic_dll.h"
 
+#if defined(_WIN32)
+#include "../res/resource.h"
+#endif
+
 #include <spdlog/spdlog.h>
 
 #if defined(_WIN32)
@@ -846,15 +850,33 @@ void presentHostWindowNow(HWND hwnd) {
     GdiFlush();
 }
 
-std::wstring widenLossy(const std::string& value) {
-    std::wstring wide;
-    wide.reserve(value.size());
-    for (unsigned char ch : value) wide.push_back(wchar_t(ch));
-    return wide;
-}
-
 const wchar_t* hostPresenterClassName() {
     return L"FakeCEHostPresenterWindow";
+}
+
+const wchar_t* hostPresenterWindowTitle() {
+    return L"iNavi Emulator @ Windows CE 6.0";
+}
+
+HICON hostPresenterIcon(bool useSmallIcon) {
+    const int width = GetSystemMetrics(useSmallIcon ? SM_CXSMICON : SM_CXICON);
+    const int height = GetSystemMetrics(useSmallIcon ? SM_CYSMICON : SM_CYICON);
+    return reinterpret_cast<HICON>(
+        LoadImageW(GetModuleHandleW(nullptr),
+                   MAKEINTRESOURCEW(IDI_INAVI_APP),
+                   IMAGE_ICON,
+                   width,
+                   height,
+                   LR_SHARED));
+}
+
+void applyHostPresenterIcons(HWND hwnd) {
+    if (HICON icon = hostPresenterIcon(false)) {
+        SendMessageW(hwnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(icon));
+    }
+    if (HICON icon = hostPresenterIcon(true)) {
+        SendMessageW(hwnd, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(icon));
+    }
 }
 
 LRESULT CALLBACK hostPresenterWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
@@ -929,6 +951,7 @@ ATOM registerHostPresenterClass() {
         WNDCLASSW wc{};
         wc.lpfnWndProc = hostPresenterWndProc;
         wc.hInstance = GetModuleHandleW(nullptr);
+        wc.hIcon = hostPresenterIcon(false);
         wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
         wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
         wc.lpszClassName = hostPresenterClassName();
@@ -2921,8 +2944,7 @@ void SyntheticDllRuntime::ensureHostWindow(uint32_t guestHwnd, GuestWindow& wind
             return;
         }
         auto* presenter = new HostPresenterWindow{this, guestHwnd, framebuffer_, framebufferWidth_, framebufferHeight_};
-        const std::wstring title = widenLossy(window.title.empty() ? "FakeCE" : window.title);
-        HWND hwnd = CreateWindowExW(hostPresenterWindowExStyle(), hostPresenterClassName(), title.c_str(),
+        HWND hwnd = CreateWindowExW(hostPresenterWindowExStyle(), hostPresenterClassName(), hostPresenterWindowTitle(),
                                     hostPresenterWindowStyle(),
                                     CW_USEDEFAULT, CW_USEDEFAULT,
                                     hostPresenterOuterWidth(*presenter), hostPresenterOuterHeight(*presenter),
@@ -2932,6 +2954,8 @@ void SyntheticDllRuntime::ensureHostWindow(uint32_t guestHwnd, GuestWindow& wind
             delete presenter;
             return;
         }
+        SetWindowTextW(hwnd, hostPresenterWindowTitle());
+        applyHostPresenterIcons(hwnd);
         hostPresenterGuestHwnd_ = guestHwnd;
         window.hostHwnd = reinterpret_cast<uintptr_t>(hwnd);
         spdlog::info("created host presenter HWND={} for guest HWND=0x{:08x} guest={}x{} framebuffer={}x{}",
@@ -2974,15 +2998,13 @@ void SyntheticDllRuntime::destroyHostWindow(GuestWindow& window) {
                 replacementWindow->hostHwnd = window.hostHwnd;
                 window.hostHwnd = 0;
                 hostPresenterGuestHwnd_ = replacementHwnd;
-                SetWindowTextW(hwnd, widenLossy(replacementWindow->title.empty()
-                                                    ? "FakeCE"
-                                                    : replacementWindow->title).c_str());
+                SetWindowTextW(hwnd, hostPresenterWindowTitle());
                 spdlog::info("transferred host presenter HWND={} from destroyed guest HWND=0x{:08x} to live guest HWND=0x{:08x}",
                              static_cast<void*>(hwnd), window.hwnd, replacementHwnd);
                 presentHostWindows(true);
                 return;
             }
-            SetWindowTextW(hwnd, L"FakeCE presenter (guest HWND destroyed)");
+            SetWindowTextW(hwnd, hostPresenterWindowTitle());
             ShowWindow(hwnd, SW_SHOWNORMAL);
             presentHostWindows(true);
             retainedHostWindows_.push_back(window.hostHwnd);

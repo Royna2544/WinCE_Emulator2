@@ -93,5 +93,8 @@
   <ItemGroup>
     <ClInclude Include="src\synthetic_dll.h" />
   </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="res\iNavi_Unicorn_Emulator.rc" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>
