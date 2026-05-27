@@ -3162,9 +3162,31 @@ uint32_t SyntheticDllRuntime::openGuestSerialDevice(const std::string& guestPath
 #if defined(_WIN32)
         const std::wstring hostPort = normalizeHostCommPort(config.host);
         const DWORD desiredAccess = access ? access : (GENERIC_READ | GENERIC_WRITE);
-        HANDLE host = CreateFileW(hostPort.c_str(), desiredAccess, share, nullptr, OPEN_EXISTING,
-                                  FILE_ATTRIBUTE_NORMAL, nullptr);
         const std::string displayName = narrowAsciiLossy(hostPort);
+        HANDLE host = INVALID_HANDLE_VALUE;
+        DWORD openError = 0;
+        constexpr int maxOpenAttempts = 8;
+        constexpr DWORD retryDelayMs = 250;
+        for (int attempt = 1; attempt <= maxOpenAttempts; ++attempt) {
+            host = CreateFileW(hostPort.c_str(), desiredAccess, share, nullptr, OPEN_EXISTING,
+                               FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (host != INVALID_HANDLE_VALUE) {
+                if (attempt > 1) {
+                    spdlog::info("CreateFileW guest device=\"{}\" host=\"{}\" opened after retry attempt={}",
+                                 guestPath, displayName, attempt);
+                }
+                break;
+            }
+
+            openError = GetLastError();
+            const bool retryable = openError == ERROR_ACCESS_DENIED ||
+                                   openError == ERROR_FILE_NOT_FOUND ||
+                                   openError == ERROR_PATH_NOT_FOUND;
+            if (!retryable || attempt == maxOpenAttempts) break;
+            spdlog::debug("CreateFileW guest device=\"{}\" host=\"{}\" retrying after lastError={} attempt={}/{}",
+                          guestPath, displayName, openError, attempt, maxOpenAttempts);
+            Sleep(retryDelayMs);
+        }
         if (host != INVALID_HANDLE_VALUE) {
             DCB dcb{};
             dcb.DCBlength = sizeof(dcb);
@@ -3187,7 +3209,7 @@ uint32_t SyntheticDllRuntime::openGuestSerialDevice(const std::string& guestPath
             return guest;
         }
         spdlog::warn("CreateFileW guest device=\"{}\" host=\"{}\" unavailable lastError={} ra=0x{:08x}; using stub guest device{}",
-                     guestPath, displayName, GetLastError(), ra, note);
+                     guestPath, displayName, openError, ra, note);
 #else
         spdlog::warn("CreateFileW guest device=\"{}\" backend=win32_com unavailable on this host ra=0x{:08x}; using stub guest device{}",
                      guestPath, ra, note);

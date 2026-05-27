@@ -138,6 +138,10 @@ Rejected explanation:
 Status:
 
 - Not fixed. Temporary `COM7:` host mapping is allowed only for diagnostics.
+  `captures/inavi_autodrive_20260528_083115` verified that, when the host port
+  is not held by stale emulator processes, `COM7:` -> `\\.\COM21` opens and
+  streams NMEA into the guest. The remaining issue is still the profile source
+  that selects `COM7:` in this dump instead of the real-device `COM1:` path.
 
 ## Custom Stream Devices Are Mostly Stubs
 

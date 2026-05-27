@@ -40,6 +40,16 @@ Last refreshed: 2026-05-27.
 
 ## Recent Fixes
 
+- `win32_com` serial device opens now retry short-lived
+  `ERROR_ACCESS_DENIED`, `ERROR_FILE_NOT_FOUND`, and `ERROR_PATH_NOT_FOUND`
+  failures before falling back to a disconnected guest device stub. This makes
+  virtual COM startup/teardown races less likely to drop GPS input for the
+  whole run.
+- `captures/inavi_autodrive_20260528_083115` verified the clean post-fix
+  Debug run: guest `COM7:` opened host `\\.\COM21`, serial setup calls
+  succeeded, `ClearCommError` reported queued bytes, and repeated
+  `ReadFile host serial` calls delivered `$GPGGA`/`$GPRMC`/`$GPVTG` data into
+  the guest buffer.
 - `GetMessageW` no longer returns `0` for an empty non-quit queue on the main
   UI context. Empty blocking `GetMessageW` now parks the main context and lets
   runnable guest worker threads execute instead of telling MFC that `WM_QUIT`

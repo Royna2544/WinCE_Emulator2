@@ -50,10 +50,10 @@ Last refreshed: 2026-05-27.
 3. GPS retest
    - Keep using the temporary `COM7:` -> host feeder mapping only while this
      SDMMC dump selects COM7.
-   - Re-test with the NMEA feeder continuously writing after guest open,
-     because the app calls `PurgeComm(..., 0x0f)` after serial setup.
-   - Capture `CreateFileW`, `GetCommState`, `SetCommState`, `ClearCommError`,
-     and `ReadFile` evidence for the active guest COM path.
+   - `captures/inavi_autodrive_20260528_083115` confirmed the host serial
+     bridge can open `COM7:` -> `\\.\COM21` and deliver NMEA after stale
+     emulator processes are stopped. Continue watching whether the app consumes
+     the stream correctly during live UI/input testing.
    - After the profile/config source is settled, restore the intended real map:
      guest `COM1:` -> host NMEA feeder at `9600 8N1`.
 
