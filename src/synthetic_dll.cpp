@@ -3638,6 +3638,10 @@ void SyntheticDllRuntime::syncHostWindowPlacement(GuestWindow& window, bool pres
 
 void SyntheticDllRuntime::presentHostWindows(bool force) {
 #if defined(_WIN32)
+    if (hostPresentDeferDepth_ > 0) {
+        hostPresentDirty_ = true;
+        return;
+    }
     if (!force && !hostPresentDirty_) return;
     const uint64_t now = hostTickMilliseconds();
     constexpr uint64_t kMinPresentIntervalMs = 16;
@@ -7354,6 +7358,10 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         const std::string sourceName = pending.sourceName.empty() ? "UpdateWindow" : pending.sourceName;
         uint32_t wndProc = pending.wndProc;
         if (window == windows_.end() || window->second.destroyed || !window->second.visible) {
+            if (pending.deferredHostPresent && hostPresentDeferDepth_ > 0) {
+                --hostPresentDeferDepth_;
+                pending.deferredHostPresent = false;
+            }
             const uint32_t originalRa = pending.originalRa;
             const uint32_t hwnd = pending.hwnd;
             pendingUpdateWindows_.pop_back();
@@ -7368,6 +7376,10 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         if (window->second.wndProc) wndProc = window->second.wndProc;
         wndProc = translatedWndProc(wndProc, sourceName.c_str());
         if (pending.stage == 0) {
+            if (pending.deferredHostPresent && hostPresentDeferDepth_ > 0) {
+                --hostPresentDeferDepth_;
+                pending.deferredHostPresent = false;
+            }
             pending.stage = 1;
             spdlog::info("{} synchronous WM_PAINT hwnd=0x{:08x} wndproc=0x{:08x}",
                          sourceName, pending.hwnd, wndProc);
@@ -7520,7 +7532,8 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         }
         ensureHostWindow(a0, it->second);
         const uint32_t eraseDc = makeGuestDc(a0);
-        pendingUpdateWindows_.push_back(PendingUpdateWindow{a0, wndProc, ra, eraseDc, 0, "UpdateWindow"});
+        ++hostPresentDeferDepth_;
+        pendingUpdateWindows_.push_back(PendingUpdateWindow{a0, wndProc, ra, eraseDc, 0, true, "UpdateWindow"});
         spdlog::info("UpdateWindow synchronous WM_ERASEBKGND hwnd=0x{:08x} wndproc=0x{:08x}",
                      a0, wndProc);
         setReg(UC_MIPS_REG_A0, a0);

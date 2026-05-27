@@ -79,6 +79,10 @@ Last refreshed: 2026-05-27.
      consistently instead of inventing app-specific state.
 
 6. Performance
+   - Continue live input/UI lag testing after
+     `captures/inavi_autodrive_20260528_084215`, where synchronous
+     `UpdateWindow` erase-to-paint gaps still exist but erase-only host
+     presentation is deferred to avoid black-frame flashes.
    - Re-test route-result/re-search lag after the backlogged queued-message
      scheduler change from 2026-05-26. It improves the large initial backlog,
      but medium-sized modal/UI bursts and synchronous wndproc waits may still

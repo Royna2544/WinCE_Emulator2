@@ -40,6 +40,14 @@ Last refreshed: 2026-05-27.
 
 ## Recent Fixes
 
+- Host presentation is now deferred during the `WM_ERASEBKGND` half of
+  synchronous `UpdateWindow` dispatch and released for the paired `WM_PAINT`.
+  This keeps long guest erase-to-paint gaps from exposing an intermediate black
+  frame on the host presenter without bypassing guest drawing.
+- `captures/inavi_autodrive_20260528_084215` verified the paint-order change
+  in Debug: startup still showed real guest erase-to-paint gaps of hundreds of
+  milliseconds, but the bounded capture produced a valid non-black frame while
+  preserving the normal guest `WM_PAINT` path.
 - `win32_com` serial device opens now retry short-lived
   `ERROR_ACCESS_DENIED`, `ERROR_FILE_NOT_FOUND`, and `ERROR_PATH_NOT_FOUND`
   failures before falling back to a disconnected guest device stub. This makes

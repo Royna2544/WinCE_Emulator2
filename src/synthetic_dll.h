@@ -709,6 +709,7 @@ private:
         uint32_t originalRa{};
         uint32_t eraseDc{};
         uint32_t stage{};
+        bool deferredHostPresent{};
         std::string sourceName;
     };
     struct PendingMessageTransfer {
@@ -851,6 +852,7 @@ private:
     uint32_t hostPresenterGuestHwnd_{};
     uint64_t lastHostPresentMs_{};
     bool hostPresentDirty_{};
+    uint32_t hostPresentDeferDepth_{};
     std::vector<ResourceEntry> mainResources_;
     std::map<std::string, LoadedModuleInfo> loadedModulesByName_;
     std::map<std::string, LoadedModuleInfo> loadedModulesByPath_;

@@ -98,16 +98,24 @@ Symptom:
 
 - The app can play the confirmation/error sound while the matching popup UI is
   delayed, hidden, or only appears after another window is dismissed.
+- The host presenter could briefly flash a black frame while the guest was in a
+  long `UpdateWindow` erase-to-paint gap.
 
 Current hypothesis:
 
 - Audio is not the broken path. The likely problem is synchronous message
   delivery, activation, `ShowWindow`/`SetWindowPos`, or paint invalidation
   ordering.
+- The black-frame flash was caused by host presentation during the
+  `WM_ERASEBKGND` half of synchronous `UpdateWindow`, before the paired
+  `WM_PAINT` completed.
 
 Status:
 
-- Not fixed.
+- Popup/audio lag is not fixed. The black-frame flash has a targeted
+  paint-order fix in `captures/inavi_autodrive_20260528_084215`: host
+  presentation is deferred during synchronous `UpdateWindow` erase and resumes
+  at paint completion.
 
 ## GPS Profile Still Selects COM7 In This Dump
 
