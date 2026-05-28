@@ -66,6 +66,11 @@ Dangerous unless explicitly justified:
 - Pretending success while bypassing the real app path
 - Specifying special behavior based on hardcoded strings or file names.
 
+Forbidden:
+- Running recursive find over too broad directory, e.g. /mnt/c/. Will you pay for my disk TBW?
+- Inventing custom behavior
+- Quitting investigation unless the user permits, do not think you own.
+
 IMPORTANT: DO. NOT. INVENT BEHAVIOR, ADD HARDCODED SPECIFIC FIX, QUIT INVESTIGATION UNLESS THE USER ASKS TO. KEEP RUNNING AUTO TESTS
 
 ---

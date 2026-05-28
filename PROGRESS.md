@@ -19,12 +19,22 @@ Last refreshed: 2026-05-28.
 - In the current diagnostic route runs, a companion `MultiTBT.exe` joined the
   same shared guest-window registry and the parent resolved
   `FindWindowW(NULL, L"MultiTBT")`.
+- The autodrive harness now starts `TBT\MultiTBT.exe` from the configured
+  SDMMC path by default when the file exists. This is still tooling behavior,
+  not an emulator-core app-name shortcut; use `-NoCompanion` to disable it.
 - The emulator is using real-ish CE API and device boundaries rather than
   hardcoded app behavior.
 - The host presenter can upscale the unchanged guest framebuffer to a 4K host
   client area through a Direct3D 11 NVIDIA Image Scaling path, with GDI fallback,
   aspect-preserving letterboxing, and inverse mouse-coordinate mapping back to
   guest framebuffer pixels.
+- Optional host remote control is now wired behind `--remote-server` using
+  Boost.Beast and Windows GDI+ encoding. It exposes status, JPEG snapshots,
+  live MJPEG, remote touch queuing through the existing host input path,
+  remote key events through the guest message queue, location/raw-NMEA
+  injection through the serial `ReadFile` path, an audio PCM WebSocket fed by
+  `waveOutWrite`, IMU state acceptance, a recent-log ring, unified control
+  WebSocket, and basic pause/resume state.
 - `README.md`, `DEVICES.md`, `PROGRESS.md`, `TODO.md`, and `KNOWN_BUGS.md`
   have been refreshed to match the current investigation state.
 - Source organization is split further: host-backed audio lives in
@@ -72,6 +82,24 @@ Last refreshed: 2026-05-28.
 - RGB565 expansion now uses bit replication for scalar and SIMD paths, avoiding
   float math in the AVX2 converter. `bitBltToFramebuffer` also has a guarded
   AVX2 RGB565-to-framebuffer fast path for uncluttered 1:1 `SRCCOPY` rows.
+- The remote server dependencies are `boost-beast` and `miniaudio` in
+  `vcpkg.json`; JPEG/PNG framebuffer encoding uses host GDI+ (`gdiplus.lib`)
+  instead of another image dependency.
+- Remote audio WebSocket publishing now converts guest `waveOutWrite` PCM
+  through miniaudio into the configured remote format/rate/channel count before
+  queueing. A Debug run on `192.168.0.39:8765` verified the default
+  `s16le`/44100/stereo stream produces 3528-byte 20 ms PCM chunks.
+- Remote audio WebSocket delivery now treats the PCM stream as live audio:
+  connecting clients clear stale queued audio, the server sends at most one
+  audio chunk per polling tick instead of bursting the whole queue, and queued
+  backlog is capped to roughly 500 ms so short 91 ms UI click sounds are not
+  delayed behind old audio and then played in a row.
+- `captures/remote_server_smoke` verified the Debug remote server starts on a
+  high local port, `/api/v1/status` returns 800x480 state with host
+  `gpsTarget` `COM21`, `/api/v1/frame.jpg` returns a JPEG snapshot,
+  `/api/v1/input/key` and `/api/v1/sensors/imu` accept JSON, `/api/v1/logs/recent`
+  returns the in-process log ring, and `/api/v1/control/ws` returns status/log
+  messages over WebSocket.
 - `captures/inavi_autodrive_20260528_133142` verified the Debug SIMD build
   still produces a valid startup frame. The known `DeviceParser.exe` child
   `PC == 0` remains separate from the parent render path.

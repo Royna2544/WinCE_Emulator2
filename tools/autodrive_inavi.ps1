@@ -10,12 +10,24 @@ param(
         "C:\Program Files (x86)\Windows CE Tools\wce420\STANDARDSDK_420\Atl\Lib\Mipsii"
     ),
     [UInt64]$Instructions = 50000000000,
+    [switch]$RemoteServer,
+    [string]$RemoteBind = "127.0.0.1",
+    [int]$RemotePort = 8765,
+    [AllowEmptyString()]
+    [string]$RemoteToken = "",
+    [int]$RemoteVideoFps = 30,
+    [int]$RemoteJpegQuality = 80,
+    [switch]$RemoteAudio,
+    [int]$RemoteAudioSampleRate = 44100,
+    [int]$RemoteAudioChannels = 2,
+    [string]$RemoteAudioFormat = "s16le",
     [int]$StartupTimeoutMs = 45000,
     [int]$InitialSettleMs = 18000,
     [int]$AfterTapMs = 4500,
     [AllowEmptyString()]
     [string]$Taps = "",
     [string[]]$CompanionTarget = @(),
+    [switch]$NoCompanion,
     [switch]$NoTaps,
     [switch]$RoutePreset,
     [string]$OutputRoot = ".\captures",
@@ -285,6 +297,15 @@ $previousWindowRegistry = [Environment]::GetEnvironmentVariable("INAVI_EMU_WINDO
 [Environment]::SetEnvironmentVariable("INAVI_EMU_CHILD_LOG_DIR", (Resolve-Path $runDir).Path, "Process")
 [Environment]::SetEnvironmentVariable("INAVI_EMU_WINDOW_REGISTRY", (Resolve-Path $runDir).Path + "\" + (Split-Path -Leaf $windowRegistryPath), "Process")
 
+if (-not $NoCompanion -and $CompanionTarget.Count -eq 0) {
+    $defaultCompanion = Join-Path $SdmmcPath "TBT\MultiTBT.exe"
+    if (Test-Path $defaultCompanion) {
+        $CompanionTarget = @($defaultCompanion)
+    } else {
+        Write-Warning "Default companion not found: $defaultCompanion"
+    }
+}
+
 $defaultTapPlan = "650,430,safety_ok;725,35,current_position;665,35,menu_grid;135,250,route_search;500,445,recent_destination"
 $routeTapPlan = "650,430,safety_ok,5000;760,430,bottom_right_menu,6000;500,445,recent_destination,6000;600,445,direct_route,15000;405,296,route_method_first,20000"
 if ($NoTaps) {
@@ -300,6 +321,21 @@ if ($SerialMap) {
     $argumentList += @("--serial-map", $SerialMap)
 }
 $argumentList += @("--instructions", [string]$Instructions)
+if ($RemoteServer) {
+    $argumentList += @("--remote-server", "--remote-bind", $RemoteBind, "--remote-port", [string]$RemotePort)
+    if ($RemoteToken) {
+        $argumentList += @("--remote-token", $RemoteToken)
+    }
+    $argumentList += @("--remote-video-fps", [string]$RemoteVideoFps, "--remote-jpeg-quality", [string]$RemoteJpegQuality)
+    if ($RemoteAudio) {
+        $argumentList += @(
+            "--remote-audio",
+            "--remote-audio-sample-rate", [string]$RemoteAudioSampleRate,
+            "--remote-audio-channels", [string]$RemoteAudioChannels,
+            "--remote-audio-format", $RemoteAudioFormat
+        )
+    }
+}
 $argumentList += $DllSearchDir
 
 $emulatorPath = (Resolve-Path $Emulator).Path

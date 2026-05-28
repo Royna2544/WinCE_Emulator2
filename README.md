@@ -41,6 +41,8 @@ D:\INAVI_Emulator
 - Registry values are loaded from `regs.json`.
 - Guest `\SDMMC Disk` file access is backed by `--sdmmc-path`.
 - Serial and stream devices are configured through `--serial-map`.
+- Optional host remote control exposes framebuffer, touch, GPS/NMEA injection,
+  audio WebSocket, status, and basic pause/resume endpoints over HTTP/WebSocket.
 - `COM1:` is confirmed by real-device report as the GPS NMEA port at `9600 8N1`.
 - `DEVICES.md` indexes current device evidence for GPS and sensor stream devices.
 
@@ -145,6 +147,8 @@ Dependencies are declared in `vcpkg.json`:
 - `unicorn`
 - `spdlog`
 - `nlohmann-json`
+- `boost-beast`
+- `miniaudio`
 
 The host 4K upscaler also uses Windows SDK Direct3D libraries
 (`d3d11.lib`, `dxgi.lib`, and `d3dcompiler.lib`). NVIDIA Image Scaling is not
@@ -170,18 +174,51 @@ iNavi_Unicorn_Emulator.exe <primary.exe>
   [--guest-command-line text]
   [--host-upscale 4k|WxH|off]
   [--headless]
+  [--remote-server]
+  [--remote-bind 127.0.0.1]
+  [--remote-port 8765]
+  [--remote-token <token>]
+  [--remote-video-fps 30]
+  [--remote-jpeg-quality 80]
+  [--remote-audio]
+  [--remote-audio-sample-rate 44100]
+  [--remote-audio-channels 2]
+  [--remote-audio-format s16le]
   [dll_search_dir ...]
 ```
+
+Remote server MVP endpoints:
+
+```text
+GET  /api/v1/status
+GET  /api/v1/frame.jpg
+GET  /api/v1/video.mjpg
+POST /api/v1/input/touch
+POST /api/v1/input/key
+POST /api/v1/sensors/location
+POST /api/v1/sensors/nmea
+GET  /api/v1/audio/ws
+GET  /api/v1/control/ws
+```
+
+The audio WebSocket emits live PCM chunks in the configured output format. The
+server keeps only a short live backlog and paces chunk delivery; clients should
+play chunks as a real-time stream rather than treating the endpoint as a file
+download.
+
+If `--remote-token` is set, pass `Authorization: Bearer <token>`.
 
 Guest `CreateProcessW` children default to separate child emulator processes
 and are launched with `--headless` plus hidden/no-console host startup flags.
 Shared in-runtime child EXE launch is a diagnostic opt-in only through
 `INAVI_EMU_INPROC_CHILD_PROCESS`.
 
-The autodrive harness also supports generic diagnostic companions:
+The autodrive harness automatically starts `TBT\MultiTBT.exe` from the current
+`--sdmmc-path` when it exists. Use `-NoCompanion` to disable that default, or
+`-CompanionTarget` to override/add explicit diagnostic companions:
 
 ```bash
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/autodrive_inavi.ps1 -CompanionTarget 'D:\INAVI_Emulator\INAVI\TBT\MultiTBT.exe'
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools\autodrive_inavi.ps1 -NoCompanion
 ```
 
 This shares the parent run's guest-window registry and keeps the companion

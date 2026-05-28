@@ -181,6 +181,7 @@ struct ProfileDiagState {
 };
 
 static void configureLogging() {
+  installRemoteLogSink();
   char *rawValue = nullptr;
   size_t valueSize = 0;
   if (_dupenv_s(&rawValue, &valueSize, "INAVI_EMU_LOG") != 0 || !rawValue ||
@@ -984,6 +985,7 @@ static int runImage(PeImage &pe, const std::vector<fs::path> &dllSearchDirs,
                     const fs::path &sdmmcHostPath,
                     const std::wstring &guestCommandLine, bool headless,
                     std::pair<int, int> hostUpscaleTarget,
+                    const SyntheticDllRuntime::RemoteServerConfig &remoteConfig,
                     uint64_t instructionLimit) {
   uc_engine *uc = nullptr;
   uc_err err = uc_open(
@@ -1006,6 +1008,7 @@ static int runImage(PeImage &pe, const std::vector<fs::path> &dllSearchDirs,
       synthetic.setRegistryPath(*registryPath);
     if (serialMapPath)
       synthetic.setSerialDeviceMapPath(*serialMapPath);
+    synthetic.setRemoteServerConfig(remoteConfig);
     uc_hook syntheticHook{};
     uc_hook_add(uc, &syntheticHook, UC_HOOK_CODE,
                 (void *)SyntheticDllRuntime::hookCode, &synthetic, 0x70000000,
@@ -1114,6 +1117,9 @@ int wmain(int argc, wchar_t **argv) {
           "regs.json] [--sdmmc-path host_sdmmc_dir] "
           "[--serial-map devices.json] [--guest-command-line text] "
           "[--host-upscale 4k|WxH|off] [--headless] "
+          "[--remote-server] [--remote-bind 127.0.0.1] [--remote-port 8765] "
+          "[--remote-token token] [--remote-video-fps 30] [--remote-jpeg-quality 80] "
+          "[--remote-audio] "
           "[dll_search_dir ...]");
       return 1;
     }
@@ -1125,6 +1131,7 @@ int wmain(int argc, wchar_t **argv) {
     std::vector<fs::path> dllSearchDirs;
     bool headless = false;
     std::pair<int, int> hostUpscaleTarget{0, 0};
+    SyntheticDllRuntime::RemoteServerConfig remoteConfig;
     uint64_t instructionLimit = 50000000000ULL;
     for (int i = 2; i < argc; ++i) {
       std::wstring arg = argv[i];
@@ -1171,6 +1178,63 @@ int wmain(int argc, wchar_t **argv) {
         hostUpscaleTarget = *target;
       } else if (arg == L"--headless") {
         headless = true;
+      } else if (arg == L"--remote-server") {
+        remoteConfig.enabled = true;
+      } else if (arg == L"--remote-bind") {
+        if (i + 1 >= argc) {
+          spdlog::error("--remote-bind requires an address");
+          return 1;
+        }
+        remoteConfig.bind = narrowWideLossy(argv[++i]);
+      } else if (arg == L"--remote-port") {
+        if (i + 1 >= argc) {
+          spdlog::error("--remote-port requires a port");
+          return 1;
+        }
+        const auto port = std::stoul(std::wstring(argv[++i]));
+        if (port == 0 || port > 65535) {
+          spdlog::error("--remote-port must be between 1 and 65535");
+          return 1;
+        }
+        remoteConfig.port = static_cast<uint16_t>(port);
+      } else if (arg == L"--remote-token") {
+        if (i + 1 >= argc) {
+          spdlog::error("--remote-token requires a token");
+          return 1;
+        }
+        remoteConfig.token = narrowWideLossy(argv[++i]);
+      } else if (arg == L"--remote-video-fps") {
+        if (i + 1 >= argc) {
+          spdlog::error("--remote-video-fps requires a frame rate");
+          return 1;
+        }
+        remoteConfig.videoFps = std::clamp(std::stoi(std::wstring(argv[++i])), 1, 60);
+      } else if (arg == L"--remote-jpeg-quality") {
+        if (i + 1 >= argc) {
+          spdlog::error("--remote-jpeg-quality requires a quality value");
+          return 1;
+        }
+        remoteConfig.jpegQuality = std::clamp(std::stoi(std::wstring(argv[++i])), 1, 100);
+      } else if (arg == L"--remote-audio") {
+        remoteConfig.audioEnabled = true;
+      } else if (arg == L"--remote-audio-sample-rate") {
+        if (i + 1 >= argc) {
+          spdlog::error("--remote-audio-sample-rate requires a sample rate");
+          return 1;
+        }
+        remoteConfig.audioSampleRate = std::max(1, std::stoi(std::wstring(argv[++i])));
+      } else if (arg == L"--remote-audio-channels") {
+        if (i + 1 >= argc) {
+          spdlog::error("--remote-audio-channels requires a channel count");
+          return 1;
+        }
+        remoteConfig.audioChannels = std::max(1, std::stoi(std::wstring(argv[++i])));
+      } else if (arg == L"--remote-audio-format") {
+        if (i + 1 >= argc) {
+          spdlog::error("--remote-audio-format requires a format name");
+          return 1;
+        }
+        remoteConfig.audioFormat = narrowWideLossy(argv[++i]);
       } else {
         dllSearchDirs.emplace_back(argv[i]);
       }
@@ -1192,6 +1256,12 @@ int wmain(int argc, wchar_t **argv) {
                    hostUpscaleTarget.first, hostUpscaleTarget.second);
     else
       spdlog::info("host upscale target: dynamic");
+    if (remoteConfig.enabled) {
+      spdlog::info("remote server: {}:{} videoFps={} jpegQuality={} audio={} token={}",
+                   remoteConfig.bind, remoteConfig.port, remoteConfig.videoFps,
+                   remoteConfig.jpegQuality, remoteConfig.audioEnabled ? 1 : 0,
+                   remoteConfig.token.empty() ? "off" : "on");
+    }
     spdlog::info("sdmmc host path: {}", sdmmcHostPath->string());
     for (const auto &dir : dllSearchDirs)
       spdlog::info("dll search dir: {}", dir.string());
@@ -1208,6 +1278,7 @@ int wmain(int argc, wchar_t **argv) {
     int rc = runImage(pe, dllSearchDirs, registryPath, fb,
                       serialMapPath, *sdmmcHostPath, guestCommandLine, headless,
                       hostUpscaleTarget,
+                      remoteConfig,
                       instructionLimit);
     if (writeFrameDumps)
       writePpm("frame_001_after_unicorn.ppm", fb, 1);

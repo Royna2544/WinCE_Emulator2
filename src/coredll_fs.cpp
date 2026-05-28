@@ -499,12 +499,25 @@ bool SyntheticDllRuntime::handleReadFile(SyntheticExportCode code, const GuestCa
     auto* handle = lookupGuestHandle(args.a0);
     writeU32(args.a3, 0);
     if (handle && handle->kind == GuestHandle::Kind::GuestSerialDevice) {
+        if (!args.a1 && args.a2) {
+            lastError_ = 87;
+            ret = 0;
+            return true;
+        }
+        const DWORD requested = std::min<DWORD>(args.a2, 1024);
+        static thread_local std::vector<uint8_t> injected;
+        injected.resize(requested);
+        const size_t transferred = readRemoteSerialBytes(injected.data(), injected.size());
+        if (transferred) {
+            uc_mem_write(uc_, args.a1, injected.data(), transferred);
+            writeU32(args.a3, static_cast<uint32_t>(transferred));
+        }
         ret = 1;
         lastError_ = 0;
         auto debugName = fileHandleDebugNames_.find(args.a0);
         const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
-        spdlog::info("ReadFile guest device handle=0x{:08x} name=\"{}\" requested={} transferred=0",
-                     args.a0, debugPath, args.a2);
+        spdlog::info("ReadFile guest device handle=0x{:08x} name=\"{}\" requested={} transferred={}",
+                     args.a0, debugPath, args.a2, transferred);
     } else if (!handle || (handle->kind != GuestHandle::Kind::HostFile &&
                            handle->kind != GuestHandle::Kind::HostSerialDevice) ||
                !handle->hostValue) {
@@ -522,6 +535,20 @@ bool SyntheticDllRuntime::handleReadFile(SyntheticExportCode code, const GuestCa
         bytes.resize(requested);
         auto debugName = fileHandleDebugNames_.find(args.a0);
         const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+        if (handle->kind == GuestHandle::Kind::HostSerialDevice) {
+            const size_t injected = readRemoteSerialBytes(bytes.data(), bytes.size());
+            if (injected) {
+                uc_mem_write(uc_, args.a1, bytes.data(), injected);
+                writeU32(args.a3, static_cast<uint32_t>(injected));
+                ret = 1;
+                lastError_ = 0;
+                const uint32_t readCount = ++fileReadCounts_[args.a0];
+                spdlog::info("ReadFile remote serial handle=0x{:08x} path=\"{}\" guestRequested={} transferred={} read#={} data=\"{}\"",
+                             args.a0, debugPath, args.a2, injected, readCount,
+                             serialAsciiPreview(bytes.data(), injected));
+                return true;
+            }
+        }
         const std::string debugLower = lowerAscii(debugPath);
         const bool traceProfileFile = isProfileTracePath(debugLower);
         DWORD fileOffsetBefore = 0xffffffffu;

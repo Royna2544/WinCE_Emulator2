@@ -576,6 +576,14 @@ bool SyntheticDllRuntime::handleWaveOutWrite(SyntheticExportCode code, const Gue
         header->dwLoops = readU32(args.a1 + 20);
     }
     auto state = waveOutStates_.find(args.a0);
+    if (readOk && state != waveOutStates_.end()) {
+        publishRemoteAudioChunk(stored.data,
+                                state->second.formatTag,
+                                state->second.samplesPerSec,
+                                state->second.channels,
+                                state->second.blockAlign,
+                                state->second.bitsPerSample);
+    }
     if (state != waveOutStates_.end() && (state->second.flags & CALLBACK_TYPEMASK) == CALLBACK_EVENT) {
         auto* event = lookupGuestHandle(state->second.callback);
         if (event && event->kind == GuestHandle::Kind::HostEvent && event->hostValue) {

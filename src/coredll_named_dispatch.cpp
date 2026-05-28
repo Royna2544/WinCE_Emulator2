@@ -3820,6 +3820,9 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                 if (a2 || a3) {
                     if (candidate.message < a2 || candidate.message > a3) return false;
                 }
+                if (!candidate.synchronousSender && coveringFullScreenOwnedPopup(candidate.hwnd)) {
+                    return false;
+                }
                 return true;
             };
             auto it = std::find_if(guestMessages_.begin(), guestMessages_.end(), matchesFilter);

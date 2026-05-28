@@ -1759,6 +1759,26 @@ void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t
     }
     if (!hwnd) return;
 
+    const auto isPointerMessage = [](uint32_t msg) {
+        return msg == 0x0200 || msg == 0x0201 || msg == 0x0202;
+    };
+    const bool hasQueuedPointer = std::any_of(guestMessages_.begin(), guestMessages_.end(),
+                                              [&](const GuestMessage& queued) {
+                                                  return isPointerMessage(queued.message);
+                                              });
+    if (message == 0x0201 && hasQueuedPointer) {
+        spdlog::info("discarded host mouse down while previous touch sequence is still queued hwnd=0x{:08x} point={},{} queued={}",
+                     hwnd, hostX, hostY, guestMessages_.size());
+        return;
+    }
+    if (message == 0x0200 && !hostPointerCaptureWindow_ && !hasQueuedPointer) {
+        return;
+    }
+    if (message == 0x0202 && !hostPointerCaptureWindow_ && !hasQueuedPointer) {
+        spdlog::info("discarded stray host mouse up hwnd=0x{:08x} point={},{}", hwnd, hostX, hostY);
+        return;
+    }
+
     auto targetWindow = windows_.find(hwnd);
     if (targetWindow != windows_.end() && !targetWindow->second.parent &&
         hwnd != rootGuestHwnd && (targetWindow->second.style & 0x80000000u) &&
@@ -1810,6 +1830,22 @@ void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t
                    queued.message == 0x0200 || queued.message == 0x0201 ||
                    queued.message == 0x0202;
         };
+        const auto mustRunBeforeInputForSameWindow = [](uint32_t message) {
+            return message == 0x0001 || // WM_CREATE
+                   message == 0x0005 || // WM_SIZE
+                   message == 0x0014 || // WM_ERASEBKGND
+                   message == 0x0018 || // WM_SHOWWINDOW
+                   message == 0x000f;   // WM_PAINT
+        };
+        const bool hasPendingLifecycleForTarget =
+            std::any_of(guestMessages_.begin(), guestMessages_.end(), [&](const GuestMessage& queued) {
+                return queued.hwnd == input.hwnd && mustRunBeforeInputForSameWindow(queued.message);
+            });
+        if (hasPendingLifecycleForTarget) {
+            guestMessages_.push_back(input);
+            compactQueuedPointerMotion();
+            return;
+        }
         auto insertAt = guestMessages_.begin();
         while (insertAt != guestMessages_.end() && isInputPriority(*insertAt)) {
             ++insertAt;
@@ -2100,6 +2136,9 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
             hasPendingUserInput() || hasPendingSynchronousMessage()) {
             return true;
         }
+        if (guestMessages_.size() < 3) {
+            return true;
+        }
         constexpr uint32_t kMaxWorkerSlicesBeforeMessage = 4;
         for (uint32_t slice = 0;
              slice < kMaxWorkerSlicesBeforeMessage && !guestMessages_.empty() && hasHostWindows() &&
@@ -2121,12 +2160,28 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
         return true;
     };
     while (hasHostWindows()) {
+        drainRemoteInputEvents();
+        bool remotePaused = false;
+        {
+            std::lock_guard<std::mutex> lock(remoteMutex_);
+            remotePaused = remotePaused_;
+        }
+        if (remotePaused) {
+            pumpHostMessages();
+            MsgWaitForMultipleObjects(0, nullptr, FALSE, 50, QS_ALLINPUT);
+            continue;
+        }
         pollCrossProcessGuestMessages();
         enqueueDueTimers();
         if (!resumeQueuedWorkerBurst()) return;
         if (!guestMessages_.empty() && hasHostWindows()) {
             if (activeGuestThread_) {
                 yieldActiveGuestThread("queued-message-preempt");
+            }
+            if (!activeGuestThread_ && mainThreadContext_.valid) {
+                updateCurrentThreadKData(mainThreadPseudoHandle_, mainThreadTls_);
+                restoreGuestCpuContext(mainThreadContext_);
+                spdlog::debug("restored parked main thread for queued messages queued={}", guestMessages_.size());
             }
             compactQueuedPointerMotion();
             const uint64_t budget = 250000u;

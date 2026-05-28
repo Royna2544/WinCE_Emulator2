@@ -152,16 +152,29 @@ Last refreshed: 2026-05-28.
    - Revisit heavy software floating-point paths after correctness stabilizes.
    - Avoid broad logging that floods every frame or every tight polling loop.
 
+7. Remote host server follow-up
+   - Exercise `--remote-server` against a live iNavi run and verify
+     `/api/v1/status`, `/api/v1/frame.jpg`, `/api/v1/video.mjpg`, remote touch,
+     remote key input, location/NMEA injection, and `/api/v1/control/ws` with a
+     real client.
+   - Remote audio has a basic Debug verification: `/api/v1/audio/ws` emits
+     miniaudio-converted 3528-byte default PCM chunks, and WebSocket delivery
+     now clears stale backlog on connect, caps queued PCM, and paces chunks
+     instead of bursting. Continue client-side listening tests for click-sound
+     latency, underrun, and A/V sync behavior.
+   - Extend sensor stream-device semantics only after the guest IOCTL protocol
+     for `SMB1:`/`MFS1:` is identified.
+
 ## Later
 
-7. Device backends
+8. Device backends
    - Consider an `I2C2:` model if `SMB380.dll`/`YAS526B.dll` behavior becomes
      necessary through real guest calls.
    - Add narrow named handlers for `PIC1:`, `BTN1:`, `LSD1:`, `CAM1:`, or
      `TWV1:` only after their protocol is identified.
    - Keep `UID1:`/`NANDUUID_RETURN` narrow and evidence-based.
 
-8. Cleanup
+9. Cleanup
    - Remove or demote temporary diagnostics once each investigation is settled.
    - Keep CE SDK ordinal evidence near code changes when adding coredll exports.
    - If the `MultiTBT` companion requirement is confirmed, replace the manual

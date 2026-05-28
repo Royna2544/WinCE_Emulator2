@@ -5,6 +5,7 @@
 #include <nlohmann/json.hpp>
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <deque>
@@ -12,8 +13,10 @@
 #include <filesystem>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -26,6 +29,12 @@ struct SyntheticModule {
     std::map<uint16_t, uint32_t> exportsByOrdinal;
     std::map<uint16_t, std::string> exportNamesByOrdinal;
 };
+
+struct RemoteServerHandle;
+struct RemoteServerHandleDeleter {
+    void operator()(RemoteServerHandle* handle) const;
+};
+void installRemoteLogSink();
 
 class SyntheticDllRuntime {
 public:
@@ -52,8 +61,21 @@ public:
         uint32_t sizeLow{};
     };
     using GuestProcessLauncher = std::function<bool(GuestProcessLaunch&)>;
+    struct RemoteServerConfig {
+        bool enabled{};
+        std::string bind{"127.0.0.1"};
+        uint16_t port{8765};
+        std::string token;
+        int videoFps{30};
+        int jpegQuality{80};
+        bool audioEnabled{};
+        int audioSampleRate{44100};
+        int audioChannels{2};
+        std::string audioFormat{"s16le"};
+    };
 
     explicit SyntheticDllRuntime(uc_engine* uc);
+    ~SyntheticDllRuntime();
 
     void setMainModulePath(std::string path);
     void setMainModuleBase(uint32_t base);
@@ -62,6 +84,7 @@ public:
     void setRegistryPath(const std::filesystem::path& path);
     void setSdmmcHostPath(const std::filesystem::path& path);
     void setSerialDeviceMapPath(const std::filesystem::path& path);
+    void setRemoteServerConfig(RemoteServerConfig config);
     void registerLoadedModule(const std::string& moduleName, const std::filesystem::path& path, uint32_t base,
                               uint32_t imageSize,
                               const std::map<std::string, uint32_t>& exportsByName = {},
@@ -86,6 +109,7 @@ public:
     static void hookBasicBlock(uc_engine* uc, uint64_t address, uint32_t size, void* user);
 
 private:
+    friend struct RemoteServerHandle;
     enum class SyntheticModuleKind : uint8_t {
         Unknown,
         Coredll,
@@ -646,6 +670,21 @@ private:
         uint32_t synchronousSender{};
         bool crossProcess{};
     };
+    struct RemoteTouchEvent {
+        uint32_t message{};
+        int32_t x{};
+        int32_t y{};
+    };
+    struct RemoteKeyEvent {
+        uint32_t message{};
+        uint32_t vk{};
+    };
+    struct RemoteAudioChunk {
+        std::vector<uint8_t> payload;
+        uint64_t sequence{};
+        uint64_t ptsMs{};
+        uint32_t durationMs{};
+    };
     struct ResourceName {
         bool ordinal{};
         uint32_t id{};
@@ -835,6 +874,17 @@ private:
     std::map<uint32_t, HostWaveBuffer> hostWaveBuffers_;
     std::map<uint32_t, GuestWaveOutState> waveOutStates_;
     std::vector<CachedWaveOutDevice> cachedWaveOutDevices_;
+    RemoteServerConfig remoteConfig_;
+    std::unique_ptr<RemoteServerHandle, RemoteServerHandleDeleter> remoteServer_;
+    mutable std::mutex remoteMutex_;
+    std::deque<RemoteTouchEvent> remoteTouchEvents_;
+    std::deque<RemoteKeyEvent> remoteKeyEvents_;
+    std::deque<uint8_t> remoteSerialBytes_;
+    std::deque<RemoteAudioChunk> remoteAudioChunks_;
+    uint64_t remoteAudioSequence_{};
+    uint64_t remoteAudioNextPtsMs_{};
+    nlohmann::json remoteImuState_;
+    bool remotePaused_{};
     std::map<uint32_t, std::string> registryHandles_;
     std::map<uint32_t, std::string> fileHandleDebugNames_;
     std::map<std::wstring, CachedFileAttributes> fileAttributeCache_;
@@ -1276,6 +1326,26 @@ private:
     uint32_t waitForMultipleGuestObjects(uint32_t count, uint32_t handlesPtr, bool waitAll);
     void initializeUserKData();
     void updateCurrentThreadKData(uint32_t currentThreadValue, uint32_t tlsBase);
+    void startRemoteServer();
+    void stopRemoteServer();
+    void drainRemoteInputEvents();
+    bool enqueueRemoteTouch(const std::string& phase, int32_t x, int32_t y, std::string& error);
+    bool enqueueRemoteKey(const std::string& phase, uint32_t vk, std::string& error);
+    void updateRemoteImuState(const nlohmann::json& state);
+    void injectRemoteSerialBytes(const std::string& bytes);
+    size_t readRemoteSerialBytes(uint8_t* dst, size_t maxBytes);
+    void publishRemoteAudioChunk(const std::vector<uint8_t>& pcm,
+                                 uint16_t sourceFormatTag,
+                                 uint32_t sourceSampleRate,
+                                 uint16_t sourceChannels,
+                                 uint16_t sourceBlockAlign,
+                                 uint16_t sourceBitsPerSample);
+    void clearRemoteAudioChunks();
+    std::vector<RemoteAudioChunk> takeRemoteAudioChunks(size_t maxChunks);
+    std::vector<uint32_t> copyRemoteFramebuffer(int& width, int& height) const;
+    nlohmann::json remoteStatusJson() const;
+    std::vector<std::string> recentRemoteLogLines(size_t maxLines) const;
+    std::string remoteGpsTarget() const;
     GuestCpuContext captureGuestCpuContext() const;
     GuestCpuContext initialGuestThreadContext(uint32_t startAddress, uint32_t parameter, uint32_t stackTop) const;
     void restoreGuestCpuContext(const GuestCpuContext& context) const;

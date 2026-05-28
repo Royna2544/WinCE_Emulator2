@@ -39,14 +39,14 @@
       <PreprocessorDefinitions>NOMINMAX;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalOptions>/arch:AVX2 /utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalOptions>/arch:AVX2 /bigobj /utf-8 %(AdditionalOptions)</AdditionalOptions>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <LanguageStandard_C>stdc11</LanguageStandard_C>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>user32.lib;gdi32.lib;d3d11.lib;dxgi.lib;d3dcompiler.lib;ws2_32.lib;ole32.lib;oleaut32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>user32.lib;gdi32.lib;gdiplus.lib;d3d11.lib;dxgi.lib;d3dcompiler.lib;ws2_32.lib;ole32.lib;oleaut32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -56,13 +56,13 @@
       <PreprocessorDefinitions>NOMINMAX;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalOptions>/arch:AVX512 /utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalOptions>/arch:AVX512 /bigobj /utf-8 %(AdditionalOptions)</AdditionalOptions>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>user32.lib;gdi32.lib;d3d11.lib;dxgi.lib;d3dcompiler.lib;ws2_32.lib;ole32.lib;oleaut32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>user32.lib;gdi32.lib;gdiplus.lib;d3d11.lib;dxgi.lib;d3dcompiler.lib;ws2_32.lib;ole32.lib;oleaut32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -90,6 +90,7 @@
     <ClCompile Include="src\coredll_window.cpp" />
     <ClCompile Include="src\coredll_window_runtime.cpp" />
     <ClCompile Include="src\main.cpp" />
+    <ClCompile Include="src\remote_server.cpp" />
     <ClCompile Include="src\synthetic_dll_commctrl.cpp" />
     <ClCompile Include="src\synthetic_dll.cpp" />
     <ClCompile Include="src\synthetic_dll_modules.cpp" />

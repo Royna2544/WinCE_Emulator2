@@ -1931,7 +1931,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                 pumpHostMessages();
                 return;
             }
-            if (hasRunnableGuestThread()) {
+            if (guestMessages_.empty() && hasRunnableGuestThread()) {
                 spdlog::info("WaitForSingleObject cooperative guest-thread slice wait=0x{:08x} timeout=0x{:08x} retry=1",
                              a0, a1);
                 switchToRunnableGuestThread(name.c_str(), 0, preferredThread);
