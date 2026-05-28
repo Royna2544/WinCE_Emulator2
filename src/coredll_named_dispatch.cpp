@@ -854,11 +854,15 @@ std::optional<uint32_t> SyntheticDllRuntime::findExternalGuestWindow(const std::
 }
 
 std::filesystem::path SyntheticDllRuntime::crossProcessMessageQueuePath() {
+    if (!crossProcessMessageQueuePath_.empty()) {
+        return crossProcessMessageQueuePath_;
+    }
     const std::filesystem::path registryPath = ensureCrossProcessWindowRegistryPath();
     if (registryPath.empty()) {
         return {};
     }
-    return std::filesystem::path(registryPath.string() + ".messages.json");
+    crossProcessMessageQueuePath_ = std::filesystem::path(registryPath.string() + ".messages.json");
+    return crossProcessMessageQueuePath_;
 }
 
 bool SyntheticDllRuntime::postCrossProcessGuestMessage(uint32_t processId,
@@ -971,6 +975,30 @@ void SyntheticDllRuntime::pollCrossProcessGuestMessages() {
         return;
     }
 
+    const auto now = std::chrono::steady_clock::now();
+    if (lastCrossProcessMessagePollAt_ != std::chrono::steady_clock::time_point{} &&
+        now - lastCrossProcessMessagePollAt_ < std::chrono::milliseconds(2)) {
+        return;
+    }
+    lastCrossProcessMessagePollAt_ = now;
+
+    std::error_code statError;
+    const auto currentWrite = std::filesystem::last_write_time(queuePath, statError);
+    if (statError) {
+        hasCrossProcessMessageQueueStat_ = false;
+        return;
+    }
+    const std::uintmax_t currentSize = std::filesystem::file_size(queuePath, statError);
+    if (statError) {
+        hasCrossProcessMessageQueueStat_ = false;
+        return;
+    }
+    if (hasCrossProcessMessageQueueStat_ &&
+        currentWrite == lastCrossProcessMessageQueueWrite_ &&
+        currentSize == lastCrossProcessMessageQueueSize_) {
+        return;
+    }
+
     nlohmann::json queue;
     {
         std::ifstream input(queuePath);
@@ -984,6 +1012,9 @@ void SyntheticDllRuntime::pollCrossProcessGuestMessages() {
         }
     }
     if (queue.value("version", 0) != 1 || !queue["messages"].is_array()) {
+        hasCrossProcessMessageQueueStat_ = true;
+        lastCrossProcessMessageQueueWrite_ = currentWrite;
+        lastCrossProcessMessageQueueSize_ = currentSize;
         return;
     }
 
@@ -1023,6 +1054,9 @@ void SyntheticDllRuntime::pollCrossProcessGuestMessages() {
     }
 
     if (!changed) {
+        hasCrossProcessMessageQueueStat_ = true;
+        lastCrossProcessMessageQueueWrite_ = currentWrite;
+        lastCrossProcessMessageQueueSize_ = currentSize;
         return;
     }
     std::error_code ignored;
@@ -1039,6 +1073,14 @@ void SyntheticDllRuntime::pollCrossProcessGuestMessages() {
         std::filesystem::copy_file(tempPath, queuePath,
                                    std::filesystem::copy_options::overwrite_existing, ignored);
         std::filesystem::remove(tempPath, ignored);
+    }
+    std::error_code refreshError;
+    const auto refreshedWrite = std::filesystem::last_write_time(queuePath, refreshError);
+    const std::uintmax_t refreshedSize = refreshError ? 0 : std::filesystem::file_size(queuePath, refreshError);
+    hasCrossProcessMessageQueueStat_ = !refreshError;
+    if (hasCrossProcessMessageQueueStat_) {
+        lastCrossProcessMessageQueueWrite_ = refreshedWrite;
+        lastCrossProcessMessageQueueSize_ = refreshedSize;
     }
 }
 

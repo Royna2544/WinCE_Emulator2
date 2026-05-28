@@ -334,6 +334,8 @@ private:
         CoreDllStrtok,
         CoreDllStricmp,
         CoreDllStrnicmp,
+        CoreDllStrlwr,
+        CoreDllStrupr,
         CoreDllUltow,
         CoreDllToupper,
         CoreDllSnwprintf,
@@ -790,6 +792,11 @@ private:
     std::filesystem::path sdmmcHostRoot_;
     std::filesystem::path hostMainModulePath_;
     std::filesystem::path crossProcessWindowRegistryPath_;
+    std::filesystem::path crossProcessMessageQueuePath_;
+    std::filesystem::file_time_type lastCrossProcessMessageQueueWrite_{};
+    std::uintmax_t lastCrossProcessMessageQueueSize_ = 0;
+    std::chrono::steady_clock::time_point lastCrossProcessMessagePollAt_{};
+    bool hasCrossProcessMessageQueueStat_ = false;
     std::filesystem::path sharedMappingDirectory_;
     uint32_t mainModuleBase_ = 0;
     std::filesystem::path hostBaseDir_;
@@ -1154,6 +1161,7 @@ private:
     bool handleStrtok(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleStricmp(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleStrnicmp(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleStrCaseInPlace(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleUltow(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleToupper(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleWideFormat(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);

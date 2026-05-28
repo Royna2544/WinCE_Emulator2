@@ -238,6 +238,28 @@ bool coredllOrdinalTouchesSharedMappingBoundary(uint16_t ordinal) {
     }
 }
 
+bool coredllOrdinalUsesInlineDispatch(uint16_t ordinal) {
+    switch (ordinal) {
+    case 0x0006: // ExitThread
+    case 0x00f6: // CreateWindowExW synchronous create messages
+    case 0x0109: // DestroyWindow synchronous destroy messages
+    case 0x010b: // UpdateWindow synchronous paint messages
+    case 0x011d: // CallWindowProcW
+    case 0x01f0: // Sleep cooperative scheduler path
+    case 0x01f1: // WaitForSingleObject cooperative scheduler path
+    case 0x01f2: // WaitForMultipleObjects cooperative scheduler path
+    case 0x035b: // DispatchMessageW
+    case 0x035d: // GetMessageW
+    case 0x0364: // SendMessageW
+    case 0x039d: // CreatePatternBrush
+    case 0x03af: // SetBrushOrgEx
+    case 0x03cb: // GetClipBox
+        return true;
+    default:
+        return false;
+    }
+}
+
 std::string normalizedPathKey(const std::filesystem::path& path) {
     std::string text = pathToUtf8(path.lexically_normal());
     std::replace(text.begin(), text.end(), '/', '\\');
@@ -252,10 +274,12 @@ bool startsWithPathKey(const std::string& pathKey, const std::string& rootKey) {
             (rootKey.empty() || rootKey.back() == '\\' || pathKey[rootKey.size()] == '\\'));
 }
 
-std::string pathWithBackslashes(std::filesystem::path path) {
+std::string pathWithBackslashes(const std::filesystem::path& path) {
     std::string text = pathToUtf8(path.lexically_normal());
     std::replace(text.begin(), text.end(), '/', '\\');
-    while (!text.empty() && text.front() == '\\') text.erase(text.begin());
+    const size_t first = text.find_first_not_of('\\');
+    if (first == std::string::npos) return {};
+    if (first != 0) text.erase(0, first);
     return text;
 }
 
@@ -1018,8 +1042,11 @@ std::filesystem::path SyntheticDllRuntime::resolveGuestPath(const std::string& g
     }
     const bool rootRelative = !normalized.empty() && (normalized.front() == '\\' || normalized.front() == '/');
 
-    while (!normalized.empty() && (normalized.front() == '\\' || normalized.front() == '/')) {
-        normalized.erase(normalized.begin());
+    const size_t firstRelativeChar = normalized.find_first_not_of("\\/");
+    if (firstRelativeChar == std::string::npos) {
+        normalized.clear();
+    } else if (firstRelativeChar != 0) {
+        normalized.erase(0, firstRelativeChar);
     }
 
     const std::filesystem::path relative = pathFromUtf8(normalized);
@@ -1050,7 +1077,12 @@ std::filesystem::path SyntheticDllRuntime::resolveGuestPath(const std::string& g
     if (rootRelative && !sdmmcHostRoot_.empty()) {
         const std::string relativeText = pathWithBackslashes(relative);
         std::string sdmmcRelative = sdmmcGuestRoot_;
-        while (!sdmmcRelative.empty() && sdmmcRelative.front() == '\\') sdmmcRelative.erase(sdmmcRelative.begin());
+        const size_t firstSdmmcRelativeChar = sdmmcRelative.find_first_not_of('\\');
+        if (firstSdmmcRelativeChar == std::string::npos) {
+            sdmmcRelative.clear();
+        } else if (firstSdmmcRelativeChar != 0) {
+            sdmmcRelative.erase(0, firstSdmmcRelativeChar);
+        }
         if (!sdmmcRelative.empty() &&
             startsWithPathKey(lowerAscii(relativeText), lowerAscii(sdmmcRelative))) {
             std::string withoutRoot = relativeText.size() == sdmmcRelative.size()
@@ -1100,8 +1132,19 @@ uint32_t SyntheticDllRuntime::normalizeVirtualFileMiss(const std::filesystem::pa
 void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
     auto& mutableEntry = entry;
     entry.calls++;
-    const std::string name = mutableEntry.name.empty()
-        ? ("#" + std::to_string(mutableEntry.ordinal))
+    if (!mutableEntry.ordinalHandler && mutableEntry.calls == 1) {
+        if (const auto* ordinalHandler = findOrdinalHandler(mutableEntry);
+            ordinalHandler && ordinalHandler->handler) {
+            mutableEntry.ordinalHandler = ordinalHandler->handler;
+            mutableEntry.code = ordinalHandler->code;
+            if (mutableEntry.name.empty() && ordinalHandler->name) {
+                mutableEntry.name = ordinalHandler->name;
+            }
+        }
+    }
+    std::string generatedName;
+    const std::string& name = mutableEntry.name.empty()
+        ? (generatedName = "#" + std::to_string(mutableEntry.ordinal))
         : mutableEntry.name;
     const uint32_t a0 = reg(UC_MIPS_REG_A0);
     const uint32_t a1 = reg(UC_MIPS_REG_A1);
@@ -1119,6 +1162,32 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
     if (mutableEntry.calls <= 128) {
         spdlog::debug("synthetic {}!{} call {} a0=0x{:08x} a1=0x{:08x} a2=0x{:08x} a3=0x{:08x} ra=0x{:08x}",
                       mutableEntry.moduleName, name, mutableEntry.calls, a0, a1, a2, a3, ra);
+    }
+
+    const bool continuationPc =
+        isCoredll &&
+        ((destroyWindowContinuationStub_ && pc == destroyWindowContinuationStub_) ||
+         (createWindowContinuationStub_ && pc == createWindowContinuationStub_) ||
+         (blockingApiContinuationStub_ && pc == blockingApiContinuationStub_) ||
+         (updateWindowContinuationStub_ && pc == updateWindowContinuationStub_) ||
+         (messageTransferContinuationStub_ && pc == messageTransferContinuationStub_) ||
+         (threadExitStub_ && pc == threadExitStub_));
+    if (mutableEntry.ordinalHandler &&
+        !continuationPc &&
+        (!isCoredll || !coredllOrdinalUsesInlineDispatch(ordinal))) {
+        uint32_t ret = 0;
+        const bool handled = (this->*mutableEntry.ordinalHandler)(mutableEntry.code, args, ret);
+        if (handled) {
+            if (mutableEntry.calls <= 128) {
+                spdlog::debug("synthetic {}!{} -> 0x{:08x}", mutableEntry.moduleName, name, ret);
+            }
+            setReg(UC_MIPS_REG_V0, ret);
+            setReg(UC_MIPS_REG_PC, ra);
+            if (syncSharedMappings) syncNamedMappedViews();
+            pumpHostMessages();
+            cooperateGuestThreadsAfterCall(name);
+            return;
+        }
     }
 
     auto finishImmediateReturn = [&](uint32_t value, bool cooperateThreads = false) {
@@ -2075,13 +2144,6 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
     }
     if (mutableEntry.ordinalHandler) {
         bool handled = (this->*mutableEntry.ordinalHandler)(mutableEntry.code, args, ret);
-        if (handled) {
-            finishImmediateReturn(ret, true);
-            return;
-        }
-    } else if (const auto* ordinalHandler = findOrdinalHandler(mutableEntry);
-               ordinalHandler && ordinalHandler->handler) {
-        bool handled = (this->*ordinalHandler->handler)(ordinalHandler->code, args, ret);
         if (handled) {
             finishImmediateReturn(ret, true);
             return;
