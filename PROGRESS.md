@@ -61,6 +61,36 @@ Last refreshed: 2026-05-28.
   masks now use direct encode/decode paths instead of the generic masked
   helpers, and `SRCCOPY` bitmap-to-bitmap blits no longer decode the
   destination pixel.
+- `bitBltToBitmap` now has an AVX2 row fast path for 1:1 `SRCCOPY`
+  conversion from RGB565 source bitmaps into 32-bit BGRA destination bitmaps.
+  Debug builds also request `/arch:AVX2`, while Release remains `/arch:AVX512`.
+- The cross-process guest message queue poller now caches the queue path and
+  skips JSON parsing/rewrite work when the shared message file's timestamp and
+  size have not changed, with a small bounded poll interval to reduce host-loop
+  overhead without app-specific behavior.
+- Synthetic dispatch now keeps registered ordinal handlers on the direct
+  member-function pointer path, caches any late ordinal-handler lookup on the
+  export entry, and avoids copying export names on every call.
+- Registered synthetic handlers now also have an early dispatch fast path that
+  bypasses the large coredll window/message slow path unless the ordinal is one
+  of the scheduler or synchronous window/message cases that must stay inline.
+- Hot guest path normalization now trims leading slashes with a single prefix
+  skip instead of repeatedly erasing the first character during dispatch-time
+  path translation.
+- `coredll.dll` ordinals `0x0587`/`0x0588` are implemented as `_strlwr` and
+  `_strupr` from CE 4.2 MIPSII SDK evidence. This fixes the observed route
+  crash where unsupported `#1416` returned `0` and the guest used that as a
+  string pointer.
+- `captures/inavi_autodrive_20260528_130053` verified the Debug parent stays
+  alive and responsive after the `_strupr` fix: `MultiTBT` resolves, no parent
+  `#1416` unsupported warning appears, and no parent interactive crash appears
+  through the route-result capture.
+- `captures/inavi_autodrive_20260528_132322` verified route/dialog z-order is
+  now behaving as expected in Debug after owned-popup backing protection was
+  applied to owned-popup framebuffer targets too. The "route method" dialog is
+  explicitly destroyed by the guest later, and a live `PrintWindow` capture
+  showed the app advanced back to quick search rather than being visually
+  trapped behind the old dialog.
 - `captures/inavi_autodrive_20260528_120552` showed the route-result UI did
   appear, but the small "Searching route" popup window stayed visible and the
   partial map did not advance to the drawn-route state. The log shows popup
@@ -138,9 +168,13 @@ Last refreshed: 2026-05-28.
 - The host GUI scheduler now gives backlogged queued-message work a larger
   bounded slice even when pending input or cross-thread `SendMessageW` work is
   present. This reduced route-result backlog lag without faking guest state.
-- The route autodrive preset now taps the actual first route-method modal
-  button at approximately `(405,296)` instead of the explanatory text area at
-  `(390,220)`.
+- `captures/inavi_autodrive_20260528_123302` showed the later route crash was
+  triggered by the diagnostic runner's stale final `route_method_first` tap:
+  `04_direct_route.png` already had the route drawn on the map, then the
+  script tapped `(405,296)` on the main map and the guest dereferenced a null
+  route/image object at `inavi.exe+0x002219a8`. This is evidence for improving
+  generic input/modal fidelity and diagnostic timing, not for adding
+  app-specific emulator behavior.
 - The host presenter accepts `--host-upscale 4k`/`WxH` for host-only scaled
   display. Guest screen metrics and framebuffer dimensions remain unchanged.
   The D3D11 backend uploads the guest framebuffer, runs chained NVIDIA Image

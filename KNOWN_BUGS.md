@@ -46,6 +46,13 @@ Current evidence:
 - The old route preset coordinate `(390,220)` was a diagnostic-script bug for
   the "existing route" modal: it hit explanatory text above the first route
   method button.
+- `captures/inavi_autodrive_20260528_123302` showed the later Debug process
+  death was triggered by diagnostic timing: after `direct_route`, the route
+  was already drawn and the expected modal was gone, but the route preset still
+  tapped `(405,296)` on the main map. The guest then crashed on a null source
+  route/image object at `inavi.exe+0x002219a8` (`lw $v0, 0x2c($a0)`,
+  `$a0 == 0`) via caller `inavi.exe+0x002225d0`. This should guide generic
+  input/modal fidelity work, not an app-specific emulator special case.
 - `captures/inavi_autodrive_20260525_191308` showed a now-fixed emulator
   regression where empty blocking `GetMessageW` returned `0` and caused MFC to
   enter shutdown/CRT cleanup.
@@ -56,6 +63,20 @@ Current evidence:
   current logs.
 - `coredll #1049` was verified as `_msize` in the CE 4.2 MIPSII SDK and is now
   implemented; this removed one unsupported CRT call from the route path.
+- `captures/inavi_autodrive_20260528_125107` showed a later crash after route
+  UI interaction because `coredll #1416` was unsupported and returned `0`.
+  CE 4.2 MIPSII SDK evidence identifies ordinal `1416` as `_strupr`; the
+  current working tree implements `_strlwr`/`_strupr`.
+- `captures/inavi_autodrive_20260528_130053` shows the parent route window no
+  longer crashes at that point and remains alive. The same run still shows
+  `DeviceParser.exe` exiting through `PC == 0` immediately after probing
+  `\SDMMC Disk\autorun.inf`; that child-process control-flow issue is separate
+  from the parent `_strupr` crash.
+- `captures/inavi_autodrive_20260528_132322` shows the route/dialog ordering
+  path behaving as expected after the owned-popup backing fix: the route dialog
+  stays logically present until the guest destroys it, and the live window later
+  advances to quick search instead of remaining visually covered by stale
+  framebuffer contents.
 - The previous shared in-runtime `iSearch.exe` path could crash at `pc=0` after
   a synchronous message returned. Defaulting guest `CreateProcessW` to real
   separate child emulator processes avoids that specific crash in the latest
@@ -70,7 +91,8 @@ Current hypothesis:
   `CreateProcessW` path.
 - After `MultiTBT` is present and the corrected tap reaches route-result/map
   controls, the remaining lead is the final route-completion/guidance handoff
-  plus any paint/z-order issues around modal overlays.
+  and any remaining modal input/fairness issues. The owned-popup framebuffer
+  overpaint issue is improved by the current backing-order fix.
 - The remaining "Searching route" popup symptom is currently more consistent
   with queued-message scheduler fairness than with the result window being
   covered by a final map window.
@@ -81,10 +103,10 @@ Current hypothesis:
 Status:
 
 - Still not complete, but the route `pc=0` crash, diagnostic companion-kill
-  false stall, route-result backlog lag, and wrong modal tap coordinate are
-  fixed or narrowed in the current working tree. Do not hardcode a `MultiTBT`
-  launch. Use real-device evidence or a generic external companion
-  configuration if one is justified.
+  false stall, route-result backlog lag, wrong modal tap coordinate, and stale
+  post-route diagnostic tap are narrowed in the current working tree. Do not
+  hardcode a `MultiTBT` launch. Use real-device evidence or a generic external
+  companion configuration if one is justified.
 
 ## Modal And Overlay Routing Is Still Wrong
 

@@ -40,9 +40,17 @@ Last refreshed: 2026-05-28.
      Re-test after the queued-message backlog threshold change; if it still
      stalls, dump the eight queued guest messages and identify which thread is
      expected to re-enable/destroy the modal popup.
-   - If the "existing route" modal is visible, use the actual first method
-     button area around `(405,296)`. The old `(390,220)` coordinate hits modal
-     explanatory text, not the button.
+   - For diagnostics, only use the `route_method_first` tap when the existing
+     route modal is actually visible. Do not add emulator behavior based on
+     route-screen state, coordinates, or app-specific strings.
+   - Investigate the separate `DeviceParser.exe` `PC == 0` child exit from
+     `captures/inavi_autodrive_20260528_130053`; the parent route process now
+     survives the `_strupr` crash point, but the child control-flow bug should
+     still be explained under the project `PC == 0` rule.
+   - Continue from `captures/inavi_autodrive_20260528_132322`: route/dialog
+     ordering is expected after the owned-popup backing fix, and the live app
+     advanced to quick search. The remaining route work is now later guidance
+     handoff/state progress, not that dialog being visually covered.
 
 2. Modal and overlay input
    - Make topmost/modal guest windows receive touch first.
@@ -95,6 +103,18 @@ Last refreshed: 2026-05-28.
      `bitBltToBitmap -> decodeBitmap16 -> decodeMasked16/expandMaskedChannel`;
      normal RGB565/RGB555 bitmap formats should now avoid the generic masked
      helpers, and `SRCCOPY` should avoid destination reads.
+   - Re-profile 1:1 RGB565-to-32-bit `SRCCOPY` blits after the AVX2 conversion
+     helper. If `bitBltToBitmap` remains hot, inspect whether the remaining
+     cases are scaling, transparency, palette, 16-bit destination, or
+     non-`SRCCOPY` ROPs before adding more SIMD variants.
+   - Re-profile `runHostMessageLoopUntilClosed` after the cross-process queue
+     metadata cache. If `pollCrossProcessGuestMessages` remains hot, consider
+     replacing the shared JSON queue with a generic append-only or memory-mapped
+     transport instead of adding app-specific shortcuts.
+   - Re-profile synthetic dispatch after the direct handler/name-copy cleanup.
+     If `SyntheticDllRuntime::dispatch` remains high in samples, split out the
+     coredll registered-handler fast path from the window/message transfer path
+     instead of adding app-specific cases.
    - Continue live input/UI lag testing after
      `captures/inavi_autodrive_20260528_102413`, where Release launched and
      stayed alive after expanding host erase/paint deferral and removing the

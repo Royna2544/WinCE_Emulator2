@@ -23,6 +23,10 @@
 #include <tuple>
 #include <vector>
 
+#if defined(__AVX2__) || defined(__AVX512F__)
+#include <immintrin.h>
+#endif
+
 #include <spdlog/spdlog.h>
 
 namespace {
@@ -190,6 +194,39 @@ uint16_t encodeBitmap16(uint32_t pixel, uint32_t redMask, uint32_t greenMask, ui
     return encodeMasked16(pixel, redMask, greenMask, blueMask);
 }
 
+#if defined(__AVX2__) || defined(__AVX512F__)
+void convertRgb565ToBgra32Avx2(const uint8_t* src, uint8_t* dst, int32_t pixels) {
+    const __m256i mask5 = _mm256_set1_epi32(0x1f);
+    const __m256i mask6 = _mm256_set1_epi32(0x3f);
+    const __m256i alpha = _mm256_set1_epi32(-16777216);
+    const __m256i greenScale = _mm256_set1_epi32(255);
+    const __m256 inv63 = _mm256_set1_ps(1.0f / 63.0f);
+    int32_t x = 0;
+    for (; x + 8 <= pixels; x += 8) {
+        const __m128i packed = _mm_loadu_si128(reinterpret_cast<const __m128i*>(src + size_t(x) * 2));
+        const __m256i value = _mm256_cvtepu16_epi32(packed);
+        const __m256i r5 = _mm256_srli_epi32(value, 11);
+        const __m256i g6 = _mm256_and_si256(_mm256_srli_epi32(value, 5), mask6);
+        const __m256i b5 = _mm256_and_si256(value, mask5);
+        const __m256i r8 = _mm256_or_si256(_mm256_slli_epi32(r5, 3), _mm256_srli_epi32(r5, 2));
+        const __m256i b8 = _mm256_or_si256(_mm256_slli_epi32(b5, 3), _mm256_srli_epi32(b5, 2));
+        const __m256i gScaled = _mm256_mullo_epi32(g6, greenScale);
+        const __m256i g8 = _mm256_cvttps_epi32(_mm256_mul_ps(_mm256_cvtepi32_ps(gScaled), inv63));
+        const __m256i out = _mm256_or_si256(
+            alpha,
+            _mm256_or_si256(_mm256_slli_epi32(r8, 16), _mm256_or_si256(_mm256_slli_epi32(g8, 8), b8)));
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(dst + size_t(x) * 4), out);
+    }
+    for (; x < pixels; ++x) {
+        const uint16_t value = uint16_t(src[size_t(x) * 2] | (uint16_t(src[size_t(x) * 2 + 1]) << 8));
+        const uint32_t pixel = decodeRgb565(value);
+        dst[size_t(x) * 4 + 0] = uint8_t(pixel & 0xffu);
+        dst[size_t(x) * 4 + 1] = uint8_t((pixel >> 8) & 0xffu);
+        dst[size_t(x) * 4 + 2] = uint8_t((pixel >> 16) & 0xffu);
+        dst[size_t(x) * 4 + 3] = 0xff;
+    }
+}
+#endif
 
 }
 
@@ -313,24 +350,22 @@ uint32_t SyntheticDllRuntime::readFramebufferTargetPixel(uint32_t targetHwnd,
         coveringFullScreenOwnedPopup(targetHwnd)) {
         return framebuffer_[size_t(y) * size_t(framebufferWidth_) + size_t(x)];
     }
-    if (!isOwnedPopupWindow(targetHwnd)) {
-        for (const auto& [hwnd, window] : windows_) {
-            if (!window.visible || !window.backingValid || window.backingPixels.empty() ||
-                window.backingWidth <= 0 || window.backingHeight <= 0 ||
-                isWindowOrDescendant(targetHwnd, hwnd)) {
-                continue;
-            }
-            if (targetHwnd && !isOwnedPopupWindow(hwnd) &&
-                window.zOrder < windowZOrder(targetHwnd)) continue;
-            if (x < window.backingX || y < window.backingY ||
-                x >= window.backingX + window.backingWidth ||
-                y >= window.backingY + window.backingHeight) {
-                continue;
-            }
-            const size_t offset = size_t(y - window.backingY) * size_t(window.backingWidth) +
-                                  size_t(x - window.backingX);
-            if (offset < window.backingPixels.size()) return window.backingPixels[offset];
+    const uint64_t targetZ = targetHwnd ? windowZOrder(targetHwnd) : 0;
+    for (const auto& [hwnd, window] : windows_) {
+        if (!window.visible || !window.backingValid || window.backingPixels.empty() ||
+            window.backingWidth <= 0 || window.backingHeight <= 0 ||
+            isWindowOrDescendant(targetHwnd, hwnd)) {
+            continue;
         }
+        if (targetHwnd && window.zOrder < targetZ) continue;
+        if (x < window.backingX || y < window.backingY ||
+            x >= window.backingX + window.backingWidth ||
+            y >= window.backingY + window.backingHeight) {
+            continue;
+        }
+        const size_t offset = size_t(y - window.backingY) * size_t(window.backingWidth) +
+                              size_t(x - window.backingX);
+        if (offset < window.backingPixels.size()) return window.backingPixels[offset];
     }
     return framebuffer_[size_t(y) * size_t(framebufferWidth_) + size_t(x)];
 }
@@ -348,26 +383,24 @@ void SyntheticDllRuntime::writeFramebufferTargetPixel(uint32_t targetHwnd,
         return;
     }
     bool covered = false;
-    if (!isOwnedPopupWindow(targetHwnd)) {
-        for (auto& [hwnd, window] : windows_) {
-            if (!window.visible || !window.backingValid || window.backingPixels.empty() ||
-                window.backingWidth <= 0 || window.backingHeight <= 0 ||
-                isWindowOrDescendant(targetHwnd, hwnd)) {
-                continue;
-            }
-            if (targetHwnd && !isOwnedPopupWindow(hwnd) &&
-                window.zOrder < windowZOrder(targetHwnd)) continue;
-            if (x < window.backingX || y < window.backingY ||
-                x >= window.backingX + window.backingWidth ||
-                y >= window.backingY + window.backingHeight) {
-                continue;
-            }
-            const size_t offset = size_t(y - window.backingY) * size_t(window.backingWidth) +
-                                  size_t(x - window.backingX);
-            if (offset < window.backingPixels.size()) {
-                window.backingPixels[offset] = pixel;
-                covered = true;
-            }
+    const uint64_t targetZ = targetHwnd ? windowZOrder(targetHwnd) : 0;
+    for (auto& [hwnd, window] : windows_) {
+        if (!window.visible || !window.backingValid || window.backingPixels.empty() ||
+            window.backingWidth <= 0 || window.backingHeight <= 0 ||
+            isWindowOrDescendant(targetHwnd, hwnd)) {
+            continue;
+        }
+        if (targetHwnd && window.zOrder < targetZ) continue;
+        if (x < window.backingX || y < window.backingY ||
+            x >= window.backingX + window.backingWidth ||
+            y >= window.backingY + window.backingHeight) {
+            continue;
+        }
+        const size_t offset = size_t(y - window.backingY) * size_t(window.backingWidth) +
+                              size_t(x - window.backingX);
+        if (offset < window.backingPixels.size()) {
+            window.backingPixels[offset] = pixel;
+            covered = true;
         }
     }
     if (!covered) framebuffer_[size_t(y) * size_t(framebufferWidth_) + size_t(x)] = pixel;
@@ -436,22 +469,20 @@ void SyntheticDllRuntime::fillFramebufferRect(const GuestDc& dc,
     }
 
     bool needsLayeredWrite = false;
-    if (!isOwnedPopupWindow(dc.hwnd)) {
-        for (const auto& [hwnd, window] : windows_) {
-            if (!window.visible || !window.backingValid || window.backingPixels.empty() ||
-                window.backingWidth <= 0 || window.backingHeight <= 0 ||
-                isWindowOrDescendant(dc.hwnd, hwnd)) {
-                continue;
-            }
-            if (dc.hwnd && !isOwnedPopupWindow(hwnd) &&
-                window.zOrder < windowZOrder(dc.hwnd)) continue;
-            const int32_t backingRight = window.backingX + window.backingWidth;
-            const int32_t backingBottom = window.backingY + window.backingHeight;
-            if (left < backingRight && right > window.backingX &&
-                top < backingBottom && bottom > window.backingY) {
-                needsLayeredWrite = true;
-                break;
-            }
+    const uint64_t targetZ = dc.hwnd ? windowZOrder(dc.hwnd) : 0;
+    for (const auto& [hwnd, window] : windows_) {
+        if (!window.visible || !window.backingValid || window.backingPixels.empty() ||
+            window.backingWidth <= 0 || window.backingHeight <= 0 ||
+            isWindowOrDescendant(dc.hwnd, hwnd)) {
+            continue;
+        }
+        if (dc.hwnd && window.zOrder < targetZ) continue;
+        const int32_t backingRight = window.backingX + window.backingWidth;
+        const int32_t backingBottom = window.backingY + window.backingHeight;
+        if (left < backingRight && right > window.backingX &&
+            top < backingBottom && bottom > window.backingY) {
+            needsLayeredWrite = true;
+            break;
         }
     }
 
@@ -1730,22 +1761,20 @@ bool SyntheticDllRuntime::bitBltToFramebuffer(const GuestDc& dstDc,
         int32_t bottom{};
     };
     std::vector<BackingLayer> backingLayers;
-    if (!targetOwnedPopup) {
-        const uint64_t targetZ = dstDc.hwnd ? windowZOrder(dstDc.hwnd) : 0;
-        for (auto& [hwnd, window] : windows_) {
-            if (!window.visible || !window.backingValid || window.backingPixels.empty() ||
-                window.backingWidth <= 0 || window.backingHeight <= 0 ||
-                isWindowOrDescendant(dstDc.hwnd, hwnd)) {
-                continue;
-            }
-            if (dstDc.hwnd && !isOwnedPopupWindow(hwnd) && window.zOrder < targetZ) continue;
-            const int32_t layerLeft = std::max<int32_t>(clipLeft, window.backingX);
-            const int32_t layerTop = std::max<int32_t>(clipTop, window.backingY);
-            const int32_t layerRight = std::min<int32_t>(clipRight, window.backingX + window.backingWidth);
-            const int32_t layerBottom = std::min<int32_t>(clipBottom, window.backingY + window.backingHeight);
-            if (layerLeft < layerRight && layerTop < layerBottom) {
-                backingLayers.push_back(BackingLayer{&window, layerLeft, layerTop, layerRight, layerBottom});
-            }
+    const uint64_t targetZ = dstDc.hwnd ? windowZOrder(dstDc.hwnd) : 0;
+    for (auto& [hwnd, window] : windows_) {
+        if (!window.visible || !window.backingValid || window.backingPixels.empty() ||
+            window.backingWidth <= 0 || window.backingHeight <= 0 ||
+            isWindowOrDescendant(dstDc.hwnd, hwnd)) {
+            continue;
+        }
+        if (dstDc.hwnd && window.zOrder < targetZ) continue;
+        const int32_t layerLeft = std::max<int32_t>(clipLeft, window.backingX);
+        const int32_t layerTop = std::max<int32_t>(clipTop, window.backingY);
+        const int32_t layerRight = std::min<int32_t>(clipRight, window.backingX + window.backingWidth);
+        const int32_t layerBottom = std::min<int32_t>(clipBottom, window.backingY + window.backingHeight);
+        if (layerLeft < layerRight && layerTop < layerBottom) {
+            backingLayers.push_back(BackingLayer{&window, layerLeft, layerTop, layerRight, layerBottom});
         }
     }
 
@@ -1966,6 +1995,42 @@ bool SyntheticDllRuntime::bitBltToBitmap(const GuestBitmap& dstBitmap,
     const bool sameScaleX = srcW == outW;
     const bool sameScaleY = srcH == outH;
     const bool ropSourceCopy = rop == 0x00cc0020u;
+    auto isRgb565Bitmap = [](const GuestBitmap& bitmap) {
+        return bitmap.bpp == 16 &&
+               ((!bitmap.redMask && !bitmap.greenMask && !bitmap.blueMask) ||
+                (bitmap.redMask == kRgb565RedMask &&
+                 bitmap.greenMask == kRgb565GreenMask &&
+                 bitmap.blueMask == kRgb565BlueMask));
+    };
+    auto tryCopyRgb565ToBgra32 = [&]() {
+#if defined(__AVX2__) || defined(__AVX512F__)
+        if (!isRgb565Bitmap(srcBitmap) || dstBitmap.bpp != 32 || outW <= 0 || outH <= 0) return false;
+        const int32_t copyLeft = std::max({0, -outLeft, -srcX});
+        const int32_t copyTop = std::max({0, -outTop, -srcY});
+        const int32_t copyRight = std::min({outW, dstBitmap.width - outLeft, srcBitmap.width - srcX});
+        const int32_t copyBottom = std::min({outH, dstHeight - outTop, srcHeight - srcY});
+        if (copyRight <= copyLeft || copyBottom <= copyTop) return true;
+        const int32_t copyWidth = copyRight - copyLeft;
+        for (int32_t y = copyTop; y < copyBottom; ++y) {
+            const int32_t sy = srcY + y;
+            const int32_t dy = outTop + y;
+            const int32_t sx = srcX + copyLeft;
+            const int32_t dx = outLeft + copyLeft;
+            const int32_t srcRowIndex = srcBitmap.heightRaw < 0 ? sy : (srcHeight - 1 - sy);
+            const int32_t dstRowIndex = dstBitmap.heightRaw < 0 ? dy : (dstHeight - 1 - dy);
+            const uint8_t* srcRow = srcBits.data() + size_t(srcRowIndex) * size_t(srcBitmap.stride) + size_t(sx) * 2;
+            uint8_t* dstRow = dstBits.data() + size_t(dstRowIndex) * size_t(dstBitmap.stride) + size_t(dx) * 4;
+            convertRgb565ToBgra32Avx2(srcRow, dstRow, copyWidth);
+        }
+        return true;
+#else
+        return false;
+#endif
+    };
+    if (ropSourceCopy && sameScaleX && sameScaleY && srcW > 0 && srcH > 0 && dstW > 0 && dstH > 0 &&
+        tryCopyRgb565ToBgra32()) {
+        return uc_mem_write(uc_, dstBitmap.bits, dstBits.data(), dstBits.size()) == UC_ERR_OK;
+    }
     for (int32_t y = 0; y < outH; ++y) {
         const int32_t sy = sameScaleY ? (srcY + y) : (srcY + (int64_t(y) * srcH) / outH);
         for (int32_t x = 0; x < outW; ++x) {

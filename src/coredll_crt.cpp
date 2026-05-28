@@ -83,6 +83,9 @@ void SyntheticDllRuntime::registerCoredllCrtExports(SyntheticModule& module) {
                     {0x0754, {"__security_error_handler", Code::CoreDllSecurityErrorHandler, &SyntheticDllRuntime::handleSecurityCookie}},
                     {0x0582, {"_stricmp", Code::CoreDllStricmp, &SyntheticDllRuntime::handleStricmp}},
                     {0x0583, {"_strnicmp", Code::CoreDllStrnicmp, &SyntheticDllRuntime::handleStrnicmp}},
+                    // CE 4.2 MIPSII coredll.lib: 0x0587 _strlwr, 0x0588 _strupr.
+                    {0x0587, {"_strlwr", Code::CoreDllStrlwr, &SyntheticDllRuntime::handleStrCaseInPlace}},
+                    {0x0588, {"_strupr", Code::CoreDllStrupr, &SyntheticDllRuntime::handleStrCaseInPlace}},
                     {0x0628, {"__ehvec_ctor", Code::CoreDllEhvecCtor, &SyntheticDllRuntime::handleEhvecCtor}},
                     {0x07D0, {"_setjmp", Code::CoreDllSetjmp, &SyntheticDllRuntime::handleSetjmp}},
                 },
@@ -226,6 +229,26 @@ bool SyntheticDllRuntime::handleStrnicmp(SyntheticExportCode, const GuestCallArg
     left = left.substr(0, args.a2);
     right = right.substr(0, args.a2);
     ret = uint32_t(left.compare(right));
+    return true;
+}
+
+bool SyntheticDllRuntime::handleStrCaseInPlace(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
+    ret = args.a0;
+    if (!args.a0) return true;
+    const bool makeUpper = code == SyntheticExportCode::CoreDllStrupr;
+    for (uint32_t offset = 0; offset < 0x100000; ++offset) {
+        unsigned char ch = 0;
+        if (uc_mem_read(uc_, args.a0 + offset, &ch, sizeof(ch)) != UC_ERR_OK) break;
+        if (!ch) break;
+        unsigned char converted = ch;
+        if (ch < 0x80) {
+            converted = static_cast<unsigned char>(
+                makeUpper ? std::toupper(ch) : std::tolower(ch));
+        }
+        if (converted != ch) {
+            uc_mem_write(uc_, args.a0 + offset, &converted, sizeof(converted));
+        }
+    }
     return true;
 }
 
