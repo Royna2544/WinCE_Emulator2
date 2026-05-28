@@ -22,6 +22,8 @@
 
 namespace {
 constexpr uint32_t kWindowStyleChild = 0x40000000u;
+constexpr uint32_t kWmCopyData = 0x004au;
+constexpr uint32_t kMaxCrossProcessCopyData = 0x100000u;
 
 bool isHostProcessAlive(uint32_t processId) {
     if (!processId) {
@@ -943,7 +945,7 @@ bool SyntheticDllRuntime::postCrossProcessGuestMessage(uint32_t processId,
         queue["messages"] = nlohmann::json::array();
     }
 
-    queue["messages"].push_back({
+    nlohmann::json messageJson = {
         {"sourceProcessId", hostProcessId()},
         {"targetProcessId", processId},
         {"targetHwnd", hwnd},
@@ -951,7 +953,41 @@ bool SyntheticDllRuntime::postCrossProcessGuestMessage(uint32_t processId,
         {"wParam", wParam},
         {"lParam", lParam},
         {"time", uint32_t(++tick_ * 16)},
-    });
+    };
+    if (message == kWmCopyData && lParam && isGuestRangeReadable(lParam, 12)) {
+        const uint32_t dwData = readU32(lParam);
+        const uint32_t cbData = readU32(lParam + 4);
+        const uint32_t lpData = readU32(lParam + 8);
+        if (cbData <= kMaxCrossProcessCopyData &&
+            (cbData == 0 || (lpData && isGuestRangeReadable(lpData, cbData)))) {
+            nlohmann::json bytes = nlohmann::json::array();
+            bool payloadReadable = true;
+            if (cbData) {
+                std::vector<uint8_t> payload(cbData);
+                if (uc_mem_read(uc_, lpData, payload.data(), payload.size()) == UC_ERR_OK) {
+                    for (uint8_t byte : payload) bytes.push_back(byte);
+                } else {
+                    payloadReadable = false;
+                }
+            }
+            if (payloadReadable) {
+                messageJson["copyData"] = {
+                    {"dwData", dwData},
+                    {"cbData", cbData},
+                    {"bytes", std::move(bytes)},
+                };
+                spdlog::info("cross-process WM_COPYDATA marshalled targetPid={} targetHwnd=0x{:08x} dwData=0x{:08x} cbData={}",
+                             processId, hwnd, dwData, cbData);
+            } else {
+                spdlog::warn("cross-process WM_COPYDATA payload read failed lParam=0x{:08x} cbData={} lpData=0x{:08x}",
+                             lParam, cbData, lpData);
+            }
+        } else {
+            spdlog::warn("cross-process WM_COPYDATA payload unreadable lParam=0x{:08x} cbData={} lpData=0x{:08x}",
+                         lParam, cbData, lpData);
+        }
+    }
+    queue["messages"].push_back(std::move(messageJson));
 
     std::error_code ignored;
     std::filesystem::create_directories(queuePath.parent_path(), ignored);
@@ -1063,6 +1099,68 @@ void SyntheticDllRuntime::pollCrossProcessGuestMessages() {
     }
 
     const uint32_t currentPid = hostProcessId();
+    auto importExternalWindow = [&](uint32_t processId, uint32_t externalHwnd) -> uint32_t {
+        if (!processId || !externalHwnd || processId == currentPid || !isHostProcessAlive(processId)) {
+            return 0;
+        }
+        const auto key = std::make_pair(processId, externalHwnd);
+        auto existing = externalWindowHandles_.find(key);
+        if (existing != externalWindowHandles_.end()) {
+            auto existingWindow = windows_.find(existing->second);
+            if (existingWindow != windows_.end() && !existingWindow->second.destroyed) {
+                return existing->second;
+            }
+        }
+
+        const std::filesystem::path registryPath = ensureCrossProcessWindowRegistryPath();
+        if (registryPath.empty()) return 0;
+        nlohmann::json registry;
+        {
+            std::ifstream input(registryPath);
+            if (!input.good()) return 0;
+            try {
+                input >> registry;
+            } catch (const std::exception&) {
+                return 0;
+            }
+        }
+        if (registry.value("version", 0) != 1 || !registry["windows"].is_array()) {
+            return 0;
+        }
+        for (const auto& entry : registry["windows"]) {
+            if (!entry.is_object() ||
+                entry.value("processId", 0u) != processId ||
+                entry.value("hwnd", 0u) != externalHwnd ||
+                entry.value("destroyed", false)) {
+                continue;
+            }
+
+            const uint32_t hwnd = makeGuestHandle({GuestHandle::Kind::GuestWindow, 0, 0});
+            GuestWindow window{};
+            window.hwnd = hwnd;
+            window.className = lowerAscii(entry.value("class", std::string{}));
+            window.title = entry.value("title", std::string{});
+            window.style = entry.value("style", 0u);
+            window.exStyle = entry.value("exStyle", 0u);
+            window.parent = 0;
+            window.x = entry.value("x", 0);
+            window.y = entry.value("y", 0);
+            window.width = entry.value("width", 0);
+            window.height = entry.value("height", 0);
+            window.visible = entry.value("visible", false);
+            window.zOrder = entry.value("tick", 0ull);
+            window.enabled = true;
+            window.externalProcess = true;
+            window.externalProcessId = processId;
+            window.externalHwnd = externalHwnd;
+            windows_[hwnd] = window;
+            externalWindowHandles_[key] = hwnd;
+            spdlog::info("imported external guest window hwnd=0x{:08x} remotePid={} remoteHwnd=0x{:08x} class=\"{}\" title=\"{}\"",
+                         hwnd, processId, externalHwnd, window.className, window.title);
+            return hwnd;
+        }
+        return 0;
+    };
     bool changed = false;
     for (auto it = queue["messages"].begin(); it != queue["messages"].end();) {
         if (!it->is_object() || it->value("targetProcessId", 0u) != currentPid) {
@@ -1080,6 +1178,59 @@ void SyntheticDllRuntime::pollCrossProcessGuestMessages() {
             guestMessage.lParam = it->value("lParam", 0u);
             guestMessage.time = it->value("time", uint32_t(++tick_ * 16));
             guestMessage.crossProcess = true;
+            if (guestMessage.message == kWmCopyData && it->contains("copyData") &&
+                (*it)["copyData"].is_object()) {
+                const auto& copyData = (*it)["copyData"];
+                const uint32_t sourcePid = it->value("sourceProcessId", 0u);
+                const uint32_t sourceHwnd = guestMessage.wParam;
+                const uint32_t importedSource = importExternalWindow(sourcePid, sourceHwnd);
+                if (importedSource) guestMessage.wParam = importedSource;
+
+                const uint32_t dwData = copyData.value("dwData", 0u);
+                const uint32_t cbData = copyData.value("cbData", 0u);
+                const auto bytesIt = copyData.find("bytes");
+                if (cbData <= kMaxCrossProcessCopyData &&
+                    bytesIt != copyData.end() &&
+                    bytesIt->is_array() &&
+                    bytesIt->size() == cbData) {
+                    uint32_t payloadPtr = 0;
+                    bool payloadValid = true;
+                    if (cbData) {
+                        std::vector<uint8_t> payload;
+                        payload.reserve(cbData);
+                        for (const auto& byte : *bytesIt) {
+                            if (!byte.is_number_unsigned()) {
+                                payloadValid = false;
+                                break;
+                            }
+                            payload.push_back(uint8_t(byte.get<uint32_t>() & 0xffu));
+                        }
+                        if (payloadValid) {
+                            payloadPtr = allocate(cbData, false);
+                        }
+                        if (payloadPtr) {
+                            uc_mem_write(uc_, payloadPtr, payload.data(), payload.size());
+                        } else {
+                            payloadValid = false;
+                        }
+                    }
+                    const uint32_t copyDataPtr = payloadValid ? allocate(12, true) : 0;
+                    if (copyDataPtr) {
+                        writeU32(copyDataPtr, dwData);
+                        writeU32(copyDataPtr + 4, cbData);
+                        writeU32(copyDataPtr + 8, payloadPtr);
+                        guestMessage.lParam = copyDataPtr;
+                        spdlog::info("cross-process WM_COPYDATA received hwnd=0x{:08x} sourcePid={} sourceHwnd=0x{:08x} localSource=0x{:08x} dwData=0x{:08x} cbData={}",
+                                     hwnd, sourcePid, sourceHwnd, guestMessage.wParam, dwData, cbData);
+                    } else {
+                        spdlog::warn("cross-process WM_COPYDATA import failed hwnd=0x{:08x} sourcePid={} cbData={}",
+                                     hwnd, sourcePid, cbData);
+                    }
+                } else {
+                    spdlog::warn("cross-process WM_COPYDATA malformed hwnd=0x{:08x} sourcePid={} cbData={}",
+                                 hwnd, sourcePid, cbData);
+                }
+            }
             guestMessages_.push_back(guestMessage);
             spdlog::info("cross-process message received hwnd=0x{:08x} msg=0x{:08x} fromPid={} queued={}",
                          hwnd,

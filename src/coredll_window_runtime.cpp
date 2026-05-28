@@ -1281,15 +1281,29 @@ bool SyntheticDllRuntime::isWindowInOwnedPopupStack(uint32_t hwnd, uint32_t ance
 }
 
 uint32_t SyntheticDllRuntime::coveringFullScreenOwnedPopup(uint32_t hwnd) const {
+    auto isOwnerChildDescendant = [&](uint32_t targetHwnd, uint32_t ownerHwnd) {
+        bool traversedChild = false;
+        for (uint32_t current = targetHwnd; current;) {
+            if (current == ownerHwnd) return traversedChild;
+            auto it = windows_.find(current);
+            if (it == windows_.end() || !(it->second.style & kWindowStyleChild)) break;
+            traversedChild = true;
+            current = it->second.parent;
+        }
+        return false;
+    };
     for (uint32_t popupHwnd : orderedWindowsTopToBottom()) {
         const auto it = windows_.find(popupHwnd);
         if (it == windows_.end()) continue;
         const GuestWindow& popup = it->second;
-        if (windowZOrder(popupHwnd) <= windowZOrder(hwnd) || popup.destroyed || !popup.visible ||
+        if (popup.destroyed || !popup.visible ||
             !isOwnedPopupWindow(popupHwnd) || !guestWindowCoversFramebuffer(popupHwnd)) {
             continue;
         }
         if (isWindowInOwnedPopupStack(hwnd, popupHwnd)) continue;
+        const bool coversByZOrder = windowZOrder(popupHwnd) > windowZOrder(hwnd);
+        const bool coversOwnedChild = isOwnerChildDescendant(hwnd, popup.parent);
+        if (!coversByZOrder && !coversOwnedChild) continue;
         return popupHwnd;
     }
     return 0;
@@ -1887,7 +1901,7 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
     };
     auto recentlyQueuedUserInput = [&]() {
         return lastHostInputQueuedAt_ != std::chrono::steady_clock::time_point{} &&
-               (std::chrono::steady_clock::now() - lastHostInputQueuedAt_) < std::chrono::milliseconds(3000);
+               (std::chrono::steady_clock::now() - lastHostInputQueuedAt_) < std::chrono::milliseconds(750);
     };
     auto hasPendingSynchronousMessage = [&]() {
         return std::any_of(guestMessages_.begin(), guestMessages_.end(), [](const GuestMessage& message) {
@@ -1906,14 +1920,17 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
         // when a worker performs a long pure-guest loop between API calls.
         const bool servicingQueuedMessages = std::strcmp(reason, "queued-message") == 0;
         const bool synchronousQueuedMessage = servicingQueuedMessages && hasPendingSynchronousMessage();
-        const bool pendingUserInput = hasPendingUserInput() || recentlyQueuedUserInput();
-        const bool backloggedQueuedWork = servicingQueuedMessages && guestMessages_.size() >= 8;
+        const bool pendingUserInput = hasPendingUserInput();
+        const bool recentUserInput = recentlyQueuedUserInput();
+        const bool backloggedQueuedWork = servicingQueuedMessages && guestMessages_.size() >= 3;
         if (synchronousQueuedMessage) {
-            instructionBudget = std::min<uint64_t>(instructionBudget, backloggedQueuedWork ? 50000u : 12000u);
+            instructionBudget = std::min<uint64_t>(instructionBudget, backloggedQueuedWork ? 50000u : 25000u);
         } else if (pendingUserInput) {
             instructionBudget = std::min<uint64_t>(instructionBudget, backloggedQueuedWork ? 50000u : 12000u);
+        } else if (recentUserInput && !backloggedQueuedWork) {
+            instructionBudget = std::min<uint64_t>(instructionBudget, 12000u);
         } else if (servicingQueuedMessages && !activeGuestThread_) {
-            instructionBudget = std::min<uint64_t>(instructionBudget, backloggedQueuedWork ? 50000u : 6000u);
+            instructionBudget = std::min<uint64_t>(instructionBudget, backloggedQueuedWork ? 50000u : 25000u);
         } else if (activeGuestThread_) {
             instructionBudget = std::min<uint64_t>(instructionBudget, 250000u);
         } else if (servicingQueuedMessages) {
@@ -1923,9 +1940,11 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
             ? (backloggedQueuedWork ? std::chrono::milliseconds(60) : std::chrono::milliseconds(12))
             : (pendingUserInput
                    ? (backloggedQueuedWork ? std::chrono::milliseconds(60) : std::chrono::milliseconds(12))
+                   : (recentUserInput && !backloggedQueuedWork
+                          ? std::chrono::milliseconds(12)
                    : (servicingQueuedMessages ? std::chrono::milliseconds(60)
                                               : (activeGuestThread_ ? std::chrono::milliseconds(60)
-                                                                   : std::chrono::milliseconds(120))));
+                                                                   : std::chrono::milliseconds(120)))));
         beginInteractiveSlice(wallBudget, reason, instructionBudget);
         const uc_err err = uc_emu_start(uc_, pc, 0, 0, instructionBudget);
         const bool stoppedByWatchdog = interactiveSliceStopRequested_;

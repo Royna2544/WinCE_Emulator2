@@ -279,8 +279,11 @@ New-Item -ItemType Directory -Force -Path $runDir | Out-Null
 $stdoutPath = Join-Path $runDir "emulator.stdout.log"
 $stderrPath = Join-Path $runDir "emulator.stderr.log"
 $manifestPath = Join-Path $runDir "manifest.json"
+$windowRegistryPath = Join-Path $runDir "inavi_emu_windows.json"
 $previousChildLogDir = [Environment]::GetEnvironmentVariable("INAVI_EMU_CHILD_LOG_DIR", "Process")
+$previousWindowRegistry = [Environment]::GetEnvironmentVariable("INAVI_EMU_WINDOW_REGISTRY", "Process")
 [Environment]::SetEnvironmentVariable("INAVI_EMU_CHILD_LOG_DIR", (Resolve-Path $runDir).Path, "Process")
+[Environment]::SetEnvironmentVariable("INAVI_EMU_WINDOW_REGISTRY", (Resolve-Path $runDir).Path + "\" + (Split-Path -Leaf $windowRegistryPath), "Process")
 
 $defaultTapPlan = "650,430,safety_ok;725,35,current_position;665,35,menu_grid;135,250,route_search;500,445,recent_destination"
 $routeTapPlan = "650,430,safety_ok,5000;760,430,bottom_right_menu,6000;500,445,recent_destination,6000;600,445,direct_route,15000;405,296,route_method_first,20000"
@@ -319,45 +322,38 @@ try {
     $events.Add([pscustomobject]@{ kind="launch"; pid=$process.Id; args=$argumentList; time=(Get-Date).ToString("o") })
 
     if ($CompanionTarget.Count -gt 0) {
-        $windowRegistryPath = Join-Path $runDir ("inavi_emu_windows_{0}.json" -f $process.Id)
-        $previousWindowRegistry = [Environment]::GetEnvironmentVariable("INAVI_EMU_WINDOW_REGISTRY", "Process")
-        [Environment]::SetEnvironmentVariable("INAVI_EMU_WINDOW_REGISTRY", (Resolve-Path $runDir).Path + "\" + (Split-Path -Leaf $windowRegistryPath), "Process")
-        try {
-            $companionIndex = 1
-            foreach ($companion in $CompanionTarget) {
-                $companionPath = (Resolve-Path $companion).Path
-                $companionArgs = @($companionPath, "--registry", $Registry, "--sdmmc-path", $SdmmcPath)
-                if ($SerialMap) {
-                    $companionArgs += @("--serial-map", $SerialMap)
-                }
-                $companionArgs += @("--instructions", "250000000", "--headless")
-                $companionArgs += $DllSearchDir
-                $companionArgString = ($companionArgs | ForEach-Object { Quote-Arg $_ }) -join " "
-                $companionBase = [IO.Path]::GetFileNameWithoutExtension($companionPath)
-                $companionStdout = Join-Path $runDir ("manual_companion_{0}_{1}.stdout.log" -f $companionIndex, $companionBase)
-                $companionStderr = Join-Path $runDir ("manual_companion_{0}_{1}.stderr.log" -f $companionIndex, $companionBase)
-                $companionProcess = Start-Process -FilePath $emulatorPath `
-                                                  -ArgumentList $companionArgString `
-                                                  -WorkingDirectory $workingDirectory `
-                                                  -RedirectStandardOutput $companionStdout `
-                                                  -RedirectStandardError $companionStderr `
-                                                  -WindowStyle Hidden `
-                                                  -PassThru
-                $companionProcesses.Add($companionProcess)
-                $events.Add([pscustomobject]@{
-                    kind="companion_launch"
-                    pid=$companionProcess.Id
-                    target=$companionPath
-                    args=$companionArgs
-                    windowRegistry=$windowRegistryPath
-                    stdout=(Split-Path -Leaf $companionStdout)
-                    stderr=(Split-Path -Leaf $companionStderr)
-                    time=(Get-Date).ToString("o")
-                })
-                $companionIndex++
+        $companionIndex = 1
+        foreach ($companion in $CompanionTarget) {
+            $companionPath = (Resolve-Path $companion).Path
+            $companionArgs = @($companionPath, "--registry", $Registry, "--sdmmc-path", $SdmmcPath)
+            if ($SerialMap) {
+                $companionArgs += @("--serial-map", $SerialMap)
             }
-        } finally {
-            [Environment]::SetEnvironmentVariable("INAVI_EMU_WINDOW_REGISTRY", $previousWindowRegistry, "Process")
+            $companionArgs += @("--instructions", "250000000", "--headless")
+            $companionArgs += $DllSearchDir
+            $companionArgString = ($companionArgs | ForEach-Object { Quote-Arg $_ }) -join " "
+            $companionBase = [IO.Path]::GetFileNameWithoutExtension($companionPath)
+            $companionStdout = Join-Path $runDir ("manual_companion_{0}_{1}.stdout.log" -f $companionIndex, $companionBase)
+            $companionStderr = Join-Path $runDir ("manual_companion_{0}_{1}.stderr.log" -f $companionIndex, $companionBase)
+            $companionProcess = Start-Process -FilePath $emulatorPath `
+                                              -ArgumentList $companionArgString `
+                                              -WorkingDirectory $workingDirectory `
+                                              -RedirectStandardOutput $companionStdout `
+                                              -RedirectStandardError $companionStderr `
+                                              -WindowStyle Hidden `
+                                              -PassThru
+            $companionProcesses.Add($companionProcess)
+            $events.Add([pscustomobject]@{
+                kind="companion_launch"
+                pid=$companionProcess.Id
+                target=$companionPath
+                args=$companionArgs
+                windowRegistry=$windowRegistryPath
+                stdout=(Split-Path -Leaf $companionStdout)
+                stderr=(Split-Path -Leaf $companionStderr)
+                time=(Get-Date).ToString("o")
+            })
+            $companionIndex++
         }
     }
 
@@ -435,6 +431,7 @@ try {
         }
     }
     [Environment]::SetEnvironmentVariable("INAVI_EMU_CHILD_LOG_DIR", $previousChildLogDir, "Process")
+    [Environment]::SetEnvironmentVariable("INAVI_EMU_WINDOW_REGISTRY", $previousWindowRegistry, "Process")
     $manifest = [pscustomobject]@{
         runDir = (Resolve-Path $runDir).Path
         pid = if ($process) { $process.Id } else { $null }

@@ -347,11 +347,7 @@ uint32_t SyntheticDllRuntime::readFramebufferTargetPixel(uint32_t targetHwnd,
     if (!framebuffer_ || x < 0 || y < 0 || x >= framebufferWidth_ || y >= framebufferHeight_) {
         return 0xff000000u;
     }
-    if (targetHwnd && isOwnedPopupWindow(targetHwnd) &&
-        !guestWindowCoversFramebuffer(targetHwnd) &&
-        coveringFullScreenOwnedPopup(targetHwnd)) {
-        return framebuffer_[size_t(y) * size_t(framebufferWidth_) + size_t(x)];
-    }
+    const uint32_t coveringPopup = targetHwnd ? coveringFullScreenOwnedPopup(targetHwnd) : 0;
     const uint64_t targetZ = targetHwnd ? windowZOrder(targetHwnd) : 0;
     for (const auto& [hwnd, window] : windows_) {
         if (!window.visible || !window.backingValid || window.backingPixels.empty() ||
@@ -359,7 +355,7 @@ uint32_t SyntheticDllRuntime::readFramebufferTargetPixel(uint32_t targetHwnd,
             isWindowOrDescendant(targetHwnd, hwnd)) {
             continue;
         }
-        if (targetHwnd && window.zOrder < targetZ) continue;
+        if (targetHwnd && window.zOrder < targetZ && hwnd != coveringPopup) continue;
         if (x < window.backingX || y < window.backingY ||
             x >= window.backingX + window.backingWidth ||
             y >= window.backingY + window.backingHeight) {
@@ -379,11 +375,7 @@ void SyntheticDllRuntime::writeFramebufferTargetPixel(uint32_t targetHwnd,
     if (!framebuffer_ || x < 0 || y < 0 || x >= framebufferWidth_ || y >= framebufferHeight_) {
         return;
     }
-    if (targetHwnd && isOwnedPopupWindow(targetHwnd) &&
-        !guestWindowCoversFramebuffer(targetHwnd) &&
-        coveringFullScreenOwnedPopup(targetHwnd)) {
-        return;
-    }
+    const uint32_t coveringPopup = targetHwnd ? coveringFullScreenOwnedPopup(targetHwnd) : 0;
     bool covered = false;
     const uint64_t targetZ = targetHwnd ? windowZOrder(targetHwnd) : 0;
     for (auto& [hwnd, window] : windows_) {
@@ -392,7 +384,7 @@ void SyntheticDllRuntime::writeFramebufferTargetPixel(uint32_t targetHwnd,
             isWindowOrDescendant(targetHwnd, hwnd)) {
             continue;
         }
-        if (targetHwnd && window.zOrder < targetZ) continue;
+        if (targetHwnd && window.zOrder < targetZ && hwnd != coveringPopup) continue;
         if (x < window.backingX || y < window.backingY ||
             x >= window.backingX + window.backingWidth ||
             y >= window.backingY + window.backingHeight) {
@@ -405,7 +397,7 @@ void SyntheticDllRuntime::writeFramebufferTargetPixel(uint32_t targetHwnd,
             covered = true;
         }
     }
-    if (!covered) framebuffer_[size_t(y) * size_t(framebufferWidth_) + size_t(x)] = pixel;
+    if (!covered && !coveringPopup) framebuffer_[size_t(y) * size_t(framebufferWidth_) + size_t(x)] = pixel;
 }
 
 uint32_t SyntheticDllRuntime::colorRefToPixel(uint32_t colorRef) const {
@@ -464,13 +456,9 @@ void SyntheticDllRuntime::fillFramebufferRect(const GuestDc& dc,
     bottom = std::clamp<int32_t>(bottom, 0, framebufferHeight_);
     noteGuestWindowPaint(dc.hwnd, left, top, right, bottom);
 
-    if (dc.hwnd && isOwnedPopupWindow(dc.hwnd) &&
-        !guestWindowCoversFramebuffer(dc.hwnd) &&
-        coveringFullScreenOwnedPopup(dc.hwnd)) {
-        return;
-    }
+    const uint32_t coveringPopup = dc.hwnd ? coveringFullScreenOwnedPopup(dc.hwnd) : 0;
 
-    bool needsLayeredWrite = false;
+    bool needsLayeredWrite = coveringPopup != 0;
     const uint64_t targetZ = dc.hwnd ? windowZOrder(dc.hwnd) : 0;
     for (const auto& [hwnd, window] : windows_) {
         if (!window.visible || !window.backingValid || window.backingPixels.empty() ||
@@ -478,7 +466,7 @@ void SyntheticDllRuntime::fillFramebufferRect(const GuestDc& dc,
             isWindowOrDescendant(dc.hwnd, hwnd)) {
             continue;
         }
-        if (dc.hwnd && window.zOrder < targetZ) continue;
+        if (dc.hwnd && window.zOrder < targetZ && hwnd != coveringPopup) continue;
         const int32_t backingRight = window.backingX + window.backingWidth;
         const int32_t backingBottom = window.backingY + window.backingHeight;
         if (left < backingRight && right > window.backingX &&
@@ -1747,13 +1735,7 @@ bool SyntheticDllRuntime::bitBltToFramebuffer(const GuestDc& dstDc,
         return true;
     }
 
-    const bool targetOwnedPopup = dstDc.hwnd && isOwnedPopupWindow(dstDc.hwnd);
-    const bool targetCoversFramebuffer = targetOwnedPopup && guestWindowCoversFramebuffer(dstDc.hwnd);
-    if (dstDc.hwnd && targetOwnedPopup && !targetCoversFramebuffer &&
-        coveringFullScreenOwnedPopup(dstDc.hwnd)) {
-        invalidateHostWindows();
-        return true;
-    }
+    const uint32_t coveringPopup = dstDc.hwnd ? coveringFullScreenOwnedPopup(dstDc.hwnd) : 0;
 
     struct BackingLayer {
         GuestWindow* window{};
@@ -1770,7 +1752,7 @@ bool SyntheticDllRuntime::bitBltToFramebuffer(const GuestDc& dstDc,
             isWindowOrDescendant(dstDc.hwnd, hwnd)) {
             continue;
         }
-        if (dstDc.hwnd && window.zOrder < targetZ) continue;
+        if (dstDc.hwnd && window.zOrder < targetZ && hwnd != coveringPopup) continue;
         const int32_t layerLeft = std::max<int32_t>(clipLeft, window.backingX);
         const int32_t layerTop = std::max<int32_t>(clipTop, window.backingY);
         const int32_t layerRight = std::min<int32_t>(clipRight, window.backingX + window.backingWidth);
@@ -1801,7 +1783,7 @@ bool SyntheticDllRuntime::bitBltToFramebuffer(const GuestDc& dstDc,
                 covered = true;
             }
         }
-        if (!covered) framebuffer_[size_t(y) * size_t(framebufferWidth_) + size_t(x)] = pixel;
+        if (!covered && !coveringPopup) framebuffer_[size_t(y) * size_t(framebufferWidth_) + size_t(x)] = pixel;
     };
 
     const bool sameScaleX = srcW == outW;
@@ -1815,7 +1797,7 @@ bool SyntheticDllRuntime::bitBltToFramebuffer(const GuestDc& dstDc,
              (bitmap.redMask == kRgb565RedMask &&
               bitmap.greenMask == kRgb565GreenMask &&
               bitmap.blueMask == kRgb565BlueMask));
-        if (!rgb565 || !backingLayers.empty() || !ropSourceCopy ||
+        if (!rgb565 || coveringPopup || !backingLayers.empty() || !ropSourceCopy ||
             !sameScaleX || !sameScaleY ||
             srcW <= 0 || srcH <= 0 || dstW <= 0 || dstH <= 0) {
             return false;
