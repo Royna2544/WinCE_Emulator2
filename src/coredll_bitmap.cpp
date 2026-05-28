@@ -81,6 +81,11 @@ uint8_t expand5To8(uint16_t value) {
     return uint8_t((value << 3) | (value >> 2));
 }
 
+uint8_t expand6To8(uint16_t value) {
+    value &= 0x3fu;
+    return uint8_t((value << 2) | (value >> 4));
+}
+
 uint32_t decodeRgb555(uint16_t value) {
     const uint8_t r = expand5To8(value >> 10);
     const uint8_t g = expand5To8(value >> 5);
@@ -97,7 +102,7 @@ uint16_t encodeRgb555(uint32_t pixel) {
 
 uint32_t decodeRgb565(uint16_t value) {
     const uint8_t r = expand5To8(value >> 11);
-    const uint8_t g = uint8_t(((value >> 5) & 0x3fu) * 255u / 63u);
+    const uint8_t g = expand6To8(value >> 5);
     const uint8_t b = expand5To8(value);
     return 0xff000000u | (uint32_t(r) << 16) | (uint32_t(g) << 8) | b;
 }
@@ -199,8 +204,6 @@ void convertRgb565ToBgra32Avx2(const uint8_t* src, uint8_t* dst, int32_t pixels)
     const __m256i mask5 = _mm256_set1_epi32(0x1f);
     const __m256i mask6 = _mm256_set1_epi32(0x3f);
     const __m256i alpha = _mm256_set1_epi32(-16777216);
-    const __m256i greenScale = _mm256_set1_epi32(255);
-    const __m256 inv63 = _mm256_set1_ps(1.0f / 63.0f);
     int32_t x = 0;
     for (; x + 8 <= pixels; x += 8) {
         const __m128i packed = _mm_loadu_si128(reinterpret_cast<const __m128i*>(src + size_t(x) * 2));
@@ -209,9 +212,8 @@ void convertRgb565ToBgra32Avx2(const uint8_t* src, uint8_t* dst, int32_t pixels)
         const __m256i g6 = _mm256_and_si256(_mm256_srli_epi32(value, 5), mask6);
         const __m256i b5 = _mm256_and_si256(value, mask5);
         const __m256i r8 = _mm256_or_si256(_mm256_slli_epi32(r5, 3), _mm256_srli_epi32(r5, 2));
+        const __m256i g8 = _mm256_or_si256(_mm256_slli_epi32(g6, 2), _mm256_srli_epi32(g6, 4));
         const __m256i b8 = _mm256_or_si256(_mm256_slli_epi32(b5, 3), _mm256_srli_epi32(b5, 2));
-        const __m256i gScaled = _mm256_mullo_epi32(g6, greenScale);
-        const __m256i g8 = _mm256_cvttps_epi32(_mm256_mul_ps(_mm256_cvtepi32_ps(gScaled), inv63));
         const __m256i out = _mm256_or_si256(
             alpha,
             _mm256_or_si256(_mm256_slli_epi32(r8, 16), _mm256_or_si256(_mm256_slli_epi32(g8, 8), b8)));
@@ -1804,6 +1806,48 @@ bool SyntheticDllRuntime::bitBltToFramebuffer(const GuestDc& dstDc,
 
     const bool sameScaleX = srcW == outW;
     const bool sameScaleY = srcH == outH;
+    const bool ropSourceCopy = rop == 0x00cc0020u;
+    auto tryCopyRgb565ToFramebuffer = [&]() {
+#if defined(__AVX2__) || defined(__AVX512F__)
+        const bool rgb565 =
+            bitmap.bpp == 16 &&
+            ((!bitmap.redMask && !bitmap.greenMask && !bitmap.blueMask) ||
+             (bitmap.redMask == kRgb565RedMask &&
+              bitmap.greenMask == kRgb565GreenMask &&
+              bitmap.blueMask == kRgb565BlueMask));
+        if (!rgb565 || !backingLayers.empty() || !ropSourceCopy ||
+            !sameScaleX || !sameScaleY ||
+            srcW <= 0 || srcH <= 0 || dstW <= 0 || dstH <= 0) {
+            return false;
+        }
+
+        const int32_t copyLeft = std::max({0, clipLeft - outLeft, -srcX});
+        const int32_t copyTop = std::max({0, clipTop - outTop, -srcY});
+        const int32_t copyRight = std::min({outW, clipRight - outLeft, bitmap.width - srcX});
+        const int32_t copyBottom = std::min({outH, clipBottom - outTop, bitmapHeight - srcY});
+        if (copyRight <= copyLeft || copyBottom <= copyTop) return true;
+
+        const int32_t copyWidth = copyRight - copyLeft;
+        for (int32_t y = copyTop; y < copyBottom; ++y) {
+            const int32_t sy = srcY + y;
+            const int32_t dstPy = outTop + y;
+            const int32_t sx = srcX + copyLeft;
+            const int32_t dstPx = outLeft + copyLeft;
+            const int32_t rowIndex = topDown ? sy : (bitmapHeight - 1 - sy);
+            const uint8_t* srcRow = bits.data() + size_t(rowIndex) * size_t(bitmap.stride) + size_t(sx) * 2;
+            auto* dstRow = reinterpret_cast<uint8_t*>(
+                framebuffer_ + size_t(dstPy) * size_t(framebufferWidth_) + size_t(dstPx));
+            convertRgb565ToBgra32Avx2(srcRow, dstRow, copyWidth);
+        }
+        return true;
+#else
+        return false;
+#endif
+    };
+    if (tryCopyRgb565ToFramebuffer()) {
+        invalidateHostWindows();
+        return true;
+    }
     for (int32_t y = 0; y < outH; ++y) {
         const int32_t dstPy = outTop + y;
         if (dstPy < clipTop || dstPy >= clipBottom) continue;
@@ -1843,7 +1887,7 @@ bool SyntheticDllRuntime::bitBltToFramebuffer(const GuestDc& dstDc,
             } else {
                 return false;
             }
-            const uint32_t outPixel = rop == 0x00cc0020u
+            const uint32_t outPixel = ropSourceCopy
                 ? pixel
                 : applySourceRasterOp(rop, pixel, readDestinationPixel(dstPx, dstPy));
             writeDestinationPixel(dstPx, dstPy, outPixel);

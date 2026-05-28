@@ -107,6 +107,9 @@ Last refreshed: 2026-05-28.
      helper. If `bitBltToBitmap` remains hot, inspect whether the remaining
      cases are scaling, transparency, palette, 16-bit destination, or
      non-`SRCCOPY` ROPs before adding more SIMD variants.
+   - Re-profile after the new RGB565-to-framebuffer SIMD path. If framebuffer
+     blits are still hot, check whether backing layers, scaling, negative blit
+     dimensions, or non-`SRCCOPY` ROPs are keeping the path scalar.
    - Re-profile `runHostMessageLoopUntilClosed` after the cross-process queue
      metadata cache. If `pollCrossProcessGuestMessages` remains hot, consider
      replacing the shared JSON queue with a generic append-only or memory-mapped

@@ -64,6 +64,12 @@ Last refreshed: 2026-05-28.
 - `bitBltToBitmap` now has an AVX2 row fast path for 1:1 `SRCCOPY`
   conversion from RGB565 source bitmaps into 32-bit BGRA destination bitmaps.
   Debug builds also request `/arch:AVX2`, while Release remains `/arch:AVX512`.
+- RGB565 expansion now uses bit replication for scalar and SIMD paths, avoiding
+  float math in the AVX2 converter. `bitBltToFramebuffer` also has a guarded
+  AVX2 RGB565-to-framebuffer fast path for uncluttered 1:1 `SRCCOPY` rows.
+- `captures/inavi_autodrive_20260528_133142` verified the Debug SIMD build
+  still produces a valid startup frame. The known `DeviceParser.exe` child
+  `PC == 0` remains separate from the parent render path.
 - The cross-process guest message queue poller now caches the queue path and
   skips JSON parsing/rewrite work when the shared message file's timestamp and
   size have not changed, with a small bounded poll interval to reduce host-loop
