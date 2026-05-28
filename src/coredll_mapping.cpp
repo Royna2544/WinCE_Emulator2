@@ -182,6 +182,7 @@ bool SyntheticDllRuntime::syncNamedMappedView(uint32_t baseAddress, GuestMappedV
     if (mapping == fileMappings_.end() || !mapping->second.namedShared || mapping->second.backingPath.empty()) {
         return false;
     }
+    const std::string& name = mapping->second.name;
     std::vector<uint8_t> current(view.size);
     if (view.size && uc_mem_read(uc_, baseAddress, current.data(), current.size()) != UC_ERR_OK) {
         return false;
@@ -192,6 +193,8 @@ bool SyntheticDllRuntime::syncNamedMappedView(uint32_t baseAddress, GuestMappedV
         }
         view.shadow = std::move(current);
         view.backingVersion = sharedMappingVersion(mapping->second.backingPath);
+        spdlog::info("shared mapping sync write name=\"{}\" base=0x{:08x} size={} version={} forced={}",
+                     name, baseAddress, view.size, view.backingVersion, forceWrite);
         return true;
     }
     const uint64_t version = sharedMappingVersion(mapping->second.backingPath);
@@ -203,6 +206,8 @@ bool SyntheticDllRuntime::syncNamedMappedView(uint32_t baseAddress, GuestMappedV
         if (view.size) uc_mem_write(uc_, baseAddress, remote.data(), remote.size());
         view.shadow = std::move(remote);
         view.backingVersion = version;
+        spdlog::info("shared mapping sync read name=\"{}\" base=0x{:08x} size={} version={}",
+                     name, baseAddress, view.size, view.backingVersion);
         return true;
     }
     return false;

@@ -52,6 +52,7 @@ bool SyntheticDllRuntime::handleCreateThread(SyntheticExportCode code, const Gue
 bool SyntheticDllRuntime::handleCreateEventW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
     (void)code;
     HANDLE host = CreateEventW(nullptr, args.a1 != 0, args.a2 != 0, nullptr);
+    const std::string name = args.a3 ? readUtf16(args.a3, 256) : std::string{};
     if (host) {
         ret = makeGuestHandle({GuestHandle::Kind::HostEvent, reinterpret_cast<uintptr_t>(host), 0});
         lastError_ = 0;
@@ -59,8 +60,8 @@ bool SyntheticDllRuntime::handleCreateEventW(SyntheticExportCode code, const Gue
         ret = 0;
         lastError_ = GetLastError();
     }
-    spdlog::info("CreateEventW manualReset={} initialState={} -> handle=0x{:08x} lastError={}",
-                 args.a1 != 0, args.a2 != 0, ret, lastError_);
+    spdlog::info("CreateEventW manualReset={} initialState={} name=\"{}\" -> handle=0x{:08x} ra=0x{:08x} lastError={}",
+                 args.a1 != 0, args.a2 != 0, name, ret, args.ra, lastError_);
     return true;
 }
 
@@ -75,18 +76,29 @@ bool SyntheticDllRuntime::handleEventModify(SyntheticExportCode code, const Gues
 
     HANDLE host = reinterpret_cast<HANDLE>(handle->hostValue);
     BOOL ok = FALSE;
+    const bool pulse = args.a1 == 1;
     if (host) {
-        if (args.a1 == 1) ok = PulseEvent(host);
+        if (pulse) ok = SetEvent(host);
         else if (args.a1 == 2) ok = ResetEvent(host);
         else if (args.a1 == 3) ok = SetEvent(host);
     }
     ret = ok ? 1 : 0;
     if (!ret) lastError_ = GetLastError();
     else lastError_ = 0;
+    if (ret && pulse) {
+        refreshSignaledGuestWaits();
+        ResetEvent(host);
+    }
     static std::map<uint64_t, uint32_t> eventModifyLogCounts;
     const uint64_t logKey = (uint64_t(args.a0) << 32) | uint64_t(args.a1);
     const uint32_t repeated = ++eventModifyLogCounts[logKey];
-    if (args.a1 == 3 && ret && repeated > 8) {
+    const bool traceEvent = pulse ||
+                            (args.a0 >= 0x00010112 && args.a0 <= 0x00010117) ||
+                            (args.a0 >= 0x000124e0 && args.a0 <= 0x000124f0);
+    if (traceEvent) {
+        spdlog::info("EventModify handle=0x{:08x} op={} -> {} ra=0x{:08x} lastError={}",
+                     args.a0, args.a1, ret, args.ra, lastError_);
+    } else if (args.a1 == 3 && ret && repeated > 8) {
         if ((repeated & 0xffffu) == 0) {
             spdlog::debug("EventModify handle=0x{:08x} op={} -> {} lastError={} repeated={}",
                           args.a0, args.a1, ret, lastError_, repeated);
@@ -99,7 +111,7 @@ bool SyntheticDllRuntime::handleEventModify(SyntheticExportCode code, const Gues
                       args.a0, args.a1, ret, lastError_);
     }
 
-    if (ret && (args.a1 == 1 || args.a1 == 3)) refreshSignaledGuestWaits();
+    if (ret && args.a1 == 3) refreshSignaledGuestWaits();
     return true;
 }
 

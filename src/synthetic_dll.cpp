@@ -56,6 +56,7 @@ bool tracePrivateUiMessage(uint32_t msg) {
 
 bool traceGuestWindowMessage(uint32_t msg) {
     return msg == 0x0007 || msg == 0x0008 ||
+           msg == 0x0401 ||
            msg == 0x0200 || msg == 0x0201 || msg == 0x0202 ||
            msg == 0x032f0 || tracePrivateUiMessage(msg);
 }
@@ -1426,7 +1427,9 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
         setReg(UC_MIPS_REG_V0, ret);
         setReg(UC_MIPS_REG_RA, pendingCall.args.ra);
         setReg(UC_MIPS_REG_PC, pendingCall.args.ra);
-        spdlog::info("{} resumed after cooperative paint -> 0x{:08x}", pendingCall.name, ret);
+        spdlog::info("{} resumed after cooperative paint wait=0x{:08x} timeout=0x{:08x} return=0x{:08x} ra=0x{:08x} queued={} activeThread=0x{:08x}",
+                     pendingCall.name, pendingCall.args.a0, pendingCall.args.a1, ret,
+                     pendingCall.args.ra, guestMessages_.size(), activeGuestThread_);
         pumpHostMessages();
         cooperateGuestThreadsAfterCall(pendingCall.name);
         return;
@@ -1792,22 +1795,71 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
             break;
         }
         case 0x01F1: {
-            if (activeGuestThread_) {
-                uint32_t ret = 0xffffffffu;
-                bool wouldBlock = false;
+            constexpr uint32_t kWaitObject0 = 0x00000000u;
+            constexpr uint32_t kWaitTimeout = 0x00000102u;
+            constexpr uint32_t kWaitFailed = 0xffffffffu;
+            constexpr uint32_t kInfiniteTimeout = 0xffffffffu;
+            auto pollSingleWait = [&](uint32_t& waitResult, uint32_t& preferredThread) {
+                preferredThread = 0;
                 auto* handle = lookupGuestHandle(a0);
-            #if defined(_WIN32)
-                if (handle && handle->kind == GuestHandle::Kind::HostEvent && handle->hostValue) {
-                    ret = ::WaitForSingleObject(reinterpret_cast<HANDLE>(handle->hostValue), 0);
-                    if (ret == 0x00000102u && a1 != 0) wouldBlock = true; // WAIT_TIMEOUT
-                    if (ret == 0xffffffffu) lastError_ = GetLastError();
-                    else lastError_ = 0;
-                } else
-            #endif
-                if (!dispatchHostWin32(ordinal, args, ret)) {
-                    lastError_ = 120;
-                    ret = 0xffffffffu;
+                if (!handle) {
+                    lastError_ = 6;
+                    waitResult = kWaitFailed;
+                    return;
                 }
+#if defined(_WIN32)
+                if (handle->hostValue &&
+                    (handle->kind == GuestHandle::Kind::HostEvent ||
+                     handle->kind == GuestHandle::Kind::HostMutex ||
+                     handle->kind == GuestHandle::Kind::GuestProcess ||
+                     handle->kind == GuestHandle::Kind::GuestThread)) {
+                    const DWORD wait = ::WaitForSingleObject(reinterpret_cast<HANDLE>(handle->hostValue), 0);
+                    if (wait == WAIT_OBJECT_0) {
+                        lastError_ = 0;
+                        waitResult = kWaitObject0;
+                    } else if (wait == WAIT_TIMEOUT) {
+                        lastError_ = 0;
+                        waitResult = kWaitTimeout;
+                    } else {
+                        lastError_ = GetLastError();
+                        waitResult = kWaitFailed;
+                    }
+                    if (handle->kind == GuestHandle::Kind::GuestThread) preferredThread = a0;
+                    return;
+                }
+#endif
+                if (handle->kind == GuestHandle::Kind::GuestThread) {
+                    preferredThread = a0;
+                    auto thread = guestThreads_.find(a0);
+                    lastError_ = 0;
+                    waitResult = (thread == guestThreads_.end() ||
+                                  thread->second.state == GuestThreadRunState::Terminated)
+                        ? kWaitObject0
+                        : kWaitTimeout;
+                    return;
+                }
+                if (handle->kind == GuestHandle::Kind::GuestProcess && !handle->hostValue) {
+                    bool processStillRunning = false;
+                    for (const auto& [threadHandle, thread] : guestThreads_) {
+                        (void)threadHandle;
+                        if (thread.processHandle == a0 && thread.state != GuestThreadRunState::Terminated) {
+                            processStillRunning = true;
+                            break;
+                        }
+                    }
+                    lastError_ = 0;
+                    waitResult = processStillRunning ? kWaitTimeout : kWaitObject0;
+                    return;
+                }
+                lastError_ = 0;
+                waitResult = kWaitObject0;
+            };
+
+            if (activeGuestThread_) {
+                uint32_t ret = kWaitFailed;
+                uint32_t ignoredPreferredThread = 0;
+                pollSingleWait(ret, ignoredPreferredThread);
+                const bool wouldBlock = ret == kWaitTimeout && a1 != 0;
                 if (wouldBlock) {
                     auto active = guestThreads_.find(activeGuestThread_);
                     if (active != guestThreads_.end()) {
@@ -1836,31 +1888,16 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                 pumpHostMessages();
                 return;
             }
+            uint32_t immediate = kWaitFailed;
+            uint32_t preferredThread = 0;
+            pollSingleWait(immediate, preferredThread);
+            if (immediate != kWaitTimeout || a1 == 0) {
+                setReg(UC_MIPS_REG_V0, a1 == 0 && immediate == kWaitTimeout ? kWaitTimeout : immediate);
+                setReg(UC_MIPS_REG_PC, ra);
+                pumpHostMessages();
+                return;
+            }
             if (guestMessages_.empty() && hasRunnableGuestThread()) {
-                uint32_t preferredThread = 0;
-                auto* handle = lookupGuestHandle(a0);
-                if (handle && handle->kind == GuestHandle::Kind::GuestThread) preferredThread = a0;
-                bool ready = false;
-            #if defined(_WIN32)
-                if (handle && handle->hostValue &&
-                    (handle->kind == GuestHandle::Kind::HostEvent ||
-                     handle->kind == GuestHandle::Kind::HostMutex ||
-                     handle->kind == GuestHandle::Kind::GuestProcess ||
-                     handle->kind == GuestHandle::Kind::GuestThread)) {
-                    ready = ::WaitForSingleObject(reinterpret_cast<HANDLE>(handle->hostValue), 0) == 0;
-                } else
-            #endif
-                if (handle && handle->kind == GuestHandle::Kind::GuestThread) {
-                    auto thread = guestThreads_.find(a0);
-                    ready = thread == guestThreads_.end() ||
-                            thread->second.state == GuestThreadRunState::Terminated;
-                }
-                if (ready || a1 == 0) {
-                    setReg(UC_MIPS_REG_V0, ready ? 0x00000000u : 0x00000102u);
-                    setReg(UC_MIPS_REG_PC, ra);
-                    pumpHostMessages();
-                    return;
-                }
                 spdlog::info("WaitForSingleObject cooperative guest-thread slice wait=0x{:08x} timeout=0x{:08x} retry=1",
                              a0, a1);
                 switchToRunnableGuestThread(name.c_str(), 0, preferredThread);
@@ -1876,6 +1913,30 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                 pendingBlockingApis_.pop_back();
 
             }
+
+            pollSingleWait(immediate, preferredThread);
+            if (immediate != kWaitTimeout) {
+                setReg(UC_MIPS_REG_V0, immediate);
+                setReg(UC_MIPS_REG_PC, ra);
+                pumpHostMessages();
+                return;
+            }
+            if (hasRunnableGuestThread()) {
+                spdlog::info("WaitForSingleObject cooperative guest-thread slice wait=0x{:08x} timeout=0x{:08x} retry=1",
+                             a0, a1);
+                switchToRunnableGuestThread(name.c_str(), 0, preferredThread);
+                pumpHostMessages();
+                return;
+            }
+            if (a1 == kInfiniteTimeout || !guestMessages_.empty() || !timers_.empty()) {
+                spdlog::debug("WaitForSingleObject parking main context wait=0x{:08x} timeout=0x{:08x} pc=0x{:08x} queued={} timers={}",
+                              a0, a1, pc, guestMessages_.size(), timers_.size());
+                setReg(UC_MIPS_REG_PC, pc);
+                pumpHostMessages();
+                uc_emu_stop(uc_);
+                return;
+            }
+
             break;
         }
         case 0x039D:

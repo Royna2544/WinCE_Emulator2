@@ -10,12 +10,15 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cwchar>
 #include <cwctype>
 #include <fstream>
 #include <filesystem>
+#include <functional>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <spdlog/spdlog.h>
@@ -45,6 +48,38 @@ bool isHostProcessAlive(uint32_t processId) {
     return true;
 #endif
 }
+
+#if defined(_WIN32)
+std::wstring crossProcessMutexName(const wchar_t* prefix, const std::filesystem::path& path) {
+    const std::wstring text = std::filesystem::absolute(path).wstring();
+    return std::wstring(L"Local\\INAVI_EMU_") + prefix + L"_" +
+           std::to_wstring(std::hash<std::wstring>{}(text));
+}
+
+class ScopedCrossProcessMutex {
+public:
+    ScopedCrossProcessMutex(const wchar_t* prefix, const std::filesystem::path& path) {
+        handle_ = CreateMutexW(nullptr, FALSE, crossProcessMutexName(prefix, path).c_str());
+        if (!handle_) return;
+        const DWORD wait = WaitForSingleObject(handle_, 5000);
+        locked_ = wait == WAIT_OBJECT_0 || wait == WAIT_ABANDONED;
+        if (!locked_) {
+            spdlog::warn("cross-process mutex wait failed error={}", GetLastError());
+        }
+    }
+
+    ~ScopedCrossProcessMutex() {
+        if (locked_) ReleaseMutex(handle_);
+        if (handle_) CloseHandle(handle_);
+    }
+
+    bool locked() const { return locked_; }
+
+private:
+    HANDLE handle_{};
+    bool locked_{};
+};
+#endif
 
 enum class CoredllOrdinal : uint16_t {
     GetAPIAddress = 0x002C,
@@ -743,6 +778,9 @@ void SyntheticDllRuntime::publishGuestWindowState(uint32_t hwnd) {
     if (registryPath.empty()) {
         return;
     }
+#if defined(_WIN32)
+    ScopedCrossProcessMutex registryLock(L"WINDOW_REGISTRY", registryPath);
+#endif
 
     nlohmann::json registry = nlohmann::json::object();
     {
@@ -816,6 +854,9 @@ std::optional<uint32_t> SyntheticDllRuntime::findExternalGuestWindow(const std::
     if (registryPath.empty()) {
         return std::nullopt;
     }
+#if defined(_WIN32)
+    ScopedCrossProcessMutex registryLock(L"WINDOW_REGISTRY", registryPath);
+#endif
 
     nlohmann::json registry;
     {
@@ -928,6 +969,10 @@ bool SyntheticDllRuntime::postCrossProcessGuestMessage(uint32_t processId,
     if (queuePath.empty()) {
         return false;
     }
+    syncNamedMappedViews();
+#if defined(_WIN32)
+    ScopedCrossProcessMutex queueLock(L"MESSAGE_QUEUE", queuePath);
+#endif
 
     nlohmann::json queue = nlohmann::json::object();
     {
@@ -1015,6 +1060,9 @@ bool SyntheticDllRuntime::postCrossProcessBroadcastMessage(uint32_t message,
     if (registryPath.empty()) {
         return false;
     }
+#if defined(_WIN32)
+    ScopedCrossProcessMutex registryLock(L"WINDOW_REGISTRY", registryPath);
+#endif
 
     nlohmann::json registry;
     {
@@ -1078,6 +1126,9 @@ void SyntheticDllRuntime::pollCrossProcessGuestMessages() {
         currentSize == lastCrossProcessMessageQueueSize_) {
         return;
     }
+#if defined(_WIN32)
+    ScopedCrossProcessMutex queueLock(L"MESSAGE_QUEUE", queuePath);
+#endif
 
     nlohmann::json queue;
     {
@@ -1097,6 +1148,7 @@ void SyntheticDllRuntime::pollCrossProcessGuestMessages() {
         lastCrossProcessMessageQueueSize_ = currentSize;
         return;
     }
+    syncNamedMappedViews();
 
     const uint32_t currentPid = hostProcessId();
     auto importExternalWindow = [&](uint32_t processId, uint32_t externalHwnd) -> uint32_t {
@@ -1114,6 +1166,9 @@ void SyntheticDllRuntime::pollCrossProcessGuestMessages() {
 
         const std::filesystem::path registryPath = ensureCrossProcessWindowRegistryPath();
         if (registryPath.empty()) return 0;
+#if defined(_WIN32)
+        ScopedCrossProcessMutex registryLock(L"WINDOW_REGISTRY", registryPath);
+#endif
         nlohmann::json registry;
         {
             std::ifstream input(registryPath);
@@ -3582,7 +3637,8 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                          readAscii(readablePtr, 128), readUtf16(readablePtr, 128), hex);
         };
         const bool tracePostMessage =
-            a0 == 0xffff || (a1 >= 0x0600 && a1 <= 0x07ff) ||
+            a0 == 0xffff || a1 == 0x0401 ||
+            (a1 >= 0x0600 && a1 <= 0x07ff) ||
             (a1 >= 0x5700 && a1 <= 0x58ff);
         if (tracePostMessage) {
             spdlog::info("PostMessageW call hwnd=0x{:08x} msg=0x{:08x} wparam=0x{:08x} lparam=0x{:08x}",

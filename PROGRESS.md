@@ -11,6 +11,11 @@ Last refreshed: 2026-05-28.
 - Route search can advance into route-result/map states with a headless
   `MultiTBT.exe` companion, but full route completion/guidance is still under
   investigation.
+- Failed route-search scheduler experiment: keeping async cross-process
+  posted messages deferred behind an active route worker let the worker run to
+  completion sooner, but it also caused stale backing/map content to leak over
+  an already overlaid screen. That deferrable-message behavior was reverted;
+  do not reintroduce it without a backing/z-order fix.
 - In the current diagnostic route runs, a companion `MultiTBT.exe` joined the
   same shared guest-window registry and the parent resolved
   `FindWindowW(NULL, L"MultiTBT")`.

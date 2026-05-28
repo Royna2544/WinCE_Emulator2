@@ -1895,8 +1895,7 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
     MSG message{};
     auto hasPendingUserInput = [&]() {
         return std::any_of(guestMessages_.begin(), guestMessages_.end(), [](const GuestMessage& message) {
-            return message.message == 0x0007 || message.message == 0x0008 ||
-                   (message.message >= 0x0200 && message.message <= 0x0202);
+            return message.message >= 0x0200 && message.message <= 0x0202;
         });
     };
     auto recentlyQueuedUserInput = [&]() {
@@ -1923,7 +1922,9 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
         const bool pendingUserInput = hasPendingUserInput();
         const bool recentUserInput = recentlyQueuedUserInput();
         const bool backloggedQueuedWork = servicingQueuedMessages && guestMessages_.size() >= 3;
-        if (synchronousQueuedMessage) {
+        if (synchronousQueuedMessage && activeGuestThread_ && !pendingUserInput && !recentUserInput) {
+            instructionBudget = std::min<uint64_t>(instructionBudget, backloggedQueuedWork ? 500000u : 250000u);
+        } else if (synchronousQueuedMessage) {
             instructionBudget = std::min<uint64_t>(instructionBudget, backloggedQueuedWork ? 50000u : 25000u);
         } else if (pendingUserInput) {
             instructionBudget = std::min<uint64_t>(instructionBudget, backloggedQueuedWork ? 50000u : 12000u);
@@ -1931,8 +1932,8 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
             instructionBudget = std::min<uint64_t>(instructionBudget, 12000u);
         } else if (servicingQueuedMessages && !activeGuestThread_) {
             instructionBudget = std::min<uint64_t>(instructionBudget, backloggedQueuedWork ? 50000u : 25000u);
-        } else if (activeGuestThread_) {
-            instructionBudget = std::min<uint64_t>(instructionBudget, 250000u);
+        } else if (servicingQueuedMessages && activeGuestThread_) {
+            instructionBudget = std::min<uint64_t>(instructionBudget, backloggedQueuedWork ? 500000u : 250000u);
         } else if (servicingQueuedMessages) {
             instructionBudget = std::min<uint64_t>(instructionBudget, 250000u);
         }
@@ -1949,6 +1950,7 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
         const uc_err err = uc_emu_start(uc_, pc, 0, 0, instructionBudget);
         const bool stoppedByWatchdog = interactiveSliceStopRequested_;
         endInteractiveSlice();
+        syncNamedMappedViews();
         uc_reg_read(uc_, UC_MIPS_REG_PC, &pc);
         uc_reg_read(uc_, UC_MIPS_REG_RA, &ra);
         if (err != UC_ERR_OK) {
@@ -2013,7 +2015,30 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
     while (hasHostWindows()) {
         pollCrossProcessGuestMessages();
         enqueueDueTimers();
+        if (!guestMessages_.empty() && hasHostWindows() && activeGuestThread_ &&
+            !hasPendingUserInput() && !hasPendingSynchronousMessage()) {
+            if (!resumeGuestSlice(5000000, "pre-queued-worker")) {
+                return;
+            }
+        }
+        if (!guestMessages_.empty() && hasHostWindows() && !activeGuestThread_ &&
+            !hasPendingUserInput() && !hasPendingSynchronousMessage() && hasRunnableGuestThread()) {
+            switchToRunnableGuestThread("pre-queued-worker");
+            if (activeGuestThread_ && !resumeGuestSlice(5000000, "pre-queued-worker")) {
+                return;
+            }
+        }
         if (!guestMessages_.empty() && hasHostWindows()) {
+            if (activeGuestThread_) {
+                if (!hasPendingUserInput() && !hasPendingSynchronousMessage()) {
+                    if (!resumeGuestSlice(5000000, "queued-worker-before-message")) {
+                        return;
+                    }
+                }
+            }
+            if (activeGuestThread_) {
+                yieldActiveGuestThread("queued-message-preempt");
+            }
             compactQueuedPointerMotion();
             const uint64_t budget = 250000u;
             spdlog::debug("resuming guest for queued message queued={} budget={}", guestMessages_.size(), budget);
