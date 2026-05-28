@@ -67,32 +67,46 @@ Core entry and loader:
   applies relocations, binds imports, starts Unicorn, and owns current
   targeted diagnostics.
 - `src/synthetic_dll.h` declares the synthetic CE runtime surface.
-- `src/synthetic_dll.cpp` implements the main synthetic runtime, host presenter,
-  guest handles, device map loading, module registration, cross-process shared
-  guest-window behavior, and generic dispatch helpers.
+- `src/synthetic_dll.cpp` implements the main synthetic runtime, guest handles,
+  device map loading, cross-process shared guest-window behavior, and generic
+  dispatch helpers.
+- `src/synthetic_dll_modules.cpp` owns synthetic DLL module creation, export
+  registration, and stub emission.
 
 COREDLL and API shims:
 
-- `src/coredll_audio.cpp` audio and sound-related handlers.
+- `src/coredll_bitmap.cpp` bitmap, DC, stock GDI object, DIB, Blt, text, and
+  framebuffer pixel helpers.
+- `src/coredll_host_audio.cpp` host-backed audio and sound-related handlers.
 - `src/coredll_comm.cpp` serial communication APIs such as comm state, masks,
   timeouts, purge, wait, and clear-error behavior.
 - `src/coredll_crt.cpp` CRT-style helpers, math/format/security exports.
 - `src/coredll_fs.cpp` guest file/device open/read/write/find behavior and
   host path translation.
 - `src/coredll_gui.cpp` non-window GUI helpers.
+- `src/coredll_mapping.cpp` file-mapping and cross-process named mapping
+  helpers.
 - `src/coredll_math.cpp` floating-point/math exports.
 - `src/coredll_memory.cpp` heap/local/global memory exports.
+- `src/coredll_memory_runtime.cpp` guest heap allocation, register access,
+  stack argument, and raw guest-memory helpers.
 - `src/coredll_named_dispatch.cpp` named ordinal dispatch for many CE APIs,
   including message routing and process/window helpers.
 - `src/coredll_paint.cpp` paint, DIB, DC, and bitmap helpers.
 - `src/coredll_rect.cpp` rectangle helpers.
 - `src/coredll_registry.cpp` registry API behavior backed by `regs.json`.
 - `src/coredll_res.cpp` resource, menu, string, bitmap, icon, and dialog helpers.
+- `src/coredll_strings.cpp` guest ASCII/UTF-16 string access and code-page
+  conversion helpers.
 - `src/coredll_sync.cpp` sync helpers.
 - `src/coredll_system.cpp` system and error-state helpers.
 - `src/coredll_thread.cpp` guest thread/event/wait helpers.
+- `src/coredll_thread_runtime.cpp` cooperative guest thread contexts,
+  scheduling, process-image starts, and wait-object readiness.
 - `src/coredll_time.cpp` time, tick, sleep, and system-time helpers.
 - `src/coredll_window.cpp` window APIs including title propagation.
+- `src/coredll_window_runtime.cpp` guest window bookkeeping, host presenter,
+  z-order, paint queuing, timers, and host mouse routing.
 
 Other synthetic DLLs:
 

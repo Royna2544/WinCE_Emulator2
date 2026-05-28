@@ -1,6 +1,6 @@
 # Progress
 
-Last refreshed: 2026-05-27.
+Last refreshed: 2026-05-28.
 
 ## Current State
 
@@ -22,6 +22,15 @@ Last refreshed: 2026-05-27.
   guest framebuffer pixels.
 - `README.md`, `DEVICES.md`, `PROGRESS.md`, `TODO.md`, and `KNOWN_BUGS.md`
   have been refreshed to match the current investigation state.
+- Source organization is split further: host-backed audio lives in
+  `src/coredll_host_audio.cpp`, shared mappings in `src/coredll_mapping.cpp`,
+  registry backing/helpers in `src/coredll_registry.cpp`, bitmap/DC drawing in
+  `src/coredll_bitmap.cpp`, resource parsing/loading in `src/coredll_res.cpp`,
+  guest string helpers in `src/coredll_strings.cpp`,
+  guest allocation/memory helpers in `src/coredll_memory_runtime.cpp`,
+  host presenter/window runtime in `src/coredll_window_runtime.cpp`,
+  cooperative thread scheduling in `src/coredll_thread_runtime.cpp`, and
+  synthetic module/export setup in `src/synthetic_dll_modules.cpp`.
 
 ## Confirmed Emulator Capabilities
 
@@ -40,6 +49,14 @@ Last refreshed: 2026-05-27.
 
 ## Recent Fixes
 
+- Host presentation deferral now also covers normal queued
+  `WM_ERASEBKGND`/`WM_PAINT` dispatch, not only synchronous `UpdateWindow`.
+  The GDI host presenter now clears only letterbox bands instead of blanking
+  the whole client before each stretch blit, avoiding visible app-to-black
+  flashes between valid guest frames.
+- `captures/inavi_autodrive_20260528_102413` verified the expanded presenter
+  fix in Release: the app window launched, produced a valid non-black initial
+  frame, and was kept alive for live review.
 - Host presentation is now deferred during the `WM_ERASEBKGND` half of
   synchronous `UpdateWindow` dispatch and released for the paired `WM_PAINT`.
   This keeps long guest erase-to-paint gaps from exposing an intermediate black

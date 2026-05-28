@@ -3,8 +3,13 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <functional>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -32,7 +37,146 @@ std::string utf16FromBytes(const std::vector<uint8_t>& bytes, size_t offset, siz
     return result;
 }
 
+std::string lowerAscii(std::string text) {
+    for (char& c : text) c = char(std::tolower(static_cast<unsigned char>(c)));
+    return text;
 }
+
+std::string pathToUtf8(const std::filesystem::path& path) {
+    auto text = path.u8string();
+    return std::string(reinterpret_cast<const char*>(text.data()), text.size());
+}
+
+}
+
+void SyntheticDllRuntime::loadMainResources(const std::filesystem::path& path) {
+    mainResources_.clear();
+    std::ifstream file(path, std::ios::binary);
+    if (!file) {
+        spdlog::warn("resource parse skipped; cannot open {}", pathToUtf8(path));
+        return;
+    }
+    std::vector<uint8_t> bytes{std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
+    if (bytes.size() < 0x100 || readLe16(bytes, 0) != 0x5a4d) return;
+    const uint32_t nt = readLe32(bytes, 0x3c);
+    if (nt + 0x18 >= bytes.size() || readLe32(bytes, nt) != 0x4550) return;
+    const uint16_t sectionCount = readLe16(bytes, nt + 6);
+    const uint16_t optSize = readLe16(bytes, nt + 20);
+    const uint32_t opt = nt + 24;
+    if (opt + 112 > bytes.size() || readLe16(bytes, opt) != 0x10b) return;
+    const uint32_t sizeOfHeaders = readLe32(bytes, opt + 60);
+    const uint32_t resourceRva = readLe32(bytes, opt + 96 + 2 * 8);
+    const uint32_t resourceSize = readLe32(bytes, opt + 100 + 2 * 8);
+    if (!resourceRva || !resourceSize) return;
+
+    struct SectionView { uint32_t va{}, vsize{}, raw{}, rawSize{}; };
+    std::vector<SectionView> sections;
+    const uint32_t sh = opt + optSize;
+    for (uint16_t i = 0; i < sectionCount && sh + i * 40 + 40 <= bytes.size(); ++i) {
+        SectionView s;
+        s.vsize = readLe32(bytes, sh + i * 40 + 8);
+        s.va = readLe32(bytes, sh + i * 40 + 12);
+        s.rawSize = readLe32(bytes, sh + i * 40 + 16);
+        s.raw = readLe32(bytes, sh + i * 40 + 20);
+        sections.push_back(s);
+    }
+    auto rvaToFile = [&](uint32_t rva) -> std::optional<uint32_t> {
+        if (rva < sizeOfHeaders) return rva;
+        for (const auto& s : sections) {
+            const uint32_t span = std::max(s.vsize, s.rawSize);
+            if (rva >= s.va && rva < s.va + span) return s.raw + (rva - s.va);
+        }
+        return std::nullopt;
+    };
+    const auto resourceBase = rvaToFile(resourceRva);
+    if (!resourceBase) return;
+    const uint32_t resourceEnd = *resourceBase + resourceSize;
+    if (*resourceBase >= bytes.size()) return;
+
+    auto readResourceName = [&](uint32_t raw) -> ResourceName {
+        ResourceName result{};
+        if (raw & 0x80000000u) {
+            const uint32_t offset = *resourceBase + (raw & 0x7fffffffu);
+            const uint16_t length = readLe16(bytes, offset);
+            result.ordinal = false;
+            result.name = lowerAscii(utf16FromBytes(bytes, offset + 2, length));
+        } else {
+            result.ordinal = true;
+            result.id = raw & 0xffffu;
+        }
+        return result;
+    };
+    std::function<void(uint32_t, int, ResourceName, ResourceName)> walk =
+        [&](uint32_t dirOffset, int depth, ResourceName type, ResourceName name) {
+            const uint32_t dir = *resourceBase + dirOffset;
+            if (dir + 16 > bytes.size() || dir >= resourceEnd) return;
+            const uint16_t named = readLe16(bytes, dir + 12);
+            const uint16_t ids = readLe16(bytes, dir + 14);
+            const uint32_t count = uint32_t(named) + ids;
+            for (uint32_t i = 0; i < count; ++i) {
+                const uint32_t entry = dir + 16 + i * 8;
+                if (entry + 8 > bytes.size() || entry >= resourceEnd) return;
+                ResourceName current = readResourceName(readLe32(bytes, entry));
+                const uint32_t data = readLe32(bytes, entry + 4);
+                if (data & 0x80000000u) {
+                    if (depth == 0) walk(data & 0x7fffffffu, depth + 1, current, {});
+                    else if (depth == 1) walk(data & 0x7fffffffu, depth + 1, type, current);
+                } else if (depth >= 2) {
+                    const uint32_t dataEntry = *resourceBase + data;
+                    if (dataEntry + 16 > bytes.size() || dataEntry >= resourceEnd) continue;
+                    const uint32_t dataRva = readLe32(bytes, dataEntry);
+                    const uint32_t dataSize = readLe32(bytes, dataEntry + 4);
+                    const auto dataOff = rvaToFile(dataRva);
+                    if (!dataOff || *dataOff + dataSize > bytes.size()) continue;
+                    ResourceEntry resource{};
+                    resource.type = type;
+                    resource.name = name;
+                    resource.language = uint16_t(current.id);
+                    resource.data.assign(bytes.begin() + *dataOff, bytes.begin() + *dataOff + dataSize);
+                    mainResources_.push_back(std::move(resource));
+                }
+            }
+        };
+    walk(0, 0, {}, {});
+    spdlog::info("parsed {} resources from {}", mainResources_.size(), pathToUtf8(path.filename()));
+}
+
+bool SyntheticDllRuntime::resourceNameMatches(const ResourceName& resourceName, uint32_t guestArg) const {
+    if (guestArg < 0x10000) {
+        return resourceName.ordinal && resourceName.id == guestArg;
+    }
+    return !resourceName.ordinal && resourceName.name == lowerAscii(readUtf16(guestArg));
+}
+
+const SyntheticDllRuntime::ResourceEntry* SyntheticDllRuntime::findResource(uint32_t typeArg,
+                                                                             uint32_t nameArg) const {
+    for (const auto& resource : mainResources_) {
+        if (resourceNameMatches(resource.type, typeArg) && resourceNameMatches(resource.name, nameArg)) {
+            return &resource;
+        }
+    }
+    if (typeArg == 6 && nameArg < 0x10000) {
+        const uint32_t blockId = (nameArg >> 4) + 1;
+        for (const auto& resource : mainResources_) {
+            if (resource.type.ordinal && resource.type.id == 6 &&
+                resource.name.ordinal && resource.name.id == blockId) {
+                return &resource;
+            }
+        }
+    }
+    return nullptr;
+}
+
+const SyntheticDllRuntime::ResourceEntry* SyntheticDllRuntime::resourceFromHandle(uint32_t guestHandle) const {
+    auto handle = guestHandles_.find(guestHandle);
+    if (handle == guestHandles_.end() || handle->second.kind != GuestHandle::Kind::GuestResource ||
+        !handle->second.hostValue) {
+        return nullptr;
+    }
+    const size_t index = size_t(handle->second.hostValue - 1);
+    return index < mainResources_.size() ? &mainResources_[index] : nullptr;
+}
+
 
 void SyntheticDllRuntime::registerCoredllResExports(SyntheticModule& module) {
     struct CoreDllRes {

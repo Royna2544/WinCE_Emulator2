@@ -1,6 +1,6 @@
 # TODO
 
-Last refreshed: 2026-05-27.
+Last refreshed: 2026-05-28.
 
 ## Immediate
 
@@ -80,9 +80,9 @@ Last refreshed: 2026-05-27.
 
 6. Performance
    - Continue live input/UI lag testing after
-     `captures/inavi_autodrive_20260528_084215`, where synchronous
-     `UpdateWindow` erase-to-paint gaps still exist but erase-only host
-     presentation is deferred to avoid black-frame flashes.
+     `captures/inavi_autodrive_20260528_102413`, where Release launched and
+     stayed alive after expanding host erase/paint deferral and removing the
+     full-client black clear from GDI host presentation.
    - Re-test route-result/re-search lag after the backlogged queued-message
      scheduler change from 2026-05-26. It improves the large initial backlog,
      but medium-sized modal/UI bursts and synchronous wndproc waits may still

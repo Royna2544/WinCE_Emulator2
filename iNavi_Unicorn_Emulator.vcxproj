@@ -66,26 +66,33 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="src\coredll_audio.cpp" />
+    <ClCompile Include="src\coredll_bitmap.cpp" />
+    <ClCompile Include="src\coredll_host_audio.cpp" />
     <ClCompile Include="src\coredll_comm.cpp" />
     <ClCompile Include="src\coredll_crt.cpp" />
     <ClCompile Include="src\coredll_fs.cpp" />
     <ClCompile Include="src\coredll_gui.cpp" />
+    <ClCompile Include="src\coredll_mapping.cpp" />
     <ClCompile Include="src\coredll_math.cpp" />
     <ClCompile Include="src\coredll_memory.cpp" />
+    <ClCompile Include="src\coredll_memory_runtime.cpp" />
     <ClCompile Include="src\coredll_named_dispatch.cpp" />
     <ClCompile Include="src\coredll_paint.cpp" />
     <ClCompile Include="src\coredll_rect.cpp" />
     <ClCompile Include="src\coredll_registry.cpp" />
     <ClCompile Include="src\coredll_res.cpp" />
+    <ClCompile Include="src\coredll_strings.cpp" />
     <ClCompile Include="src\coredll_sync.cpp" />
     <ClCompile Include="src\coredll_system.cpp" />
     <ClCompile Include="src\coredll_thread.cpp" />
+    <ClCompile Include="src\coredll_thread_runtime.cpp" />
     <ClCompile Include="src\coredll_time.cpp" />
     <ClCompile Include="src\coredll_window.cpp" />
+    <ClCompile Include="src\coredll_window_runtime.cpp" />
     <ClCompile Include="src\main.cpp" />
     <ClCompile Include="src\synthetic_dll_commctrl.cpp" />
     <ClCompile Include="src\synthetic_dll.cpp" />
+    <ClCompile Include="src\synthetic_dll_modules.cpp" />
     <ClCompile Include="src\synthetic_dll_ole32.cpp" />
     <ClCompile Include="src\synthetic_dll_oleaut32.cpp" />
     <ClCompile Include="src\synthetic_dll_winsock.cpp" />

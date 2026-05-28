@@ -1,6 +1,6 @@
 # Known Bugs
 
-Last refreshed: 2026-05-26.
+Last refreshed: 2026-05-28.
 
 ## Route Search Does Not Complete
 
@@ -99,23 +99,24 @@ Symptom:
 - The app can play the confirmation/error sound while the matching popup UI is
   delayed, hidden, or only appears after another window is dismissed.
 - The host presenter could briefly flash a black frame while the guest was in a
-  long `UpdateWindow` erase-to-paint gap.
+  long erase-to-paint gap or between host GDI presents.
 
 Current hypothesis:
 
 - Audio is not the broken path. The likely problem is synchronous message
   delivery, activation, `ShowWindow`/`SetWindowPos`, or paint invalidation
   ordering.
-- The black-frame flash was caused by host presentation during the
-  `WM_ERASEBKGND` half of synchronous `UpdateWindow`, before the paired
-  `WM_PAINT` completed.
+- The black-frame flash was caused by host presentation during
+  `WM_ERASEBKGND` before the paired `WM_PAINT` completed. A second host-side
+  contributor was the GDI presenter clearing the whole client black before
+  stretching the guest framebuffer.
 
 Status:
 
-- Popup/audio lag is not fixed. The black-frame flash has a targeted
-  paint-order fix in `captures/inavi_autodrive_20260528_084215`: host
-  presentation is deferred during synchronous `UpdateWindow` erase and resumes
-  at paint completion.
+- Popup/audio lag is not fixed. The black-frame flash has targeted paint-order
+  fixes in `captures/inavi_autodrive_20260528_084215` and
+  `captures/inavi_autodrive_20260528_102413`: host presentation is deferred
+  across erase/paint pairs, and GDI host repaint clears only letterbox bands.
 
 ## GPS Profile Still Selects COM7 In This Dump
 

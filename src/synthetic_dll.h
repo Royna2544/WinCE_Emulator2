@@ -15,6 +15,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 struct SyntheticModule {
@@ -702,6 +703,7 @@ private:
         uint16_t ordinal{};
         GuestCallArgs args;
         uint32_t paintDispatches{};
+        uint32_t releaseHostPresentAfterPaintHwnd{};
     };
     struct PendingUpdateWindow {
         uint32_t hwnd{};
@@ -717,6 +719,7 @@ private:
         uint32_t message{};
         uint32_t originalRa{};
         uint32_t synchronousSender{};
+        bool releaseHostPresentAfterPaint{};
         std::string sourceName;
     };
     struct GuestCpuContext {
@@ -853,6 +856,7 @@ private:
     uint64_t lastHostPresentMs_{};
     bool hostPresentDirty_{};
     uint32_t hostPresentDeferDepth_{};
+    std::unordered_set<uint32_t> hostPresentDeferredEraseHwnds_;
     std::vector<ResourceEntry> mainResources_;
     std::map<std::string, LoadedModuleInfo> loadedModulesByName_;
     std::map<std::string, LoadedModuleInfo> loadedModulesByPath_;
@@ -1268,6 +1272,8 @@ private:
     const GuestThreadState* activeGuestThreadState() const;
     std::string currentProcessModulePath() const;
     uint32_t currentProcessModuleBase() const;
+    void closeHostWaveInHandle(uintptr_t hostValue);
+    void closeHostWaveOutHandle(uintptr_t hostValue);
     void refreshCompletedHostWaveBuffers();
     void refreshSignaledGuestWaits();
     bool hasRunnableGuestThread();
@@ -1310,6 +1316,9 @@ private:
     void pollCrossProcessGuestMessages();
     void presentHostWindows(bool force);
     void invalidateHostWindows();
+    bool beginHostErasePresentDeferral(uint32_t hwnd);
+    bool hasHostErasePresentDeferral(uint32_t hwnd) const;
+    void releaseHostErasePresentDeferral(uint32_t hwnd);
     void queueGuestPaint(uint32_t hwnd, bool erase);
     void prioritizeQueuedWindowMessages(uint32_t hwnd);
     void queueVisibleFullScreenPopupPaint(uint32_t hwnd);
