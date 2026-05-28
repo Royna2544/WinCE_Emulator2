@@ -567,6 +567,10 @@ int hostPresenterDisplayHeight(const HostPresenterWindow& presenter) {
     return std::max(1, presenter.targetHeight > 0 ? presenter.targetHeight : presenter.height);
 }
 
+bool hostPresenterUpscalingEnabled(const HostPresenterWindow& presenter) {
+    return presenter.targetWidth >= 0 && presenter.targetHeight >= 0;
+}
+
 RECT hostPresenterImageRect(const HostPresenterWindow& presenter, int clientWidth, int clientHeight) {
     clientWidth = std::max(1, clientWidth);
     clientHeight = std::max(1, clientHeight);
@@ -677,6 +681,22 @@ LRESULT CALLBACK hostPresenterWndProc(HWND hwnd, UINT message, WPARAM wParam, LP
         return TRUE;
     }
     auto* presenter = reinterpret_cast<HostPresenterWindow*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+    if (message == WM_GETMINMAXINFO) {
+        if (presenter && presenter->width > 0 && presenter->height > 0) {
+            RECT minClient{0, 0, presenter->width, presenter->height};
+            AdjustWindowRectEx(&minClient, hostPresenterWindowStyle(), FALSE, hostPresenterWindowExStyle());
+            auto* info = reinterpret_cast<MINMAXINFO*>(lParam);
+            info->ptMinTrackSize.x = std::max<LONG>(1, minClient.right - minClient.left);
+            info->ptMinTrackSize.y = std::max<LONG>(1, minClient.bottom - minClient.top);
+            return 0;
+        }
+    }
+    if (message == WM_SIZE) {
+        if (presenter && wParam != SIZE_MINIMIZED) {
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
+        return 0;
+    }
     if (message == WM_PAINT) {
         if (presenter && presenter->framebuffer && presenter->width > 0 && presenter->height > 0) {
             RECT client{};
@@ -709,7 +729,7 @@ LRESULT CALLBACK hostPresenterWndProc(HWND hwnd, UINT message, WPARAM wParam, LP
                 GdiFlush();
             };
             static const bool disableD3dNis = envFlagEnabled("INAVI_EMU_DISABLE_D3D_NIS");
-            if ((presenter->targetWidth > 0 || presenter->targetHeight > 0) &&
+            if (hostPresenterUpscalingEnabled(*presenter) &&
                 !presenter->d3d11Unavailable && !disableD3dNis) {
                 PAINTSTRUCT paint{};
                 HDC paintDc = BeginPaint(hwnd, &paint);
@@ -2012,30 +2032,99 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
         enqueueDueTimers();
         return true;
     };
+    auto guestThreadRunStateName = [](GuestThreadRunState state) -> const char* {
+        switch (state) {
+        case GuestThreadRunState::Suspended: return "suspended";
+        case GuestThreadRunState::Runnable: return "runnable";
+        case GuestThreadRunState::Running: return "running";
+        case GuestThreadRunState::Waiting: return "waiting";
+        case GuestThreadRunState::WaitingForMessage: return "waiting-message";
+        case GuestThreadRunState::WaitingForSendMessage: return "waiting-send";
+        case GuestThreadRunState::Terminated: return "terminated";
+        }
+        return "unknown";
+    };
+    auto describeGuestAddress = [&](uint32_t address) {
+        for (const auto& [base, module] : loadedModulesByBase_) {
+            const uint64_t begin = base;
+            const uint64_t end = begin + (module.imageSize ? module.imageSize : 0x1000u);
+            if (address >= begin && uint64_t(address) < end) {
+                std::ostringstream out;
+                out << module.name << "+0x" << std::hex << std::setw(8)
+                    << std::setfill('0') << (address - base);
+                return out.str();
+            }
+        }
+        std::ostringstream out;
+        out << "0x" << std::hex << std::setw(8) << std::setfill('0') << address;
+        return out.str();
+    };
+    auto lastSchedulerDiagAt = std::chrono::steady_clock::time_point{};
+    auto logGuestSchedulerDiag = [&](const char* where) {
+        const auto now = std::chrono::steady_clock::now();
+        if (lastSchedulerDiagAt != std::chrono::steady_clock::time_point{} &&
+            now - lastSchedulerDiagAt < std::chrono::milliseconds(1000)) {
+            return;
+        }
+        lastSchedulerDiagAt = now;
+        std::ostringstream threads;
+        bool first = true;
+        for (const auto& [handle, thread] : guestThreads_) {
+            if (!first) threads << "; ";
+            first = false;
+            const auto pcIt = thread.context.registers.find(UC_MIPS_REG_PC);
+            const auto raIt = thread.context.registers.find(UC_MIPS_REG_RA);
+            const uint32_t pc = pcIt == thread.context.registers.end() ? 0 : pcIt->second;
+            const uint32_t ra = raIt == thread.context.registers.end() ? 0 : raIt->second;
+            threads << "0x" << std::hex << std::setw(8) << std::setfill('0') << handle
+                    << "/" << guestThreadRunStateName(thread.state)
+                    << " valid=" << (thread.context.valid ? 1 : 0)
+                    << " pc=" << describeGuestAddress(pc)
+                    << " ra=" << describeGuestAddress(ra)
+                    << " wait=0x" << std::setw(8) << thread.waitHandle;
+            if (!thread.waitHandles.empty()) {
+                threads << " waits=[";
+                for (size_t index = 0; index < thread.waitHandles.size(); ++index) {
+                    if (index) threads << ",";
+                    threads << "0x" << std::hex << std::setw(8) << thread.waitHandles[index];
+                }
+                threads << "]";
+            }
+            threads << " sleep=" << std::dec << thread.sleepUntilMs;
+        }
+        spdlog::info("guest scheduler diag where={} active=0x{:08x} queued={} timers={} threads=[{}]",
+                     where, activeGuestThread_, guestMessages_.size(), timers_.size(), threads.str());
+    };
+    auto resumeQueuedWorkerBurst = [&]() -> bool {
+        if (guestMessages_.empty() || !hasHostWindows() ||
+            hasPendingUserInput() || hasPendingSynchronousMessage()) {
+            return true;
+        }
+        constexpr uint32_t kMaxWorkerSlicesBeforeMessage = 4;
+        for (uint32_t slice = 0;
+             slice < kMaxWorkerSlicesBeforeMessage && !guestMessages_.empty() && hasHostWindows() &&
+             !hasPendingUserInput() && !hasPendingSynchronousMessage();
+             ++slice) {
+            if (!activeGuestThread_) {
+                if (!hasRunnableGuestThread()) {
+                    logGuestSchedulerDiag(slice == 0 ? "pre-queued-no-runnable"
+                                                     : "pre-queued-burst-no-runnable");
+                    break;
+                }
+                switchToRunnableGuestThread(slice == 0 ? "pre-queued-worker" : "pre-queued-worker-burst");
+            }
+            if (!activeGuestThread_) break;
+            if (!resumeGuestSlice(5000000, slice == 0 ? "pre-queued-worker" : "pre-queued-worker-burst")) {
+                return false;
+            }
+        }
+        return true;
+    };
     while (hasHostWindows()) {
         pollCrossProcessGuestMessages();
         enqueueDueTimers();
-        if (!guestMessages_.empty() && hasHostWindows() && activeGuestThread_ &&
-            !hasPendingUserInput() && !hasPendingSynchronousMessage()) {
-            if (!resumeGuestSlice(5000000, "pre-queued-worker")) {
-                return;
-            }
-        }
-        if (!guestMessages_.empty() && hasHostWindows() && !activeGuestThread_ &&
-            !hasPendingUserInput() && !hasPendingSynchronousMessage() && hasRunnableGuestThread()) {
-            switchToRunnableGuestThread("pre-queued-worker");
-            if (activeGuestThread_ && !resumeGuestSlice(5000000, "pre-queued-worker")) {
-                return;
-            }
-        }
+        if (!resumeQueuedWorkerBurst()) return;
         if (!guestMessages_.empty() && hasHostWindows()) {
-            if (activeGuestThread_) {
-                if (!hasPendingUserInput() && !hasPendingSynchronousMessage()) {
-                    if (!resumeGuestSlice(5000000, "queued-worker-before-message")) {
-                        return;
-                    }
-                }
-            }
             if (activeGuestThread_) {
                 yieldActiveGuestThread("queued-message-preempt");
             }
@@ -2060,13 +2149,18 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
             TranslateMessage(&message);
             DispatchMessageW(&message);
         }
-        if (guestMessages_.empty() && hasHostWindows() && !activeGuestThread_ && hasRunnableGuestThread()) {
-            switchToRunnableGuestThread("idle-worker");
+        if (guestMessages_.empty() && hasHostWindows() && !activeGuestThread_) {
+            if (hasRunnableGuestThread()) {
+                switchToRunnableGuestThread("idle-worker");
+            } else {
+                logGuestSchedulerDiag("idle-no-runnable");
+            }
         }
         if (guestMessages_.empty() && hasHostWindows() && !resumeGuestSlice(5000000, "idle")) {
             return;
         }
         if (guestMessages_.empty() && !activeGuestThread_ && !hasRunnableGuestThread()) {
+            logGuestSchedulerDiag("wait-no-runnable");
             MsgWaitForMultipleObjects(0, nullptr, FALSE, waitMs, QS_ALLINPUT);
         }
     }

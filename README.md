@@ -209,21 +209,26 @@ The autodrive harness writes run artifacts under `captures/`.
 ## Host Presenter Scaling
 
 The guest framebuffer and CE-reported screen metrics remain at the emulated
-device size. For host-only 4K presentation, launch with:
+device size. Host presentation uses the Direct3D 11 NVIDIA Image Scaling path
+by default and tracks the current presenter client size when the host window is
+resized. The presenter prevents resizing below the original guest framebuffer
+client size.
+
+For an initial 4K presenter size, launch with:
 
 ```text
 --host-upscale 4k
 ```
 
-`4k` maps to a 3840x2160 host client area. Custom `WxH` values are also
-accepted. When host upscaling is enabled, the presenter tries the Direct3D 11
-NVIDIA Image Scaling backend first and falls back to the GDI presenter if D3D11
-or shader compilation is unavailable. The presenter preserves the guest aspect
-ratio inside the host client area and maps host mouse coordinates back through
-that displayed image rectangle before queuing guest mouse messages.
+`4k` maps to a 3840x2160 initial host client area. Custom `WxH` values are also
+accepted. The presenter tries the Direct3D 11 NVIDIA Image Scaling backend first
+and falls back to the GDI presenter if D3D11 or shader compilation is
+unavailable. The presenter preserves the guest aspect ratio inside the host
+client area and maps host mouse coordinates back through that displayed image
+rectangle before queuing guest mouse messages.
 
-Set `INAVI_EMU_DISABLE_D3D_NIS=1` to force the GDI presenter while keeping the
-same host window size and coordinate mapping.
+Pass `--host-upscale off` or set `INAVI_EMU_DISABLE_D3D_NIS=1` to force the GDI
+presenter while keeping the same host window size and coordinate mapping.
 
 ## Device Knowledge
 

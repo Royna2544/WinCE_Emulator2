@@ -506,8 +506,13 @@ void SyntheticDllRuntime::setFramebuffer(uint32_t* bgra, int width, int height) 
 }
 
 void SyntheticDllRuntime::setHostPresenterTargetSize(int width, int height) {
-    hostPresenterTargetWidth_ = std::max(0, width);
-    hostPresenterTargetHeight_ = std::max(0, height);
+    if (width < 0 || height < 0) {
+        hostPresenterTargetWidth_ = -1;
+        hostPresenterTargetHeight_ = -1;
+        return;
+    }
+    hostPresenterTargetWidth_ = width;
+    hostPresenterTargetHeight_ = height;
 }
 
 void SyntheticDllRuntime::registerLoadedModule(const std::string& moduleName,
@@ -644,11 +649,16 @@ uint32_t SyntheticDllRuntime::closeGuestHandle(uint32_t guestHandle) {
         if (it->second.filePointer) releaseAllocation(it->second.filePointer);
     } else if (it->second.kind == GuestHandle::Kind::GuestThread) {
         auto thread = guestThreads_.find(guestHandle);
-        if (thread != guestThreads_.end() && thread->second.state != GuestThreadRunState::Running) {
-            releaseAllocation(thread->second.stackBase);
-            releaseAllocation(thread->second.tlsBase);
-            guestThreads_.erase(thread);
-            if (lastScheduledGuestThread_ == guestHandle) lastScheduledGuestThread_ = 0;
+        if (thread != guestThreads_.end()) {
+            if (thread->second.state == GuestThreadRunState::Terminated) {
+                releaseAllocation(thread->second.stackBase);
+                releaseAllocation(thread->second.tlsBase);
+                guestThreads_.erase(thread);
+                if (lastScheduledGuestThread_ == guestHandle) lastScheduledGuestThread_ = 0;
+            } else {
+                spdlog::info("CloseHandle released live guest thread handle=0x{:08x} state={} without terminating scheduler thread",
+                             guestHandle, static_cast<int>(thread->second.state));
+            }
         }
     }
     if (it->second.kind == GuestHandle::Kind::GuestHeap) {

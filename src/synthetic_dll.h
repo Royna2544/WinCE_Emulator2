@@ -258,6 +258,7 @@ private:
         CoreDllAtoi,
         CoreDllAtof,
         CoreDllAtan,
+        CoreDllAtan2,
         CoreDllCeil,
         CoreDllCos,
         CoreDllDifftime,
@@ -1087,6 +1088,7 @@ private:
     bool handleAtoi(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleAtof(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleAtan(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
+    bool handleAtan2(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleCeil(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleCos(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);
     bool handleDifftime(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);

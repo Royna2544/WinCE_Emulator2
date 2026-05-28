@@ -53,6 +53,11 @@ Current evidence:
   route/image object at `inavi.exe+0x002219a8` (`lw $v0, 0x2c($a0)`,
   `$a0 == 0`) via caller `inavi.exe+0x002225d0`. This should guide generic
   input/modal fidelity work, not an app-specific emulator special case.
+- `captures/inavi_autodrive_20260528_184525` hit the same
+  `inavi.exe+0x002219a8` null-object crash during manual re-search after
+  unsupported `coredll.dll!#992` and `#934` returned `0`. CE 4.2 MIPSII SDK
+  import-object evidence identifies `#992` as `atan2` and `#934` as `Ellipse`;
+  both are now implemented generically in the working tree.
 - `captures/inavi_autodrive_20260525_191308` showed a now-fixed emulator
   regression where empty blocking `GetMessageW` returned `0` and caused MFC to
   enter shutdown/CRT cleanup.
@@ -104,9 +109,11 @@ Status:
 
 - Still not complete, but the route `pc=0` crash, diagnostic companion-kill
   false stall, route-result backlog lag, wrong modal tap coordinate, and stale
-  post-route diagnostic tap are narrowed in the current working tree. Do not
-  hardcode a `MultiTBT` launch. Use real-device evidence or a generic external
-  companion configuration if one is justified.
+  post-route diagnostic tap are narrowed in the current working tree. The
+  `atan2`/`Ellipse` re-search crash fix is built in Debug and awaiting manual
+  validation from `captures/inavi_autodrive_20260528_185552`. Do not hardcode a
+  `MultiTBT` launch. Use real-device evidence or a generic external companion
+  configuration if one is justified.
 
 ## DeviceParser.exe Reaches PC Zero Through CE Exit Thunk
 

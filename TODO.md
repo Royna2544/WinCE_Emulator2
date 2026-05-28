@@ -60,6 +60,12 @@ Last refreshed: 2026-05-28.
      ordering is expected after the owned-popup backing fix, and the live app
      advanced to quick search. The remaining route work is now later guidance
      handoff/state progress, not that dialog being visually covered.
+   - Continue from `captures/inavi_autodrive_20260528_185552`: the current
+     Debug run includes generic `atan2` (`coredll #992`) and `Ellipse`
+     (`coredll #934`) implementations after the previous re-search null-deref
+     at `inavi.exe+0x002219a8`. Manually exercise re-search and confirm those
+     unsupported ordinal warnings and that crash signature are gone before
+     moving on to remaining route-completion waits.
 
 2. Modal and overlay input
    - Make topmost/modal guest windows receive touch first.

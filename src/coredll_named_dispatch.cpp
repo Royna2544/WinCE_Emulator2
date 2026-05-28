@@ -168,6 +168,7 @@ enum class CoredllOrdinal : uint16_t {
     CreatePen = 0x039E,
     CreatePenIndirect = 0x03A2,
     CreateSolidBrush = 0x03A3,
+    Ellipse = 0x03A6,
     FillRect = 0x03A7,
     PatBlt = 0x03AA,
     Polygon = 0x03AB,
@@ -1446,6 +1447,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
         {ord(CoredllOrdinal::SetTextAlign)},
         {ord(CoredllOrdinal::FillRect)},
         {ord(CoredllOrdinal::PatBlt)},
+        {ord(CoredllOrdinal::Ellipse)},
         {ord(CoredllOrdinal::Rectangle)},
         {ord(CoredllOrdinal::MoveToEx)},
         {ord(CoredllOrdinal::LineTo)},
@@ -2653,6 +2655,57 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                 break;
             }
             lastError_ = 0;
+        }
+        break;
+    }
+    case ord(CoredllOrdinal::Ellipse):
+    {
+        GuestDc* dc = lookupGuestDc(a0);
+        auto brush = dc ? brushes_.find(dc->selectedBrush) : brushes_.end();
+        auto pen = dc ? pens_.find(dc->selectedPen) : pens_.end();
+        if (!dc || (brush == brushes_.end() && pen == pens_.end())) {
+            lastError_ = dc ? 87 : 6;
+            ret = 0;
+        } else {
+            const int32_t left = int32_t(a1);
+            const int32_t top = int32_t(a2);
+            const int32_t right = int32_t(a3);
+            const int32_t bottom = int32_t(stackArg(4));
+            const int32_t width = right - left;
+            const int32_t height = bottom - top;
+            if (width <= 0 || height <= 0) {
+                lastError_ = 0;
+                ret = 1;
+                break;
+            }
+
+            constexpr int32_t kEllipseSegments = 72;
+            constexpr double kTwoPi = 6.28318530717958647692;
+            const double centerX = (double(left) + double(right - 1)) * 0.5;
+            const double centerY = (double(top) + double(bottom - 1)) * 0.5;
+            const double radiusX = double(width) * 0.5;
+            const double radiusY = double(height) * 0.5;
+            std::vector<std::pair<int32_t, int32_t>> points;
+            points.reserve(kEllipseSegments);
+            for (int32_t i = 0; i < kEllipseSegments; ++i) {
+                const double angle = kTwoPi * double(i) / double(kEllipseSegments);
+                points.emplace_back(int32_t(std::lround(centerX + std::cos(angle) * radiusX)),
+                                    int32_t(std::lround(centerY + std::sin(angle) * radiusY)));
+            }
+
+            if (brush != brushes_.end() && brush->second.colorRef != 0xffffffffu) {
+                fillDcPolygon(*dc, points, colorRefToPixel(brush->second.colorRef));
+            }
+            if (pen != pens_.end() && pen->second.style != 5 && pen->second.colorRef != 0xffffffffu) {
+                const uint32_t pixel = colorRefToPixel(pen->second.colorRef);
+                for (size_t index = 0; index < points.size(); ++index) {
+                    const auto& from = points[index];
+                    const auto& to = points[(index + 1) % points.size()];
+                    drawDcLine(*dc, from.first, from.second, to.first, to.second, pixel);
+                }
+            }
+            lastError_ = 0;
+            ret = 1;
         }
         break;
     }

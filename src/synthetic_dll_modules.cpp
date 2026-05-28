@@ -149,6 +149,7 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x039E, "CreatePen");
     registerExport(module, 0x03A2, "CreatePenIndirect");
     registerExport(module, 0x03A3, "CreateSolidBrush");
+    registerExport(module, 0x03A6, "Ellipse");
     registerExport(module, 0x03A7, "FillRect");
     registerExport(module, 0x03AA, "PatBlt");
     registerExport(module, 0x03AB, "Polygon");

@@ -60,7 +60,7 @@ static std::optional<std::pair<int, int>>
 parseHostUpscaleTarget(const std::wstring &value) {
   const std::wstring text = lowerWideAscii(value);
   if (text == L"off" || text == L"none" || text == L"native")
-    return std::pair<int, int>{0, 0};
+    return std::pair<int, int>{-1, -1};
   if (text == L"4k" || text == L"uhd" || text == L"2160p")
     return std::pair<int, int>{3840, 2160};
 
@@ -1185,9 +1185,13 @@ int wmain(int argc, wchar_t **argv) {
       spdlog::info("serial map: {}", serialMapPath->string());
     if (!guestCommandLine.empty())
       spdlog::info("guest command line: {}", narrowWideLossy(guestCommandLine));
-    if (hostUpscaleTarget.first > 0 && hostUpscaleTarget.second > 0)
+    if (hostUpscaleTarget.first < 0 || hostUpscaleTarget.second < 0)
+      spdlog::info("host upscale target: off");
+    else if (hostUpscaleTarget.first > 0 && hostUpscaleTarget.second > 0)
       spdlog::info("host upscale target: {}x{}",
                    hostUpscaleTarget.first, hostUpscaleTarget.second);
+    else
+      spdlog::info("host upscale target: dynamic");
     spdlog::info("sdmmc host path: {}", sdmmcHostPath->string());
     for (const auto &dir : dllSearchDirs)
       spdlog::info("dll search dir: {}", dir.string());

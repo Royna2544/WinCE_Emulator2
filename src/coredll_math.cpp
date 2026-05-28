@@ -47,6 +47,7 @@ void SyntheticDllRuntime::registerCoredllMathExports(SyntheticModule& module) {
                     {0x03E1, {"atoi", Code::CoreDllAtoi, &SyntheticDllRuntime::handleAtoi}},
                     {0x03E3, {"atof", Code::CoreDllAtof, &SyntheticDllRuntime::handleAtof}},
                     {0x03DF, {"atan", Code::CoreDllAtan, &SyntheticDllRuntime::handleAtan}},
+                    {0x03E0, {"atan2", Code::CoreDllAtan2, &SyntheticDllRuntime::handleAtan2}},
                     {0x03E7, {"ceil", Code::CoreDllCeil, &SyntheticDllRuntime::handleCeil}},
                     {0x03EC, {"cos", Code::CoreDllCos, &SyntheticDllRuntime::handleCos}},
                     {0x03EE, {"difftime", Code::CoreDllDifftime, &SyntheticDllRuntime::handleDifftime}},
@@ -123,6 +124,13 @@ bool SyntheticDllRuntime::handleAtof(SyntheticExportCode code, const GuestCallAr
 bool SyntheticDllRuntime::handleAtan(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
     (void)code;
     setGuestDoubleReturn(uc_, std::atan(doubleFromGuestPair(args.a0, args.a1)), ret);
+    return true;
+}
+
+bool SyntheticDllRuntime::handleAtan2(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
+    (void)code;
+    setGuestDoubleReturn(uc_, std::atan2(doubleFromGuestPair(args.a0, args.a1),
+                                         doubleFromGuestPair(args.a2, args.a3)), ret);
     return true;
 }
 

@@ -96,6 +96,12 @@ Last refreshed: 2026-05-28.
   alive and responsive after the `_strupr` fix: `MultiTBT` resolves, no parent
   `#1416` unsupported warning appears, and no parent interactive crash appears
   through the route-result capture.
+- `captures/inavi_autodrive_20260528_184525` showed a later re-search crash at
+  `inavi.exe+0x002219a8` after unsupported `coredll.dll!#992` and `#934`
+  returned `0`. CE 4.2 MIPSII SDK import-object evidence identifies `#992` as
+  `atan2` and `#934` as `Ellipse`; the current working tree implements both
+  generic APIs and `captures/inavi_autodrive_20260528_185552` is the fresh
+  Debug run for manual re-search validation.
 - `captures/inavi_autodrive_20260528_132322` verified route/dialog z-order is
   now behaving as expected in Debug after owned-popup backing protection was
   applied to owned-popup framebuffer targets too. The "route method" dialog is
