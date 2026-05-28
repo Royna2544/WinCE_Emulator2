@@ -49,6 +49,19 @@ Last refreshed: 2026-05-28.
 
 ## Recent Fixes
 
+- Release bitmap drawing now avoids the previous per-pixel window ownership,
+  descendant, z-order, and full-screen popup checks on the hot
+  `BitBlt -> bitBltToFramebuffer -> writeFramebufferTargetPixel` path.
+  `bitBltToFramebuffer` precomputes overlapping backing layers once per blit,
+  synthetic dispatch stores resolved ordinal member-function handlers in
+  export entries, and Release builds now target `/arch:AVX512` for the
+  project-standard Zen5 host.
+- `captures/inavi_autodrive_20260528_120140` verified the optimized Release
+  build launches to a valid non-black initial frame with the project autodrive
+  runner.
+- Emulator runs now treat final guest `PC == 0` as a fatal
+  control-flow/resume bug, not a normal successful exit. The runtime still
+  flushes registry/host state before returning failure.
 - Host presentation deferral now also covers normal queued
   `WM_ERASEBKGND`/`WM_PAINT` dispatch, not only synchronous `UpdateWindow`.
   The GDI host presenter now clears only letterbox bands instead of blanking

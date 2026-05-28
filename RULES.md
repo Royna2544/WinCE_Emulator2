@@ -144,7 +144,9 @@ Important MIPS rules:
 - Normal branch/jump: delay slot executes.
 - Branch-likely not taken: delay slot is annulled and must not execute.
 
-If PC becomes `0x0`, treat it as a control-flow/resume/return-address bug unless proven otherwise.
+If PC becomes `0x0`, it is not a normal guest exit. Treat it as an
+emulator control-flow/resume/return-address bug unless proven otherwise, and
+make runtime code fail the run instead of reporting success.
 
 ---
 

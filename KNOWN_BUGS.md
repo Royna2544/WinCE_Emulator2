@@ -215,6 +215,10 @@ Likely areas:
 - Redraw/present frequency and invalidation behavior.
 - Software floating-point overhead for map math.
 - Diagnostic logging volume.
+- The bitmap hot path has a targeted optimization in the current working tree:
+  backing-layer/window checks are now precomputed per blit and synthetic
+  ordinal handlers are cached on export entries. This still needs profiler
+  comparison on the route/map workload.
 
 Status:
 

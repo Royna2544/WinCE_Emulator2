@@ -1039,10 +1039,14 @@ static int runImage(PeImage &pe, const std::vector<fs::path> &dllSearchDirs,
     uc_reg_read(uc, UC_MIPS_REG_RA, &ra);
     spdlog::warn("emulation stopped err={} ({}) pc=0x{:08x} ra=0x{:08x}",
                  int(err), uc_strerror(err), pc, ra);
+    const bool zeroPcBug = pc == 0;
+    if (zeroPcBug) {
+      spdlog::error("fatal: guest PC reached 0; treating as emulator control-flow/resume bug, not normal exit");
+    }
     synthetic.flushRegistry();
     synthetic.runHostMessageLoopUntilClosed(!headless);
     close();
-    return err == UC_ERR_OK ? 0 : 2;
+    return err == UC_ERR_OK && !zeroPcBug ? 0 : 2;
   } catch (...) {
     close();
     throw;

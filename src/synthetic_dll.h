@@ -439,6 +439,7 @@ private:
         std::string name;
         SyntheticModuleKind moduleKind{SyntheticModuleKind::Unknown};
         SyntheticExportCode code{SyntheticExportCode::Unknown};
+        OrdinalHandlerFunction ordinalHandler{};
         uint16_t ordinal{};
         uint64_t calls{};
     };
@@ -912,11 +913,12 @@ private:
     void registerHandlers(SyntheticModule& module, const OrdinalHandlerGroup& group);
     void registerHandlers(SyntheticModule& module, const OrdinalHandlerMap& handlers);
     void registerExport(SyntheticModule& module, uint16_t ordinal, const std::string& name,
-                        SyntheticExportCode code = SyntheticExportCode::Unknown);
+                        SyntheticExportCode code = SyntheticExportCode::Unknown,
+                        OrdinalHandlerFunction ordinalHandler = {});
     void writeStub(uint32_t address);
     SyntheticModuleKind moduleKindForName(const std::string& moduleName) const;
     const OrdinalHandlerSpec* findOrdinalHandler(const ExportEntry& entry) const;
-    void dispatch(const ExportEntry& entry);
+    void dispatch(ExportEntry& entry);
     bool dispatchHostWin32(uint16_t ordinal, const GuestCallArgs& args, uint32_t& ret);
     bool dispatchGuestMemoryApi(uint16_t ordinal, const GuestCallArgs& args, uint32_t& ret);
     bool dispatchSimpleHostWin32(uint16_t ordinal, const GuestCallArgs& args, uint32_t& ret);

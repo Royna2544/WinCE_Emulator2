@@ -79,6 +79,12 @@ Last refreshed: 2026-05-28.
      consistently instead of inventing app-specific state.
 
 6. Performance
+   - Re-profile the optimized Release build after
+     `captures/inavi_autodrive_20260528_120140`. The previous Visual Studio
+     profile showed most sampled time under
+     `bitBltToFramebuffer -> writeFramebufferTargetPixel`, with repeated
+     popup/window/z-order checks and tree iterator overhead; that blit path now
+     precomputes backing layers once per call.
    - Continue live input/UI lag testing after
      `captures/inavi_autodrive_20260528_102413`, where Release launched and
      stayed alive after expanding host erase/paint deferral and removing the

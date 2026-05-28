@@ -1097,9 +1097,9 @@ uint32_t SyntheticDllRuntime::normalizeVirtualFileMiss(const std::filesystem::pa
     return error;
 }
 
-void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
-    auto& mutableEntry = exportsByAddress_[reg(UC_MIPS_REG_PC)];
-    mutableEntry.calls++;
+void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
+    auto& mutableEntry = entry;
+    entry.calls++;
     const std::string name = mutableEntry.name.empty()
         ? ("#" + std::to_string(mutableEntry.ordinal))
         : mutableEntry.name;
@@ -2073,8 +2073,14 @@ void SyntheticDllRuntime::dispatch(const ExportEntry& entry) {
         setReg(UC_MIPS_REG_PC, wndProc);
         return;
     }
-    if (const auto* ordinalHandler = findOrdinalHandler(mutableEntry);
-        ordinalHandler && ordinalHandler->handler) {
+    if (mutableEntry.ordinalHandler) {
+        bool handled = (this->*mutableEntry.ordinalHandler)(mutableEntry.code, args, ret);
+        if (handled) {
+            finishImmediateReturn(ret, true);
+            return;
+        }
+    } else if (const auto* ordinalHandler = findOrdinalHandler(mutableEntry);
+               ordinalHandler && ordinalHandler->handler) {
         bool handled = (this->*ordinalHandler->handler)(ordinalHandler->code, args, ret);
         if (handled) {
             finishImmediateReturn(ret, true);

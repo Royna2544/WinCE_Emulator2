@@ -278,12 +278,13 @@ void SyntheticDllRuntime::registerHandlers(SyntheticModule& module,
     if (dll.name.empty()) dll.name = module.moduleName;
     for (const auto& [ordinal, handler] : handlers) {
         dll.handlers[ordinal] = handler;
-        registerExport(module, ordinal, handler.name ? handler.name : "", handler.code);
+        registerExport(module, ordinal, handler.name ? handler.name : "", handler.code, handler.handler);
     }
 }
 
 void SyntheticDllRuntime::registerExport(SyntheticModule& module, uint16_t ordinal, const std::string& name,
-                                         SyntheticExportCode code) {
+                                         SyntheticExportCode code,
+                                         OrdinalHandlerFunction ordinalHandler) {
     const uint32_t rva = 0x1000 + uint32_t(ordinal) * 8;
     module.exportsByOrdinal[ordinal] = rva;
     if (!name.empty()) {
@@ -295,6 +296,7 @@ void SyntheticDllRuntime::registerExport(SyntheticModule& module, uint16_t ordin
     entry.moduleName = module.moduleName;
     entry.moduleKind = moduleKindForName(module.moduleName);
     entry.code = code;
+    entry.ordinalHandler = ordinalHandler;
     entry.ordinal = ordinal;
     if (!name.empty()) entry.name = name;
     writeStub(address);

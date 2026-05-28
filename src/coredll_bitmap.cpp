@@ -1686,17 +1686,87 @@ bool SyntheticDllRuntime::bitBltToFramebuffer(const GuestDc& dstDc,
     outTop += originY;
     noteGuestWindowPaint(dstDc.hwnd, outLeft, outTop, outLeft + outW, outTop + outH);
 
+    const int32_t clipLeft = std::clamp<int32_t>(outLeft, 0, framebufferWidth_);
+    const int32_t clipTop = std::clamp<int32_t>(outTop, 0, framebufferHeight_);
+    const int32_t clipRight = std::clamp<int32_t>(outLeft + outW, 0, framebufferWidth_);
+    const int32_t clipBottom = std::clamp<int32_t>(outTop + outH, 0, framebufferHeight_);
+    if (clipLeft >= clipRight || clipTop >= clipBottom) {
+        invalidateHostWindows();
+        return true;
+    }
+
+    const bool targetOwnedPopup = dstDc.hwnd && isOwnedPopupWindow(dstDc.hwnd);
+    const bool targetCoversFramebuffer = targetOwnedPopup && guestWindowCoversFramebuffer(dstDc.hwnd);
+    if (dstDc.hwnd && targetOwnedPopup && !targetCoversFramebuffer &&
+        coveringFullScreenOwnedPopup(dstDc.hwnd)) {
+        invalidateHostWindows();
+        return true;
+    }
+
+    struct BackingLayer {
+        GuestWindow* window{};
+        int32_t left{};
+        int32_t top{};
+        int32_t right{};
+        int32_t bottom{};
+    };
+    std::vector<BackingLayer> backingLayers;
+    if (!targetOwnedPopup) {
+        const uint64_t targetZ = dstDc.hwnd ? windowZOrder(dstDc.hwnd) : 0;
+        for (auto& [hwnd, window] : windows_) {
+            if (!window.visible || !window.backingValid || window.backingPixels.empty() ||
+                window.backingWidth <= 0 || window.backingHeight <= 0 ||
+                isWindowOrDescendant(dstDc.hwnd, hwnd)) {
+                continue;
+            }
+            if (dstDc.hwnd && !isOwnedPopupWindow(hwnd) && window.zOrder < targetZ) continue;
+            const int32_t layerLeft = std::max<int32_t>(clipLeft, window.backingX);
+            const int32_t layerTop = std::max<int32_t>(clipTop, window.backingY);
+            const int32_t layerRight = std::min<int32_t>(clipRight, window.backingX + window.backingWidth);
+            const int32_t layerBottom = std::min<int32_t>(clipBottom, window.backingY + window.backingHeight);
+            if (layerLeft < layerRight && layerTop < layerBottom) {
+                backingLayers.push_back(BackingLayer{&window, layerLeft, layerTop, layerRight, layerBottom});
+            }
+        }
+    }
+
+    auto readDestinationPixel = [&](int32_t x, int32_t y) -> uint32_t {
+        for (const BackingLayer& layer : backingLayers) {
+            if (x < layer.left || y < layer.top || x >= layer.right || y >= layer.bottom) continue;
+            const size_t offset = size_t(y - layer.window->backingY) * size_t(layer.window->backingWidth) +
+                                  size_t(x - layer.window->backingX);
+            if (offset < layer.window->backingPixels.size()) return layer.window->backingPixels[offset];
+        }
+        return framebuffer_[size_t(y) * size_t(framebufferWidth_) + size_t(x)];
+    };
+
+    auto writeDestinationPixel = [&](int32_t x, int32_t y, uint32_t pixel) {
+        bool covered = false;
+        for (const BackingLayer& layer : backingLayers) {
+            if (x < layer.left || y < layer.top || x >= layer.right || y >= layer.bottom) continue;
+            const size_t offset = size_t(y - layer.window->backingY) * size_t(layer.window->backingWidth) +
+                                  size_t(x - layer.window->backingX);
+            if (offset < layer.window->backingPixels.size()) {
+                layer.window->backingPixels[offset] = pixel;
+                covered = true;
+            }
+        }
+        if (!covered) framebuffer_[size_t(y) * size_t(framebufferWidth_) + size_t(x)] = pixel;
+    };
+
+    const bool sameScaleX = srcW == outW;
+    const bool sameScaleY = srcH == outH;
     for (int32_t y = 0; y < outH; ++y) {
         const int32_t dstPy = outTop + y;
-        if (dstPy < 0 || dstPy >= framebufferHeight_) continue;
-        const int32_t sy = srcY + (int64_t(y) * srcH) / outH;
+        if (dstPy < clipTop || dstPy >= clipBottom) continue;
+        const int32_t sy = sameScaleY ? srcY + y : srcY + (int64_t(y) * srcH) / outH;
         if (sy < 0 || sy >= bitmapHeight) continue;
         const int32_t rowIndex = topDown ? sy : (bitmapHeight - 1 - sy);
         const uint8_t* row = bits.data() + size_t(rowIndex) * size_t(bitmap.stride);
         for (int32_t x = 0; x < outW; ++x) {
             const int32_t dstPx = outLeft + x;
-            if (dstPx < 0 || dstPx >= framebufferWidth_) continue;
-            const int32_t sx = srcX + (int64_t(x) * srcW) / outW;
+            if (dstPx < clipLeft || dstPx >= clipRight) continue;
+            const int32_t sx = sameScaleX ? srcX + x : srcX + (int64_t(x) * srcW) / outW;
             if (sx < 0 || sx >= bitmap.width) continue;
 
             uint32_t pixel = 0;
@@ -1727,8 +1797,8 @@ bool SyntheticDllRuntime::bitBltToFramebuffer(const GuestDc& dstDc,
             }
             const uint32_t outPixel = rop == 0x00cc0020u
                 ? pixel
-                : applySourceRasterOp(rop, pixel, readFramebufferTargetPixel(dstDc.hwnd, dstPx, dstPy));
-            writeFramebufferTargetPixel(dstDc.hwnd, dstPx, dstPy, outPixel);
+                : applySourceRasterOp(rop, pixel, readDestinationPixel(dstPx, dstPy));
+            writeDestinationPixel(dstPx, dstPy, outPixel);
         }
     }
     invalidateHostWindows();
