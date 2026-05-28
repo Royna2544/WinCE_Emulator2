@@ -927,8 +927,9 @@ private:
     const OrdinalHandlerSpec* findOrdinalHandler(const ExportEntry& entry) const;
     void dispatch(ExportEntry& entry);
     bool dispatchHostWin32(uint16_t ordinal, const GuestCallArgs& args, uint32_t& ret);
+    bool dispatchLargeHostWin32(uint16_t ordinal, const GuestCallArgs& args, uint32_t& ret);
     bool dispatchGuestMemoryApi(uint16_t ordinal, const GuestCallArgs& args, uint32_t& ret);
-    bool dispatchSimpleHostWin32(uint16_t ordinal, const GuestCallArgs& args, uint32_t& ret);
+    bool handleHostSetTimer(const GuestCallArgs& args, uint32_t& ret);
     bool dispatchOle32(const std::string& name, const GuestCallArgs& args, uint32_t& ret);
     bool dispatchOleAut32(const std::string& name, const GuestCallArgs& args, uint32_t& ret);
     bool handleCommctrlInitCommonControls(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret);

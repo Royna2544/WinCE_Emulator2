@@ -391,14 +391,26 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(uint16_t ordinal,
     const uint32_t a3 = args.a3;
     const std::string name = "coredll.ordinal";
 
-    if (ordinal == ord(CoredllOrdinal::CreateBitmap)) return handleCreateBitmap(args, ret);
-    if (ordinal == ord(CoredllOrdinal::GetObjectW)) return handleGetObjectW(args, ret);
-    if (ordinal == ord(CoredllOrdinal::SetDIBColorTable)) return handleSetDIBColorTable(args, ret);
-    if (ordinal == ord(CoredllOrdinal::SetBitmapBits)) return handleSetBitmapBits(args, ret);
-    if (ordinal == ord(CoredllOrdinal::SetDIBitsToDevice)) return handleSetDIBitsToDevice(args, ret);
+    switch (ordinal) {
+    case ord(CoredllOrdinal::CreateBitmap):
+        return handleCreateBitmap(args, ret);
+    case ord(CoredllOrdinal::GetObjectW):
+        return handleGetObjectW(args, ret);
+    case ord(CoredllOrdinal::SetDIBColorTable):
+        return handleSetDIBColorTable(args, ret);
+    case ord(CoredllOrdinal::SetBitmapBits):
+        return handleSetBitmapBits(args, ret);
+    case ord(CoredllOrdinal::SetDIBitsToDevice):
+        return handleSetDIBitsToDevice(args, ret);
 
-    if (ordinal == ord(CoredllOrdinal::CharUpperW) || ordinal == ord(CoredllOrdinal::CharLowerW)) {
-        const bool makeUpper = ordinal == ord(CoredllOrdinal::CharUpperW);
+    case ord(CoredllOrdinal::CharUpperW):
+    case ord(CoredllOrdinal::CharLowerW):
+    {
+        bool makeUpper = false;
+        switch (ordinal) {
+        case ord(CoredllOrdinal::CharUpperW): makeUpper = true; break;
+        default: break;
+        }
         if (a0 <= 0xffffu) {
             ret = uint32_t(makeUpper ? std::towupper(wint_t(a0))
                                      : std::towlower(wint_t(a0)));
@@ -412,7 +424,10 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(uint16_t ordinal,
             }
             ret = a0;
         }
-    } else if (ordinal == ord(CoredllOrdinal::CreatePenIndirect)) {
+        break;
+    }
+    case ord(CoredllOrdinal::CreatePenIndirect):
+    {
         if (!a0) {
             lastError_ = 87;
             ret = 0;
@@ -420,7 +435,10 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(uint16_t ordinal,
             ret = makeGuestPen(readU32(a0), readU32(a0 + 4), readU32(a0 + 12));
             lastError_ = 0;
         }
-    } else if (ordinal == ord(CoredllOrdinal::CreateDIBSection)) {
+        break;
+    }
+    case ord(CoredllOrdinal::CreateDIBSection):
+    {
         if (!a1 || !a3) {
             lastError_ = 87;
             ret = 0;
@@ -481,7 +499,10 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(uint16_t ordinal,
                           ret && bitmaps_.count(ret) ? bitmaps_[ret].blueMask : 0,
                           stride, bits, ret);
         }
-    } else if (ordinal == ord(CoredllOrdinal::CreateCompatibleBitmap)) {
+        break;
+    }
+    case ord(CoredllOrdinal::CreateCompatibleBitmap):
+    {
         const uint32_t width = std::max<uint32_t>(a1, 1);
         const uint32_t height = std::max<uint32_t>(a2, 1);
         const uint32_t bpp = 32;
@@ -495,7 +516,10 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(uint16_t ordinal,
         lastError_ = ret ? 0 : 8;
         spdlog::info("CreateCompatibleBitmap {}x{} bits=0x{:08x} bitmap=0x{:08x}",
                      width, height, bits, ret);
-    } else if (ordinal == ord(CoredllOrdinal::Polygon)) {
+        break;
+    }
+    case ord(CoredllOrdinal::Polygon):
+    {
         GuestDc* dc = lookupGuestDc(a0);
         auto brush = dc ? brushes_.find(dc->selectedBrush) : brushes_.end();
         auto pen = dc ? pens_.find(dc->selectedPen) : pens_.end();
@@ -550,7 +574,10 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(uint16_t ordinal,
             lastError_ = 0;
             ret = 1;
         }
-    } else if (ordinal == ord(CoredllOrdinal::Polyline)) {
+        break;
+    }
+    case ord(CoredllOrdinal::Polyline):
+    {
         GuestDc* dc = lookupGuestDc(a0);
         auto pen = dc ? pens_.find(dc->selectedPen) : pens_.end();
         if (!dc || !a1 || a2 < 2 || pen == pens_.end()) {
@@ -573,7 +600,10 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(uint16_t ordinal,
             lastError_ = 0;
             ret = 1;
         }
-    } else if (ordinal == ord(CoredllOrdinal::GetVersionExW)) {
+        break;
+    }
+    case ord(CoredllOrdinal::GetVersionExW):
+    {
         if (a0) {
             writeU32(a0 + 4, 4);
             writeU32(a0 + 8, 20);
@@ -581,19 +611,31 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(uint16_t ordinal,
             writeU32(a0 + 16, 3);
         }
         ret = a0 ? 1 : 0;
-    } else if (ordinal == ord(CoredllOrdinal::GetAPIAddress)) {
+        break;
+    }
+    case ord(CoredllOrdinal::GetAPIAddress):
+    {
         if (!a0 && !a1 && !a2 && a3 == 0x1c) {
             ret = allocate(0x38, true);
         } else {
             ret = 0;
         }
-    } else if (ordinal == ord(CoredllOrdinal::IsDBCSLeadByteEx)) {
+        break;
+    }
+    case ord(CoredllOrdinal::IsDBCSLeadByteEx):
+    {
         const uint32_t codePage = guestAnsiCodePage(a0);
         const uint8_t ch = uint8_t(a1);
         ret = (codePage == 949 && ch >= 0x81 && ch <= 0xfe) ? 1 : 0;
-    } else if (ordinal == ord(CoredllOrdinal::IsWctype)) {
+        break;
+    }
+    case ord(CoredllOrdinal::IsWctype):
+    {
         ret = 0;
-    } else if (ordinal == ord(CoredllOrdinal::MultiByteToWideChar)) {
+        break;
+    }
+    case ord(CoredllOrdinal::MultiByteToWideChar):
+    {
         const uint32_t wideOut = stackArg(4);
         const uint32_t wideCapacity = stackArg(5);
         const int32_t byteCount = int32_t(a3);
@@ -651,7 +693,9 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(uint16_t ordinal,
             ret = wideOut && wideCapacity ? std::min(needed, wideCapacity) : needed;
 #endif
         }
-    } else {
+        break;
+    }
+    default:
         return false;
     }
 
@@ -1084,29 +1128,23 @@ void SyntheticDllRuntime::pollCrossProcessGuestMessages() {
     }
 }
 
-bool SyntheticDllRuntime::dispatchSimpleHostWin32(uint16_t ordinal,
-                                                  const GuestCallArgs& args,
-                                                  uint32_t& ret) {
+bool SyntheticDllRuntime::handleHostSetTimer(const GuestCallArgs& args,
+                                             uint32_t& ret) {
     const uint32_t a0 = args.a0;
     const uint32_t a1 = args.a1;
     const uint32_t a2 = args.a2;
-    const std::string name = "coredll.ordinal";
 
-    if (ordinal == ord(CoredllOrdinal::SetTimer)) {
-        if (a0 && !windows_.count(a0)) {
-            lastError_ = 1400;
-            ret = 0;
-        } else {
-            const uint32_t timerId = a1 ? a1 : uint32_t(++tick_);
-            const uint32_t interval = std::max<uint32_t>(1, a2);
-            timers_[guestTimerKey(a0, timerId)] = GuestTimer{
-                a0, timerId, interval, args.a3, hostTickMilliseconds() + interval,
-            };
-            lastError_ = 0;
-            ret = timerId;
-        }
+    if (a0 && !windows_.count(a0)) {
+        lastError_ = 1400;
+        ret = 0;
     } else {
-        return false;
+        const uint32_t timerId = a1 ? a1 : uint32_t(++tick_);
+        const uint32_t interval = std::max<uint32_t>(1, a2);
+        timers_[guestTimerKey(a0, timerId)] = GuestTimer{
+            a0, timerId, interval, args.a3, hostTickMilliseconds() + interval,
+        };
+        lastError_ = 0;
+        ret = timerId;
     }
     return true;
 }
@@ -1115,7 +1153,135 @@ bool SyntheticDllRuntime::dispatchSimpleHostWin32(uint16_t ordinal,
 bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
                                             const GuestCallArgs& args,
                                             uint32_t& ret) {
-    if (dispatchSimpleHostWin32(ordinal, args, ret)) return true;
+    switch (ordinal) {
+    case ord(CoredllOrdinal::SetTimer): return handleHostSetTimer(args, ret);
+    case ord(CoredllOrdinal::SystemParametersInfoW):
+        ret = handleSystemParametersInfoW(args.a0, args.a1, args.a2, args.a3);
+        return true;
+    case ord(CoredllOrdinal::GetDeviceCaps):
+        ret = handleGetDeviceCaps(args.a0, args.a1);
+        return true;
+    case ord(CoredllOrdinal::DeviceIoControl):
+        ret = dispatchDeviceIoControl(args.a0, args.a1, args.a2, args.a3);
+        return true;
+    case ord(CoredllOrdinal::WideCharToMultiByte):
+        ret = handleWideCharToMultiByte(args.a0, args.a1, args.a2, args.a3);
+        return true;
+    case ord(CoredllOrdinal::CreateFileMappingW):
+        ret = handleCreateFileMappingW(args.a0, args.a1, args.a2, args.a3);
+        return true;
+    case ord(CoredllOrdinal::MapViewOfFile):
+        ret = handleMapViewOfFile(args.a0, args.a1, args.a2, args.a3);
+        return true;
+    case ord(CoredllOrdinal::UnmapViewOfFile):
+        ret = handleUnmapViewOfFile(args.a0);
+        return true;
+    case ord(CoredllOrdinal::FlushViewOfFile):
+        ret = handleFlushViewOfFile(args.a0, args.a1);
+        return true;
+    default:
+        break;
+    }
+
+    struct HeavyHostWin32Handler {
+        uint16_t ordinal;
+        bool invoke(SyntheticDllRuntime& runtime,
+                    const GuestCallArgs& args,
+                    uint32_t& ret) const {
+            return runtime.dispatchLargeHostWin32(ordinal, args, ret);
+        }
+    };
+    static constexpr HeavyHostWin32Handler heavyHandlers[] = {
+        {ord(CoredllOrdinal::BitBlt)},
+        {ord(CoredllOrdinal::StretchBlt)},
+        {ord(CoredllOrdinal::GetMessageW)},
+        {ord(CoredllOrdinal::GetMessageWNoWait)},
+        {ord(CoredllOrdinal::PeekMessageW)},
+        {ord(CoredllOrdinal::PostMessageW)},
+        {ord(CoredllOrdinal::CreateWindowExW)},
+        {ord(CoredllOrdinal::SetWindowPos)},
+        {ord(CoredllOrdinal::ShowWindow)},
+        {ord(CoredllOrdinal::TransparentImage)},
+        {ord(CoredllOrdinal::StretchDIBits)},
+        {ord(CoredllOrdinal::CreateProcessW)},
+        {ord(CoredllOrdinal::WaitForSingleObject)},
+        {ord(CoredllOrdinal::CreateDialogIndirectParamW)},
+        {ord(CoredllOrdinal::KernelIoControl)},
+        {ord(CoredllOrdinal::GlobalMemoryStatus)},
+        {ord(CoredllOrdinal::CloseHandle)},
+        {ord(CoredllOrdinal::GetModuleFileNameW)},
+        {ord(CoredllOrdinal::OutputDebugStringW)},
+        {ord(CoredllOrdinal::FormatMessageW)},
+        {ord(CoredllOrdinal::LoadLibraryW)},
+        {ord(CoredllOrdinal::GetModuleHandleW)},
+        {ord(CoredllOrdinal::FreeLibrary)},
+        {ord(CoredllOrdinal::GetProcAddressA)},
+        {ord(CoredllOrdinal::GetProcAddressW)},
+        {ord(CoredllOrdinal::RegisterClassW)},
+        {ord(CoredllOrdinal::GetClassInfoW)},
+        {ord(CoredllOrdinal::FindWindowW)},
+        {ord(CoredllOrdinal::GetWindowRect)},
+        {ord(CoredllOrdinal::GetClientRect)},
+        {ord(CoredllOrdinal::InvalidateRect)},
+        {ord(CoredllOrdinal::ClientToScreen)},
+        {ord(CoredllOrdinal::ScreenToClient)},
+        {ord(CoredllOrdinal::KillTimer)},
+        {ord(CoredllOrdinal::CreatePen)},
+        {ord(CoredllOrdinal::CreateSolidBrush)},
+        {ord(CoredllOrdinal::CreateRectRgn)},
+        {ord(CoredllOrdinal::CombineRgn)},
+        {ord(CoredllOrdinal::CreateFontIndirectW)},
+        {ord(CoredllOrdinal::GetStockObject)},
+        {ord(CoredllOrdinal::SelectObject)},
+        {ord(CoredllOrdinal::DeleteObject)},
+        {ord(CoredllOrdinal::SetBkColor)},
+        {ord(CoredllOrdinal::SetTextColor)},
+        {ord(CoredllOrdinal::SetBkMode)},
+        {ord(CoredllOrdinal::SetTextAlign)},
+        {ord(CoredllOrdinal::FillRect)},
+        {ord(CoredllOrdinal::PatBlt)},
+        {ord(CoredllOrdinal::Rectangle)},
+        {ord(CoredllOrdinal::MoveToEx)},
+        {ord(CoredllOrdinal::LineTo)},
+        {ord(CoredllOrdinal::ExtTextOutW)},
+        {ord(CoredllOrdinal::DrawTextW)},
+        {ord(CoredllOrdinal::CreateCompatibleDC)},
+        {ord(CoredllOrdinal::DeleteDC)},
+        {ord(CoredllOrdinal::GetWindowLongW)},
+        {ord(CoredllOrdinal::SetWindowLongW)},
+        {ord(CoredllOrdinal::GetParent)},
+        {ord(CoredllOrdinal::IsWindow)},
+        {ord(CoredllOrdinal::GetWindow)},
+        {ord(CoredllOrdinal::MoveWindow)},
+        {ord(CoredllOrdinal::SetWindowRgn)},
+        {ord(CoredllOrdinal::GetWindowRgn)},
+        {ord(CoredllOrdinal::DestroyWindow)},
+        {ord(CoredllOrdinal::UpdateWindow)},
+        {ord(CoredllOrdinal::DefWindowProcW)},
+        {ord(CoredllOrdinal::GetMessagePos)},
+        {ord(CoredllOrdinal::TranslateMessage)},
+        {ord(CoredllOrdinal::PostQuitMessage)},
+        {ord(CoredllOrdinal::GetSystemInfo)},
+        {ord(CoredllOrdinal::GetStoreInformation)},
+        {ord(CoredllOrdinal::GlobalAddAtomW)},
+        {ord(CoredllOrdinal::GlobalFindAtomW)},
+        {ord(CoredllOrdinal::GlobalDeleteAtom)},
+        {ord(CoredllOrdinal::WNetGetUserW)},
+        {ord(CoredllOrdinal::WNetGetUniversalNameW)},
+        {ord(CoredllOrdinal::WNetConnectionDialog1W)},
+        {ord(CoredllOrdinal::IsDialogMessageW)},
+        {ord(CoredllOrdinal::KernelLibIoControl)},
+    };
+    for (const HeavyHostWin32Handler& handler : heavyHandlers) {
+        if (handler.ordinal == ordinal) return handler.invoke(*this, args, ret);
+    }
+    return false;
+}
+
+
+bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
+                                                 const GuestCallArgs& args,
+                                                 uint32_t& ret) {
 
     const uint32_t a0 = args.a0;
     const uint32_t a1 = args.a1;
@@ -1123,38 +1289,6 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
     const uint32_t a3 = args.a3;
     const uint32_t ra = args.ra;
     const std::string name = "coredll.ordinal";
-    if (ordinal == ord(CoredllOrdinal::SystemParametersInfoW)) {
-        ret = handleSystemParametersInfoW(a0, a1, a2, a3);
-        return true;
-    }
-    if (ordinal == ord(CoredllOrdinal::GetDeviceCaps)) {
-        ret = handleGetDeviceCaps(a0, a1);
-        return true;
-    }
-    if (ordinal == ord(CoredllOrdinal::DeviceIoControl)) {
-        ret = dispatchDeviceIoControl(a0, a1, a2, a3);
-        return true;
-    }
-    if (ordinal == ord(CoredllOrdinal::WideCharToMultiByte)) {
-        ret = handleWideCharToMultiByte(a0, a1, a2, a3);
-        return true;
-    }
-    if (ordinal == ord(CoredllOrdinal::CreateFileMappingW)) {
-        ret = handleCreateFileMappingW(a0, a1, a2, a3);
-        return true;
-    }
-    if (ordinal == ord(CoredllOrdinal::MapViewOfFile)) {
-        ret = handleMapViewOfFile(a0, a1, a2, a3);
-        return true;
-    }
-    if (ordinal == ord(CoredllOrdinal::UnmapViewOfFile)) {
-        ret = handleUnmapViewOfFile(a0);
-        return true;
-    }
-    if (ordinal == ord(CoredllOrdinal::FlushViewOfFile)) {
-        ret = handleFlushViewOfFile(a0, a1);
-        return true;
-    }
     auto getWindowLongValue = [](const GuestWindow& window, int32_t index) -> uint32_t {
         switch (index) {
         case -4: return window.wndProc;  // GWL_WNDPROC
@@ -1205,7 +1339,9 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
         }
         return 0;
     };
-    if (ordinal == ord(CoredllOrdinal::CreateDialogIndirectParamW)) {
+    switch (ordinal) {
+    case ord(CoredllOrdinal::CreateDialogIndirectParamW):
+    {
         auto read16 = [&](uint32_t address) -> uint16_t {
             uint16_t value = 0;
             if (address) uc_mem_read(uc_, address, &value, sizeof(value));
@@ -1306,8 +1442,8 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
                      x, y, width, height, itemCount, menuName);
         return true;
     }
-
-    if (ordinal == ord(CoredllOrdinal::IsDialogMessageW)) {
+    case ord(CoredllOrdinal::IsDialogMessageW):
+    {
         // CE/MFC uses this in PreTranslateMessage. The emulator queues and
         // dispatches messages itself, so only report that the message was not
         // consumed by dialog navigation.
@@ -1315,7 +1451,8 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
         lastError_ = windows_.count(a0) || !a0 ? 0 : 1400;
         return true;
     }
-    if (ordinal == ord(CoredllOrdinal::KernelIoControl)) {
+    case ord(CoredllOrdinal::KernelIoControl):
+    {
         const uint32_t outPtr = a3;
         const uint32_t outSize = stackArg(4);
         const uint32_t bytesReturnedPtr = stackArg(5);
@@ -1410,10 +1547,16 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
         }
         spdlog::info("KernelIoControl code=0x{:08x} device=0x{:04x} function=0x{:03x} method={} access={} out=0x{:08x} outSize={} bytesReturned=0x{:08x} -> {} lastError={}",
                      a0, device, function, method, access, outPtr, outSize, bytesReturnedPtr, ret, lastError_);
-    } else if (ordinal == ord(CoredllOrdinal::KernelLibIoControl)) {
+        break;
+    }
+    case ord(CoredllOrdinal::KernelLibIoControl):
+    {
         lastError_ = 120;
         ret = 0;
-    } else if (ordinal == ord(CoredllOrdinal::GlobalMemoryStatus)) {
+        break;
+    }
+    case ord(CoredllOrdinal::GlobalMemoryStatus):
+    {
         if (!a0) {
             lastError_ = 87;
             ret = 0;
@@ -1443,7 +1586,10 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             ret = 0;
             lastError_ = 0;
         }
-    } else if (ordinal == ord(CoredllOrdinal::CloseHandle)) {
+        break;
+    }
+    case ord(CoredllOrdinal::CloseHandle):
+    {
         auto debugName = fileHandleDebugNames_.find(a0);
         const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
         const std::string lowerPath = lowerAscii(debugPath);
@@ -1458,7 +1604,10 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
                          scannedRecords, recordCount, ra);
         }
         ret = closeGuestHandle(a0);
-    } else if (ordinal == ord(CoredllOrdinal::WaitForSingleObject)) {
+        break;
+    }
+    case ord(CoredllOrdinal::WaitForSingleObject):
+    {
         auto* handle = lookupGuestHandle(a0);
         const auto isHostWaitable = [](const GuestHandle& guestHandle) {
             if (!guestHandle.hostValue) return false;
@@ -1546,7 +1695,10 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             ret = handle ? 0 : 0xffffffffu;
             if (!handle) lastError_ = 6;
         }
-    } else if (ordinal == ord(CoredllOrdinal::CreateProcessW)) {
+        break;
+    }
+    case ord(CoredllOrdinal::CreateProcessW):
+    {
         const std::string application = readUtf16(a0, 2048);
         const std::string commandLine = readUtf16(a1, 4096);
         const uint32_t processInfo = stackArg(9);
@@ -1736,7 +1888,10 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
         }
         spdlog::info("CreateProcessW app=\"{}\" host=\"{}\" cmd=\"{}\" pi=0x{:08x} -> {} lastError={}",
                      application, pathToUtf8(hostApplication), commandLine, processInfo, ret, lastError_);
-    } else if (ordinal == ord(CoredllOrdinal::GetModuleFileNameW)) {
+        break;
+    }
+    case ord(CoredllOrdinal::GetModuleFileNameW):
+    {
         std::string modulePath = currentProcessModulePath();
         if (a0) {
             if (a0 == currentProcessModuleBase()) {
@@ -1750,10 +1905,16 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
         lastError_ = ret ? 0 : 122;
         spdlog::info("GetModuleFileNameW module=0x{:08x} path=\"{}\" chars={} lastError={}",
                      a0, modulePath, ret, lastError_);
-    } else if (ordinal == ord(CoredllOrdinal::OutputDebugStringW)) {
+        break;
+    }
+    case ord(CoredllOrdinal::OutputDebugStringW):
+    {
         spdlog::info("OutputDebugStringW: {}", readUtf16(a0));
         ret = 0;
-    } else if (ordinal == ord(CoredllOrdinal::FormatMessageW)) {
+        break;
+    }
+    case ord(CoredllOrdinal::FormatMessageW):
+    {
         const uint32_t bufferPtr = stackArg(4);
         const uint32_t capacity = stackArg(5);
         std::string message = "Error " + std::to_string(a2);
@@ -1776,7 +1937,16 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             ret = bufferPtr && capacity ? writeUtf16(bufferPtr, message, capacity) : 0;
         }
         lastError_ = ret ? 0 : 122;
-    } else if (ordinal == ord(CoredllOrdinal::LoadLibraryW) || ordinal == ord(CoredllOrdinal::GetModuleHandleW)) {
+        break;
+    }
+    case ord(CoredllOrdinal::LoadLibraryW):
+    case ord(CoredllOrdinal::GetModuleHandleW):
+    {
+        bool loadLibraryCall = false;
+        switch (ordinal) {
+        case ord(CoredllOrdinal::LoadLibraryW): loadLibraryCall = true; break;
+        default: break;
+        }
         const std::string requested = readUtf16(a0);
         const std::string pathKey = lowerAscii(requested);
         const std::string nameKey = lowerAscii(pathToUtf8(pathFromUtf8(requested).filename()));
@@ -1786,7 +1956,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             ret = it->second.base;
         } else if (auto it = loadedModulesByName_.find(nameKey); it != loadedModulesByName_.end()) {
             ret = it->second.base;
-        } else if (ordinal == ord(CoredllOrdinal::LoadLibraryW)) {
+        } else if (loadLibraryCall) {
             if (auto syntheticModule = createModule(nameKey)) {
                 registerLoadedModule(syntheticModule->moduleName,
                                      std::filesystem::path("[synthetic]") / syntheticModule->moduleName,
@@ -1803,14 +1973,26 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
         }
         spdlog::info("{} requested=\"{}\" -> 0x{:08x}", name, requested, ret);
         lastError_ = ret ? 0 : 126;
-    } else if (ordinal == ord(CoredllOrdinal::FreeLibrary)) {
+        break;
+    }
+    case ord(CoredllOrdinal::FreeLibrary):
+    {
         // Keep loaded images resident for the emulator lifetime. CE callers use
         // FreeLibrary on modules they dynamically probe; success here preserves
         // loader semantics without invalidating already-bound guest code.
         ret = loadedModulesByBase_.count(a0) ? 1 : 0;
         lastError_ = ret ? 0 : 126;
         spdlog::info("FreeLibrary module=0x{:08x} -> {}", a0, ret);
-    } else if (ordinal == ord(CoredllOrdinal::GetProcAddressA) || ordinal == ord(CoredllOrdinal::GetProcAddressW)) {
+        break;
+    }
+    case ord(CoredllOrdinal::GetProcAddressA):
+    case ord(CoredllOrdinal::GetProcAddressW):
+    {
+        bool wideProcName = false;
+        switch (ordinal) {
+        case ord(CoredllOrdinal::GetProcAddressW): wideProcName = true; break;
+        default: break;
+        }
         ret = 0;
         auto module = loadedModulesByBase_.find(a0);
         if (module != loadedModulesByBase_.end()) {
@@ -1820,7 +2002,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
                 spdlog::info("{} module=0x{:08x} ordinal={} -> 0x{:08x}",
                              name, a0, a1, ret);
             } else {
-                const std::string proc = ordinal == ord(CoredllOrdinal::GetProcAddressW) ? readUtf16(a1) : readAscii(a1, 256);
+                const std::string proc = wideProcName ? readUtf16(a1) : readAscii(a1, 256);
                 auto exported = module->second.exportsByName.find(lowerAscii(proc));
                 if (exported != module->second.exportsByName.end()) ret = module->second.base + exported->second;
                 spdlog::info("{} module=0x{:08x} proc=\"{}\" -> 0x{:08x}",
@@ -1828,7 +2010,10 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             }
         }
         lastError_ = ret ? 0 : 127;
-    } else if (ordinal == ord(CoredllOrdinal::RegisterClassW)) {
+        break;
+    }
+    case ord(CoredllOrdinal::RegisterClassW):
+    {
         std::array<uint8_t, 40> bytes{};
         if (!a0 || uc_mem_read(uc_, a0, bytes.data(), bytes.size()) != UC_ERR_OK) {
             lastError_ = 87;
@@ -1855,7 +2040,10 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             spdlog::info("RegisterClassW class=\"{}\" atom=0x{:04x}", className, ret);
             lastError_ = 0;
         }
-    } else if (ordinal == ord(CoredllOrdinal::GetClassInfoW)) {
+        break;
+    }
+    case ord(CoredllOrdinal::GetClassInfoW):
+    {
         std::string className;
         if (a1 < 0x10000) {
             auto it = windowClassNamesByAtom_.find(uint16_t(a1));
@@ -1872,7 +2060,10 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = 1411;
             ret = 0;
         }
-    } else if (ordinal == ord(CoredllOrdinal::FindWindowW)) {
+        break;
+    }
+    case ord(CoredllOrdinal::FindWindowW):
+    {
         ret = 0;
         const std::string className = a0 < 0x10000
             ? (windowClassNamesByAtom_.count(uint16_t(a0)) ? windowClassNamesByAtom_[uint16_t(a0)] : std::string{})
@@ -1892,7 +2083,10 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
         lastError_ = ret ? 0 : 1400;
         spdlog::info("FindWindowW class=\"{}\" title=\"{}\" -> 0x{:08x} lastError={}",
                      a0 ? className : std::string{}, a1 ? title : std::string{}, ret, lastError_);
-    } else if (ordinal == ord(CoredllOrdinal::CreateWindowExW)) {
+        break;
+    }
+    case ord(CoredllOrdinal::CreateWindowExW):
+    {
         std::string className;
         if (a1 < 0x10000) {
             auto it = windowClassNamesByAtom_.find(uint16_t(a1));
@@ -1973,7 +2167,10 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
         size.time = uint32_t(++tick_ * 16);
         guestMessages_.push_back(size);
         lastError_ = 0;
-    } else if (ordinal == ord(CoredllOrdinal::GetWindowRect)) {
+        break;
+    }
+    case ord(CoredllOrdinal::GetWindowRect):
+    {
         auto it = windows_.find(a0);
         if (!a1 || it == windows_.end()) {
             lastError_ = it == windows_.end() ? 1400 : 87;
@@ -1984,7 +2181,10 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = 0;
             ret = 1;
         }
-    } else if (ordinal == ord(CoredllOrdinal::GetClientRect)) {
+        break;
+    }
+    case ord(CoredllOrdinal::GetClientRect):
+    {
         auto it = windows_.find(a0);
         if (!a1 || it == windows_.end()) {
             lastError_ = it == windows_.end() ? 1400 : 87;
@@ -1994,7 +2194,10 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = 0;
             ret = 1;
         }
-    } else if (ordinal == ord(CoredllOrdinal::InvalidateRect)) {
+        break;
+    }
+    case ord(CoredllOrdinal::InvalidateRect):
+    {
         const uint32_t target = a0 ? a0 : firstWindow();
         if (!target || !windows_.count(target)) {
             lastError_ = 1400;
@@ -2004,8 +2207,11 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = 0;
             ret = 1;
         }
-    } else if (ordinal == ord(CoredllOrdinal::ClientToScreen) ||
-               ordinal == ord(CoredllOrdinal::ScreenToClient)) {
+        break;
+    }
+    case ord(CoredllOrdinal::ClientToScreen):
+    case ord(CoredllOrdinal::ScreenToClient):
+    {
         auto it = windows_.find(a0);
         if (!a1 || it == windows_.end()) {
             lastError_ = it == windows_.end() ? 1400 : 87;
@@ -2014,17 +2220,23 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             int32_t x = int32_t(readU32(a1));
             int32_t y = int32_t(readU32(a1 + 4));
             const auto [originX, originY] = windowOrigin(a0);
-            if (ordinal == ord(CoredllOrdinal::ClientToScreen)) {
+            switch (ordinal) {
+            case ord(CoredllOrdinal::ClientToScreen):
                 writeU32(a1, uint32_t(x + originX));
                 writeU32(a1 + 4, uint32_t(y + originY));
-            } else {
+                break;
+            default:
                 writeU32(a1, uint32_t(x - originX));
                 writeU32(a1 + 4, uint32_t(y - originY));
+                break;
             }
             lastError_ = 0;
             ret = 1;
         }
-    } else if (ordinal == ord(CoredllOrdinal::KillTimer)) {
+        break;
+    }
+    case ord(CoredllOrdinal::KillTimer):
+    {
         if (a0 && !windows_.count(a0)) {
             lastError_ = 1400;
             ret = 0;
@@ -2033,13 +2245,22 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = 0;
             ret = 1;
         }
-    } else if (ordinal == ord(CoredllOrdinal::CreatePen)) {
+        break;
+    }
+    case ord(CoredllOrdinal::CreatePen):
+    {
         ret = makeGuestPen(a0, a1, a2);
         lastError_ = 0;
-    } else if (ordinal == ord(CoredllOrdinal::CreateSolidBrush)) {
+        break;
+    }
+    case ord(CoredllOrdinal::CreateSolidBrush):
+    {
         ret = makeGuestBrush(a0);
         lastError_ = 0;
-    } else if (ordinal == ord(CoredllOrdinal::CreateRectRgn)) {
+        break;
+    }
+    case ord(CoredllOrdinal::CreateRectRgn):
+    {
 #if defined(_WIN32)
         HRGN region = CreateRectRgn(int(a0), int(a1), int(a2), int(a3));
         ret = region ? makeGuestHandle({GuestHandle::Kind::HostRegion, reinterpret_cast<uintptr_t>(region), 0}) : 0;
@@ -2048,7 +2269,10 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
         ret = makeGuestHandle({GuestHandle::Kind::HostRegion, 0, 0});
         lastError_ = ret ? 0 : 8;
 #endif
-    } else if (ordinal == ord(CoredllOrdinal::CombineRgn)) {
+        break;
+    }
+    case ord(CoredllOrdinal::CombineRgn):
+    {
 #if defined(_WIN32)
         auto dest = guestHandles_.find(a0);
         auto src1 = guestHandles_.find(a1);
@@ -2075,7 +2299,10 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
         ret = 0;
         lastError_ = 120;
 #endif
-    } else if (ordinal == ord(CoredllOrdinal::CreateFontIndirectW)) {
+        break;
+    }
+    case ord(CoredllOrdinal::CreateFontIndirectW):
+    {
         std::array<uint8_t, 92> font{};
         if (!a0 || uc_mem_read(uc_, a0, font.data(), font.size()) != UC_ERR_OK) {
             lastError_ = 87;
@@ -2084,10 +2311,16 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             ret = makeGuestFont(font);
             lastError_ = 0;
         }
-    } else if (ordinal == ord(CoredllOrdinal::GetStockObject)) {
+        break;
+    }
+    case ord(CoredllOrdinal::GetStockObject):
+    {
         ret = makeStockObject(int32_t(a0));
         lastError_ = ret ? 0 : 87;
-    } else if (ordinal == ord(CoredllOrdinal::SelectObject)) {
+        break;
+    }
+    case ord(CoredllOrdinal::SelectObject):
+    {
         GuestDc* dc = lookupGuestDc(a0);
         auto object = guestHandles_.find(a1);
         if (!dc || object == guestHandles_.end()) {
@@ -2113,7 +2346,10 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = 6;
             ret = 0;
         }
-    } else if (ordinal == ord(CoredllOrdinal::DeleteObject)) {
+        break;
+    }
+    case ord(CoredllOrdinal::DeleteObject):
+    {
         auto object = guestHandles_.find(a0);
         if (object == guestHandles_.end()) {
             lastError_ = 6;
@@ -2180,32 +2416,42 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = 6;
             ret = 0;
         }
-    } else if (ordinal == ord(CoredllOrdinal::SetBkColor) ||
-               ordinal == ord(CoredllOrdinal::SetTextColor) ||
-               ordinal == ord(CoredllOrdinal::SetBkMode) ||
-               ordinal == ord(CoredllOrdinal::SetTextAlign)) {
+        break;
+    }
+    case ord(CoredllOrdinal::SetBkColor):
+    case ord(CoredllOrdinal::SetTextColor):
+    case ord(CoredllOrdinal::SetBkMode):
+    case ord(CoredllOrdinal::SetTextAlign):
+    {
         GuestDc* dc = lookupGuestDc(a0);
         if (!dc) {
             lastError_ = 6;
             ret = 0xffffffffu;
-        } else if (ordinal == ord(CoredllOrdinal::SetBkColor)) {
-            ret = dc->bkColor;
-            dc->bkColor = a1;
-            lastError_ = 0;
-        } else if (ordinal == ord(CoredllOrdinal::SetTextColor)) {
-            ret = dc->textColor;
-            dc->textColor = a1;
-            lastError_ = 0;
-        } else if (ordinal == ord(CoredllOrdinal::SetBkMode)) {
-            ret = dc->bkMode;
-            dc->bkMode = a1;
-            lastError_ = 0;
         } else {
-            ret = dc->textAlign;
-            dc->textAlign = a1;
+            switch (ordinal) {
+            case ord(CoredllOrdinal::SetBkColor):
+                ret = dc->bkColor;
+                dc->bkColor = a1;
+                break;
+            case ord(CoredllOrdinal::SetTextColor):
+                ret = dc->textColor;
+                dc->textColor = a1;
+                break;
+            case ord(CoredllOrdinal::SetBkMode):
+                ret = dc->bkMode;
+                dc->bkMode = a1;
+                break;
+            default:
+                ret = dc->textAlign;
+                dc->textAlign = a1;
+                break;
+            }
             lastError_ = 0;
         }
-    } else if (ordinal == ord(CoredllOrdinal::FillRect)) {
+        break;
+    }
+    case ord(CoredllOrdinal::FillRect):
+    {
         GuestDc* dc = lookupGuestDc(a0);
         int32_t left = 0, top = 0, right = 0, bottom = 0;
         auto brush = brushes_.find(a2);
@@ -2223,7 +2469,10 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = 0;
             ret = 1;
         }
-    } else if (ordinal == ord(CoredllOrdinal::PatBlt)) {
+        break;
+    }
+    case ord(CoredllOrdinal::PatBlt):
+    {
         GuestDc* dc = lookupGuestDc(a0);
         auto brush = dc ? brushes_.find(dc->selectedBrush) : brushes_.end();
         const uint32_t rop = stackArg(5);
@@ -2245,7 +2494,10 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = 0;
             ret = 1;
         }
-    } else if (ordinal == ord(CoredllOrdinal::Rectangle)) {
+        break;
+    }
+    case ord(CoredllOrdinal::Rectangle):
+    {
         GuestDc* dc = lookupGuestDc(a0);
         auto brush = dc ? brushes_.find(dc->selectedBrush) : brushes_.end();
         auto pen = dc ? pens_.find(dc->selectedPen) : pens_.end();
@@ -2270,7 +2522,10 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = 0;
             ret = 1;
         }
-    } else if (ordinal == ord(CoredllOrdinal::MoveToEx)) {
+        break;
+    }
+    case ord(CoredllOrdinal::MoveToEx):
+    {
         GuestDc* dc = lookupGuestDc(a0);
         if (!dc) {
             lastError_ = 6;
@@ -2285,7 +2540,10 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = 0;
             ret = 1;
         }
-    } else if (ordinal == ord(CoredllOrdinal::LineTo)) {
+        break;
+    }
+    case ord(CoredllOrdinal::LineTo):
+    {
         GuestDc* dc = lookupGuestDc(a0);
         auto pen = dc ? pens_.find(dc->selectedPen) : pens_.end();
         if (!dc || pen == pens_.end()) {
@@ -2301,7 +2559,10 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = 0;
             ret = 1;
         }
-    } else if (ordinal == ord(CoredllOrdinal::StretchDIBits)) {
+        break;
+    }
+    case ord(CoredllOrdinal::StretchDIBits):
+    {
         GuestDc* dc = lookupGuestDc(a0);
         if (!dc) {
             lastError_ = 6;
@@ -2339,7 +2600,10 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
                 ret = 0xffffffffu;
             }
         }
-    } else if (ordinal == ord(CoredllOrdinal::TransparentImage)) {
+        break;
+    }
+    case ord(CoredllOrdinal::TransparentImage):
+    {
         GuestDc* dstDc = lookupGuestDc(a0);
         GuestDc* srcDc = lookupGuestDc(stackArg(5));
         auto srcBitmap = srcDc ? bitmaps_.find(srcDc->selectedBitmap) : bitmaps_.end();
@@ -2447,13 +2711,21 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = ok ? 0 : 120;
             ret = ok ? 1 : 0;
         }
-    } else if (ordinal == ord(CoredllOrdinal::ExtTextOutW) || ordinal == ord(CoredllOrdinal::DrawTextW)) {
+        break;
+    }
+    case ord(CoredllOrdinal::ExtTextOutW):
+    case ord(CoredllOrdinal::DrawTextW):
+    {
         GuestDc* dc = lookupGuestDc(a0);
         if (!dc) {
             lastError_ = 6;
             ret = 0;
         } else {
-            const bool drawTextCall = ordinal == ord(CoredllOrdinal::DrawTextW);
+            bool drawTextCall = false;
+            switch (ordinal) {
+            case ord(CoredllOrdinal::DrawTextW): drawTextCall = true; break;
+            default: break;
+            }
             const bool ok = drawTextCall
                 ? drawHostTextToDc(*dc, 0, 0, 0, a3, a1, int32_t(a2), stackArg(4), true)
                 : drawHostTextToDc(*dc, int32_t(a1), int32_t(a2), a3, stackArg(4),
@@ -2461,13 +2733,19 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = ok ? 0 : 120;
             ret = ok ? 1 : 0;
         }
-    } else if (ordinal == ord(CoredllOrdinal::CreateCompatibleDC)) {
+        break;
+    }
+    case ord(CoredllOrdinal::CreateCompatibleDC):
+    {
         ret = makeGuestDc(0);
         if (GuestDc* dc = lookupGuestDc(ret)) {
             dc->selectedBitmap = makeStockObject(21); // DEFAULT_BITMAP
         }
         lastError_ = ret ? 0 : 8;
-    } else if (ordinal == ord(CoredllOrdinal::DeleteDC)) {
+        break;
+    }
+    case ord(CoredllOrdinal::DeleteDC):
+    {
         auto handle = guestHandles_.find(a0);
         if (handle == guestHandles_.end() || handle->second.kind != GuestHandle::Kind::GuestDc) {
             lastError_ = 6;
@@ -2478,10 +2756,18 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = 0;
             ret = 1;
         }
-    } else if (ordinal == ord(CoredllOrdinal::BitBlt) || ordinal == ord(CoredllOrdinal::StretchBlt)) {
+        break;
+    }
+    case ord(CoredllOrdinal::BitBlt):
+    case ord(CoredllOrdinal::StretchBlt):
+    {
         GuestDc* dstDc = lookupGuestDc(a0);
         GuestDc* srcDc = lookupGuestDc(stackArg(5));
-        const bool stretch = ordinal == ord(CoredllOrdinal::StretchBlt);
+        bool stretch = false;
+        switch (ordinal) {
+        case ord(CoredllOrdinal::StretchBlt): stretch = true; break;
+        default: break;
+        }
         const uint32_t rop = stretch ? stackArg(10) : stackArg(8);
         const int32_t dstW = int32_t(a3);
         const int32_t dstH = int32_t(stackArg(4));
@@ -2641,7 +2927,10 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = ok ? 0 : 120;
             ret = ok ? 1 : 0;
         }
-    } else if (ordinal == ord(CoredllOrdinal::GetWindowLongW)) {
+        break;
+    }
+    case ord(CoredllOrdinal::GetWindowLongW):
+    {
         auto it = windows_.find(a0);
         if (it == windows_.end() || it->second.destroyed) {
             lastError_ = 1400;
@@ -2655,7 +2944,10 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
                              a0, it->second.className, int32_t(a1), ret);
             }
         }
-    } else if (ordinal == ord(CoredllOrdinal::SetWindowLongW)) {
+        break;
+    }
+    case ord(CoredllOrdinal::SetWindowLongW):
+    {
         auto it = windows_.find(a0);
         if (it == windows_.end() || it->second.destroyed) {
             lastError_ = 1400;
@@ -2669,7 +2961,10 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
                              a0, it->second.className, int32_t(a1), a2, ret);
             }
         }
-    } else if (ordinal == ord(CoredllOrdinal::GetParent)) {
+        break;
+    }
+    case ord(CoredllOrdinal::GetParent):
+    {
         auto it = windows_.find(a0);
         if (it == windows_.end() || it->second.destroyed) {
             lastError_ = 1400;
@@ -2678,11 +2973,17 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = 0;
             ret = it->second.parent;
         }
-    } else if (ordinal == ord(CoredllOrdinal::IsWindow)) {
+        break;
+    }
+    case ord(CoredllOrdinal::IsWindow):
+    {
         auto it = windows_.find(a0);
         ret = it != windows_.end() && !it->second.destroyed ? 1 : 0;
         lastError_ = 0;
-    } else if (ordinal == ord(CoredllOrdinal::GetWindow)) {
+        break;
+    }
+    case ord(CoredllOrdinal::GetWindow):
+    {
         auto it = windows_.find(a0);
         if (it == windows_.end() || it->second.destroyed) {
             lastError_ = 1400;
@@ -2719,7 +3020,10 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = 1400;
             ret = 0;
         }
-    } else if (ordinal == ord(CoredllOrdinal::MoveWindow)) {
+        break;
+    }
+    case ord(CoredllOrdinal::MoveWindow):
+    {
         auto it = windows_.find(a0);
         if (it == windows_.end() || it->second.destroyed) {
             lastError_ = 1400;
@@ -2746,7 +3050,10 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = 0;
             ret = 1;
         }
-    } else if (ordinal == ord(CoredllOrdinal::SetWindowPos)) {
+        break;
+    }
+    case ord(CoredllOrdinal::SetWindowPos):
+    {
         auto it = windows_.find(a0);
         if (it == windows_.end() || it->second.destroyed) {
             lastError_ = 1400;
@@ -2819,7 +3126,10 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = 0;
             ret = 1;
         }
-    } else if (ordinal == ord(CoredllOrdinal::SetWindowRgn)) {
+        break;
+    }
+    case ord(CoredllOrdinal::SetWindowRgn):
+    {
         auto it = windows_.find(a0);
         if (it == windows_.end()) {
             lastError_ = 1400;
@@ -2852,7 +3162,10 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = 0;
 #endif
         }
-    } else if (ordinal == ord(CoredllOrdinal::GetWindowRgn)) {
+        break;
+    }
+    case ord(CoredllOrdinal::GetWindowRgn):
+    {
         auto it = windows_.find(a0);
         if (it == windows_.end()) {
             lastError_ = 1400;
@@ -2874,7 +3187,10 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = 0;
 #endif
         }
-    } else if (ordinal == ord(CoredllOrdinal::DestroyWindow)) {
+        break;
+    }
+    case ord(CoredllOrdinal::DestroyWindow):
+    {
         auto it = windows_.find(a0);
         if (it == windows_.end() || it->second.destroyed) {
             lastError_ = 1400;
@@ -2912,7 +3228,10 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = 0;
             ret = 1;
         }
-    } else if (ordinal == ord(CoredllOrdinal::ShowWindow)) {
+        break;
+    }
+    case ord(CoredllOrdinal::ShowWindow):
+    {
         auto it = windows_.find(a0);
         if (it == windows_.end() || it->second.destroyed) {
             lastError_ = 1400;
@@ -2991,7 +3310,10 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = 0;
             ret = wasVisible ? 1 : 0;
         }
-    } else if (ordinal == ord(CoredllOrdinal::UpdateWindow)) {
+        break;
+    }
+    case ord(CoredllOrdinal::UpdateWindow):
+    {
         auto it = windows_.find(a0);
         if (it == windows_.end() || it->second.destroyed) {
             lastError_ = 1400;
@@ -3002,7 +3324,10 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = 0;
             ret = 1;
         }
-    } else if (ordinal == ord(CoredllOrdinal::DefWindowProcW)) {
+        break;
+    }
+    case ord(CoredllOrdinal::DefWindowProcW):
+    {
         if (a1 == 0x0081) { // WM_NCCREATE defaults to TRUE.
             ret = 1;
         } else if (a1 == 0x000c) { // WM_SETTEXT
@@ -3036,11 +3361,20 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
         } else {
             ret = 0;
         }
-    } else if (ordinal == ord(CoredllOrdinal::GetMessagePos)) {
+        break;
+    }
+    case ord(CoredllOrdinal::GetMessagePos):
+    {
         ret = lastMessagePos_;
-    } else if (ordinal == ord(CoredllOrdinal::TranslateMessage)) {
+        break;
+    }
+    case ord(CoredllOrdinal::TranslateMessage):
+    {
         ret = a0 ? 1 : 0;
-    } else if (ordinal == ord(CoredllOrdinal::PostQuitMessage)) {
+        break;
+    }
+    case ord(CoredllOrdinal::PostQuitMessage):
+    {
         quitPosted_ = true;
         std::string visibleRoots;
         for (const auto& [hwnd, window] : windows_) {
@@ -3059,7 +3393,10 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
         guestMessages_.push_back(message);
         wakeGuestThreadsWaitingForMessage();
         ret = 0;
-    } else if (ordinal == ord(CoredllOrdinal::PostMessageW)) {
+        break;
+    }
+    case ord(CoredllOrdinal::PostMessageW):
+    {
         auto logPostMessagePointer = [&](const char* label, uint32_t ptr) {
             if (!ptr) return;
             uint32_t readablePtr = ptr;
@@ -3185,11 +3522,21 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             }
         }
         if (ret) wakeGuestThreadsWaitingForMessage();
-    } else if (ordinal == ord(CoredllOrdinal::GetMessageW) ||
-               ordinal == ord(CoredllOrdinal::GetMessageWNoWait) ||
-               ordinal == ord(CoredllOrdinal::PeekMessageW)) {
-        const bool peek = ordinal == ord(CoredllOrdinal::PeekMessageW) ||
-                          ordinal == ord(CoredllOrdinal::GetMessageWNoWait);
+        break;
+    }
+    case ord(CoredllOrdinal::GetMessageW):
+    case ord(CoredllOrdinal::GetMessageWNoWait):
+    case ord(CoredllOrdinal::PeekMessageW):
+    {
+        bool peek = false;
+        switch (ordinal) {
+        case ord(CoredllOrdinal::PeekMessageW):
+        case ord(CoredllOrdinal::GetMessageWNoWait):
+            peek = true;
+            break;
+        default:
+            break;
+        }
         const uint32_t removeFlags = peek ? stackArg(4) : 1;
         pollCrossProcessGuestMessages();
         enqueueDueTimers();
@@ -3287,7 +3634,10 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             }
             ret = 1;
         }
-    } else if (ordinal == ord(CoredllOrdinal::GetSystemInfo)) {
+        break;
+    }
+    case ord(CoredllOrdinal::GetSystemInfo):
+    {
         if (a0) {
             writeU32(a0, 0); // wProcessorArchitecture + wReserved
             writeU32(a0 + 4, 0x1000);
@@ -3301,13 +3651,19 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             writeU32(a0 + 36, 0);
         }
         ret = 0;
-    } else if (ordinal == ord(CoredllOrdinal::GetStoreInformation)) {
+        break;
+    }
+    case ord(CoredllOrdinal::GetStoreInformation):
+    {
         if (a0) {
             writeU32(a0, 64u * 1024u * 1024u);
             writeU32(a0 + 4, 32u * 1024u * 1024u);
         }
         ret = a0 ? 1 : 0;
-    } else if (ordinal == ord(CoredllOrdinal::GlobalAddAtomW)) {
+        break;
+    }
+    case ord(CoredllOrdinal::GlobalAddAtomW):
+    {
         const std::string atomName = lowerAscii(readUtf16(a0));
         if (atomName.empty()) {
             lastError_ = 87;
@@ -3322,12 +3678,18 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
             lastError_ = 0;
             ret = it->second;
         }
-    } else if (ordinal == ord(CoredllOrdinal::GlobalFindAtomW)) {
+        break;
+    }
+    case ord(CoredllOrdinal::GlobalFindAtomW):
+    {
         const std::string atomName = lowerAscii(readUtf16(a0));
         auto it = atomsByName_.find(atomName);
         ret = it == atomsByName_.end() ? 0 : it->second;
         lastError_ = ret ? 0 : 2;
-    } else if (ordinal == ord(CoredllOrdinal::GlobalDeleteAtom)) {
+        break;
+    }
+    case ord(CoredllOrdinal::GlobalDeleteAtom):
+    {
         auto it = atomNames_.find(uint16_t(a0));
         if (it != atomNames_.end()) {
             atomsByName_.erase(it->second);
@@ -3335,13 +3697,21 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
         }
         ret = 0;
         lastError_ = 0;
-    } else if (ordinal == ord(CoredllOrdinal::WNetGetUserW)) {
+        break;
+    }
+    case ord(CoredllOrdinal::WNetGetUserW):
+    {
         ret = handleWNetGetUserW(a0, a1, a2);
-    } else if (ordinal == ord(CoredllOrdinal::WNetGetUniversalNameW) ||
-               ordinal == ord(CoredllOrdinal::WNetConnectionDialog1W)) {
+        break;
+    }
+    case ord(CoredllOrdinal::WNetGetUniversalNameW):
+    case ord(CoredllOrdinal::WNetConnectionDialog1W):
+    {
         lastError_ = 1200;
         ret = 1200;
-    } else {
+        break;
+    }
+    default:
         return false;
     }
 
