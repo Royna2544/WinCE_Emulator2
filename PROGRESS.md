@@ -110,6 +110,14 @@ Last refreshed: 2026-05-28.
 - Emulator runs now treat final guest `PC == 0` as a fatal
   control-flow/resume bug, not a normal successful exit. The runtime still
   flushes registry/host state before returning failure.
+- Interactive guest-thread slices also stop treating `PC == 0` as a successful
+  thread exit. They now report a hard error and preserve the crash context for
+  follow-up diagnosis.
+- `captures/inavi_autodrive_20260528_134015` changed `PC == 0` reporting from
+  a generic warning to a hard error with register/caller evidence. The current
+  `DeviceParser.exe` child failure reaches zero through a generic MIPS/CE CRT
+  exit thunk at `0x00013d64` targeting `0xfffff3fa`, not through an app-specific
+  route crash.
 - Host presentation deferral now also covers normal queued
   `WM_ERASEBKGND`/`WM_PAINT` dispatch, not only synchronous `UpdateWindow`.
   The GDI host presenter now clears only letterbox bands instead of blanking

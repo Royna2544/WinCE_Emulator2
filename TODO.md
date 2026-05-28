@@ -47,6 +47,15 @@ Last refreshed: 2026-05-28.
      `captures/inavi_autodrive_20260528_130053`; the parent route process now
      survives the `_strupr` crash point, but the child control-flow bug should
      still be explained under the project `PC == 0` rule.
+   - Continue `DeviceParser.exe` from
+     `captures/inavi_autodrive_20260528_134015`: `PC == 0` now hard-errors and
+     points at a generic MIPS/CE CRT exit thunk
+     (`addiu t0,zero,-3078; jalr ra,t0`) after the `autorun.inf` miss. Add a
+     generic CE kernel-call/termination handler; do not special-case
+     `DeviceParser.exe`.
+   - If any interactive guest-thread slice reaches `PC == 0`, investigate it
+     as a control-flow/kernel-call issue. The runtime no longer converts null
+     PC into a synthetic successful thread exit.
    - Continue from `captures/inavi_autodrive_20260528_132322`: route/dialog
      ordering is expected after the owned-popup backing fix, and the live app
      advanced to quick search. The remaining route work is now later guidance

@@ -108,6 +108,42 @@ Status:
   hardcode a `MultiTBT` launch. Use real-device evidence or a generic external
   companion configuration if one is justified.
 
+## DeviceParser.exe Reaches PC Zero Through CE Exit Thunk
+
+Symptom:
+
+- The `DeviceParser.exe` child process exits with `PC == 0` during startup,
+  shortly after checking `\SDMMC Disk\*.bat` and missing
+  `\SDMMC Disk\autorun.inf`.
+
+Current evidence:
+
+- `captures/inavi_autodrive_20260528_134015` no longer logs the generic
+  `emulation stopped` warning for this case. It reports a hard error with
+  register and caller details:
+  `pc=0x00000000`, `ra=0x00013d6c`, `t0=0xfffff3fa`, `a0=0x42`,
+  `a1=0x0`.
+- The bytes before `$ra` decode as:
+  `addiu t0, zero, -3078`; `jalr ra, t0`; `addiu a0, zero, 66`.
+- The same `0xfffff3fa` call pattern appears once in multiple target EXEs,
+  which makes it a generic CE/MIPS CRT/kernel termination path rather than a
+  DeviceParser-specific behavior.
+
+Current hypothesis:
+
+- The emulator is not yet handling the MIPS/CE kernel-call exit thunk used by
+  the CRT after process cleanup. The child is likely reaching its normal CRT
+  termination path, but the thunk target is not represented in our synthetic
+  kernel/API boundary, so Unicorn falls into `PC == 0`.
+
+Status:
+
+- Not fixed. `PC == 0` now reports as a hard error with caller evidence.
+  Interactive guest-thread slices also report null PC as a hard error instead
+  of silently finishing the active guest thread.
+  Implement a generic CE kernel-call/termination handler instead of treating
+  this child as a special case.
+
 ## Modal And Overlay Routing Is Still Wrong
 
 Symptom:

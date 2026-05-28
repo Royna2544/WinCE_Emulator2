@@ -112,6 +112,55 @@ static std::string readGuestHex(uc_engine *uc, uint32_t address, size_t size) {
   return out.str();
 }
 
+static bool decodeAddiu(uc_engine *uc, uint32_t address, uint8_t &rt,
+                        uint8_t &rs, int16_t &imm) {
+  uint32_t instr = 0;
+  if (!readGuestU32(uc, address, instr) || (instr >> 26) != 0x09) return false;
+  rs = uint8_t((instr >> 21) & 0x1f);
+  rt = uint8_t((instr >> 16) & 0x1f);
+  imm = int16_t(instr & 0xffffu);
+  return true;
+}
+
+static bool decodeJalr(uc_engine *uc, uint32_t address, uint8_t &rd,
+                       uint8_t &rs) {
+  uint32_t instr = 0;
+  if (!readGuestU32(uc, address, instr) || (instr & 0x3f) != 0x09) return false;
+  rd = uint8_t((instr >> 11) & 0x1f);
+  rs = uint8_t((instr >> 21) & 0x1f);
+  return true;
+}
+
+static void logPcZeroDetails(uc_engine *uc, uint32_t ra) {
+  uint32_t sp = 0, v0 = 0, a0 = 0, a1 = 0, a2 = 0, a3 = 0, t0 = 0, t9 = 0;
+  uc_reg_read(uc, UC_MIPS_REG_SP, &sp);
+  uc_reg_read(uc, UC_MIPS_REG_V0, &v0);
+  uc_reg_read(uc, UC_MIPS_REG_A0, &a0);
+  uc_reg_read(uc, UC_MIPS_REG_A1, &a1);
+  uc_reg_read(uc, UC_MIPS_REG_A2, &a2);
+  uc_reg_read(uc, UC_MIPS_REG_A3, &a3);
+  uc_reg_read(uc, UC_MIPS_REG_T0, &t0);
+  uc_reg_read(uc, UC_MIPS_REG_T9, &t9);
+  spdlog::error("fatal: guest PC reached 0 ra=0x{:08x} sp=0x{:08x} "
+                "v0=0x{:08x} a0=0x{:08x} a1=0x{:08x} a2=0x{:08x} a3=0x{:08x} "
+                "t0=0x{:08x} t9=0x{:08x}",
+                ra, sp, v0, a0, a1, a2, a3, t0, t9);
+  if (ra >= 12) {
+    spdlog::error("fatal: instructions before zero PC at ra-12..ra-4: {}",
+                  readGuestHex(uc, ra - 12, 12));
+    uint8_t addRt = 0, addRs = 0, jalrRd = 0, jalrRs = 0;
+    int16_t addImm = 0;
+    if (decodeAddiu(uc, ra - 12, addRt, addRs, addImm) &&
+        decodeJalr(uc, ra - 8, jalrRd, jalrRs) &&
+        addRs == 0 && addRt == jalrRs && jalrRd == 31) {
+      const uint32_t target = uint32_t(int32_t(addImm));
+      spdlog::error("fatal: zero PC followed MIPS/CE kernel-call thunk "
+                    "caller=0x{:08x} target=0x{:08x} arg0=0x{:08x} arg1=0x{:08x}",
+                    ra - 8, target, a0, a1);
+    }
+  }
+}
+
 static std::string readGuestWideLossy(uc_engine *uc, uint32_t address,
                                       size_t maxChars = 260) {
   std::string out;
@@ -1037,11 +1086,14 @@ static int runImage(PeImage &pe, const std::vector<fs::path> &dllSearchDirs,
     uint32_t pc = 0, ra = 0;
     uc_reg_read(uc, UC_MIPS_REG_PC, &pc);
     uc_reg_read(uc, UC_MIPS_REG_RA, &ra);
-    spdlog::warn("emulation stopped err={} ({}) pc=0x{:08x} ra=0x{:08x}",
-                 int(err), uc_strerror(err), pc, ra);
     const bool zeroPcBug = pc == 0;
     if (zeroPcBug) {
-      spdlog::error("fatal: guest PC reached 0; treating as emulator control-flow/resume bug, not normal exit");
+      spdlog::error("emulation stopped hard error err={} ({}) pc=0x{:08x} ra=0x{:08x}",
+                    int(err), uc_strerror(err), pc, ra);
+      logPcZeroDetails(uc, ra);
+    } else {
+      spdlog::warn("emulation stopped err={} ({}) pc=0x{:08x} ra=0x{:08x}",
+                   int(err), uc_strerror(err), pc, ra);
     }
     synthetic.flushRegistry();
     synthetic.runHostMessageLoopUntilClosed(!headless);

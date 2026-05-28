@@ -1933,20 +1933,13 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
         uc_reg_read(uc_, UC_MIPS_REG_PC, &pc);
         uc_reg_read(uc_, UC_MIPS_REG_RA, &ra);
         if (err != UC_ERR_OK) {
-            if ((err == UC_ERR_READ_UNMAPPED || err == UC_ERR_EXCEPTION) && pc == 0 && activeGuestThread_) {
-                const uint32_t exitingThread = activeGuestThread_;
-                const uint32_t exitCode = reg(UC_MIPS_REG_V0);
-                spdlog::warn("guest thread reached null pc; treating as thread exit handle=0x{:08x} exitCode=0x{:08x} err={} ({}) ra=0x{:08x}",
-                             exitingThread, exitCode, int(err), uc_strerror(err), ra);
-                if (finishActiveGuestThread(exitCode)) {
-                    pumpHostMessages();
-                    compactQueuedPointerMotion();
-                    enqueueDueTimers();
-                    return true;
-                }
+            if (pc == 0) {
+                spdlog::error("interactive emulation stopped hard error reason={} err={} ({}) pc=0x{:08x} ra=0x{:08x} activeThread=0x{:08x}",
+                              reason, int(err), uc_strerror(err), pc, ra, activeGuestThread_);
+            } else {
+                spdlog::warn("interactive emulation stopped reason={} err={} ({}) pc=0x{:08x} ra=0x{:08x}",
+                             reason, int(err), uc_strerror(err), pc, ra);
             }
-            spdlog::warn("interactive emulation stopped reason={} err={} ({}) pc=0x{:08x} ra=0x{:08x}",
-                         reason, int(err), uc_strerror(err), pc, ra);
             auto describeAddress = [&](uint32_t address) {
                 for (const auto& [base, module] : loadedModulesByBase_) {
                     const uint64_t begin = base;
