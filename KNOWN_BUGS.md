@@ -33,6 +33,16 @@ Current evidence:
 - `captures/inavi_autodrive_20260526_075134` shows the updated route preset
   reaching the route-result/map control view after the corrected
   `route_method_first` tap at `(405,296)`.
+- `captures/inavi_autodrive_20260528_120552` shows the route-result UI
+  appearing correctly, but the small "Searching route" popup remains visible
+  and the partial map does not update with the route line. The popup is top
+  level hwnd `0x00016754`; logs show create/show/paint and parent
+  `EnableWindow(false)`, but no later hide/destroy/re-enable sequence for that
+  popup.
+- In that same run, after route handoff messages to the companion/helper
+  processes, the parent repeatedly yields from `queued-message` slices with
+  exactly eight queued guest messages. The previous backlogged scheduler path
+  only triggered at more than eight queued messages.
 - The old route preset coordinate `(390,220)` was a diagnostic-script bug for
   the "existing route" modal: it hit explanatory text above the first route
   method button.
@@ -61,6 +71,9 @@ Current hypothesis:
 - After `MultiTBT` is present and the corrected tap reaches route-result/map
   controls, the remaining lead is the final route-completion/guidance handoff
   plus any paint/z-order issues around modal overlays.
+- The remaining "Searching route" popup symptom is currently more consistent
+  with queued-message scheduler fairness than with the result window being
+  covered by a final map window.
 - Re-test from `captures/inavi_autodrive_20260526_075134`, where parent and
   companion are both launched by the runner and the route-result transition is
   observed.

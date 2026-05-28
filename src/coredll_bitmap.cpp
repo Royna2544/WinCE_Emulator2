@@ -105,6 +105,13 @@ uint16_t encodeRgb565(uint32_t pixel) {
     return uint16_t((r << 11) | (g << 5) | b);
 }
 
+constexpr uint32_t kRgb565RedMask = 0x0000f800u;
+constexpr uint32_t kRgb565GreenMask = 0x000007e0u;
+constexpr uint32_t kRgb565BlueMask = 0x0000001fu;
+constexpr uint32_t kRgb555RedMask = 0x00007c00u;
+constexpr uint32_t kRgb555GreenMask = 0x000003e0u;
+constexpr uint32_t kRgb555BlueMask = 0x0000001fu;
+
 uint32_t maskShift(uint32_t mask) {
     if (!mask) return 0;
     uint32_t shift = 0;
@@ -156,18 +163,30 @@ uint16_t encodeMasked16(uint32_t pixel, uint32_t redMask, uint32_t greenMask, ui
 }
 
 void ceDefault16BitMasks(uint32_t& redMask, uint32_t& greenMask, uint32_t& blueMask) {
-    redMask = 0x0000f800u;
-    greenMask = 0x000007e0u;
-    blueMask = 0x0000001fu;
+    redMask = kRgb565RedMask;
+    greenMask = kRgb565GreenMask;
+    blueMask = kRgb565BlueMask;
 }
 
 uint32_t decodeBitmap16(uint16_t value, uint32_t redMask, uint32_t greenMask, uint32_t blueMask) {
-    if (!redMask && !greenMask && !blueMask) return decodeRgb565(value);
+    if ((!redMask && !greenMask && !blueMask) ||
+        (redMask == kRgb565RedMask && greenMask == kRgb565GreenMask && blueMask == kRgb565BlueMask)) {
+        return decodeRgb565(value);
+    }
+    if (redMask == kRgb555RedMask && greenMask == kRgb555GreenMask && blueMask == kRgb555BlueMask) {
+        return decodeRgb555(value);
+    }
     return decodeMasked16(value, redMask, greenMask, blueMask);
 }
 
 uint16_t encodeBitmap16(uint32_t pixel, uint32_t redMask, uint32_t greenMask, uint32_t blueMask) {
-    if (!redMask && !greenMask && !blueMask) return encodeRgb565(pixel);
+    if ((!redMask && !greenMask && !blueMask) ||
+        (redMask == kRgb565RedMask && greenMask == kRgb565GreenMask && blueMask == kRgb565BlueMask)) {
+        return encodeRgb565(pixel);
+    }
+    if (redMask == kRgb555RedMask && greenMask == kRgb555GreenMask && blueMask == kRgb555BlueMask) {
+        return encodeRgb555(pixel);
+    }
     return encodeMasked16(pixel, redMask, greenMask, blueMask);
 }
 
@@ -1944,16 +1963,22 @@ bool SyntheticDllRuntime::bitBltToBitmap(const GuestBitmap& dstBitmap,
     const int32_t outH = std::abs(dstH);
     const int32_t outLeft = dstW < 0 ? dstX + dstW : dstX;
     const int32_t outTop = dstH < 0 ? dstY + dstH : dstY;
+    const bool sameScaleX = srcW == outW;
+    const bool sameScaleY = srcH == outH;
+    const bool ropSourceCopy = rop == 0x00cc0020u;
     for (int32_t y = 0; y < outH; ++y) {
-        const int32_t sy = srcY + (int64_t(y) * srcH) / outH;
+        const int32_t sy = sameScaleY ? (srcY + y) : (srcY + (int64_t(y) * srcH) / outH);
         for (int32_t x = 0; x < outW; ++x) {
-            const int32_t sx = srcX + (int64_t(x) * srcW) / outW;
+            const int32_t sx = sameScaleX ? (srcX + x) : (srcX + (int64_t(x) * srcW) / outW);
             uint32_t pixel = 0;
-            uint32_t dstPixel = 0;
             const int32_t dx = outLeft + x;
             const int32_t dy = outTop + y;
-            if (readBitmapPixel(srcBitmap, srcBits, srcHeight, sx, sy, pixel) &&
-                readBitmapPixel(dstBitmap, dstBits, dstHeight, dx, dy, dstPixel)) {
+            if (!readBitmapPixel(srcBitmap, srcBits, srcHeight, sx, sy, pixel)) continue;
+            if (ropSourceCopy) {
+                writeDestPixel(dx, dy, pixel);
+            } else {
+                uint32_t dstPixel = 0;
+                if (!readBitmapPixel(dstBitmap, dstBits, dstHeight, dx, dy, dstPixel)) continue;
                 writeDestPixel(dx, dy, applySourceRasterOp(rop, pixel, dstPixel));
             }
         }

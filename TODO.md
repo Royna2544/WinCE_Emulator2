@@ -34,6 +34,12 @@ Last refreshed: 2026-05-28.
      `MultiTBT.exe` launched through `-CompanionTarget`, the updated route
      preset reaches the route-result/map control view and `0x57cc` completes.
      Next, determine what remains before full guidance/route completion.
+   - Continue from `captures/inavi_autodrive_20260528_120552`: the
+     route-result UI is visible, but popup hwnd `0x00016754` remains visible
+     after "Searching route" and the map does not redraw with the route line.
+     Re-test after the queued-message backlog threshold change; if it still
+     stalls, dump the eight queued guest messages and identify which thread is
+     expected to re-enable/destroy the modal popup.
    - If the "existing route" modal is visible, use the actual first method
      button area around `(405,296)`. The old `(390,220)` coordinate hits modal
      explanatory text, not the button.
@@ -85,6 +91,10 @@ Last refreshed: 2026-05-28.
      `bitBltToFramebuffer -> writeFramebufferTargetPixel`, with repeated
      popup/window/z-order checks and tree iterator overhead; that blit path now
      precomputes backing layers once per call.
+   - Re-profile after the 16-bit bitmap fast paths. The next profile showed
+     `bitBltToBitmap -> decodeBitmap16 -> decodeMasked16/expandMaskedChannel`;
+     normal RGB565/RGB555 bitmap formats should now avoid the generic masked
+     helpers, and `SRCCOPY` should avoid destination reads.
    - Continue live input/UI lag testing after
      `captures/inavi_autodrive_20260528_102413`, where Release launched and
      stayed alive after expanding host erase/paint deferral and removing the

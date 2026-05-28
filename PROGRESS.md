@@ -56,6 +56,18 @@ Last refreshed: 2026-05-28.
   synthetic dispatch stores resolved ordinal member-function handlers in
   export entries, and Release builds now target `/arch:AVX512` for the
   project-standard Zen5 host.
+- The next route/profile sample moved the hot bitmap path into
+  `bitBltToBitmap` 16-bit pixel decode helpers. The common CE RGB565/RGB555
+  masks now use direct encode/decode paths instead of the generic masked
+  helpers, and `SRCCOPY` bitmap-to-bitmap blits no longer decode the
+  destination pixel.
+- `captures/inavi_autodrive_20260528_120552` showed the route-result UI did
+  appear, but the small "Searching route" popup window stayed visible and the
+  partial map did not advance to the drawn-route state. The log shows popup
+  hwnd `0x00016754` created/painted and no later hide/destroy, while the
+  scheduler sits on exactly eight queued guest messages with repeated
+  `queued-message` watchdog yields. Eight queued messages now enters the
+  backlogged queued-work budget path.
 - `captures/inavi_autodrive_20260528_120140` verified the optimized Release
   build launches to a valid non-black initial frame with the project autodrive
   runner.
