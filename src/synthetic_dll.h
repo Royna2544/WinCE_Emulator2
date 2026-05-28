@@ -1384,6 +1384,8 @@ private:
                          int32_t height, int32_t x, int32_t y, uint32_t& pixel) const;
     bool writeBitmapPixel(const GuestBitmap& bitmap, std::vector<uint8_t>& bits,
                           int32_t height, int32_t x, int32_t y, uint32_t pixel) const;
+    bool writeBitmapSpan(const GuestBitmap& bitmap, std::vector<uint8_t>& bits,
+                         int32_t height, int32_t y, int32_t left, int32_t right, uint32_t pixel) const;
     BitmapProbeStats bitmapProbeStats(const GuestBitmap& bitmap, int32_t x, int32_t y,
                                       int32_t width, int32_t height) const;
     void dumpGuestBitmapPpm(uint32_t bitmapHandle, const GuestBitmap& bitmap, const std::string& tag);

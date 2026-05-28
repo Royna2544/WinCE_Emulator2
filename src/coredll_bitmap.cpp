@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -94,9 +95,9 @@ uint32_t decodeRgb555(uint16_t value) {
 }
 
 uint16_t encodeRgb555(uint32_t pixel) {
-    const uint16_t r = uint16_t(((pixel >> 16) & 0xffu) * 31u / 255u);
-    const uint16_t g = uint16_t(((pixel >> 8) & 0xffu) * 31u / 255u);
-    const uint16_t b = uint16_t((pixel & 0xffu) * 31u / 255u);
+    const uint16_t r = uint16_t((pixel >> 19) & 0x1fu);
+    const uint16_t g = uint16_t((pixel >> 11) & 0x1fu);
+    const uint16_t b = uint16_t((pixel >> 3) & 0x1fu);
     return uint16_t((r << 10) | (g << 5) | b);
 }
 
@@ -108,9 +109,9 @@ uint32_t decodeRgb565(uint16_t value) {
 }
 
 uint16_t encodeRgb565(uint32_t pixel) {
-    const uint16_t r = uint16_t(((pixel >> 16) & 0xffu) * 31u / 255u);
-    const uint16_t g = uint16_t(((pixel >> 8) & 0xffu) * 63u / 255u);
-    const uint16_t b = uint16_t((pixel & 0xffu) * 31u / 255u);
+    const uint16_t r = uint16_t((pixel >> 19) & 0x1fu);
+    const uint16_t g = uint16_t((pixel >> 10) & 0x3fu);
+    const uint16_t b = uint16_t((pixel >> 3) & 0x1fu);
     return uint16_t((r << 11) | (g << 5) | b);
 }
 
@@ -197,6 +198,23 @@ uint16_t encodeBitmap16(uint32_t pixel, uint32_t redMask, uint32_t greenMask, ui
         return encodeRgb555(pixel);
     }
     return encodeMasked16(pixel, redMask, greenMask, blueMask);
+}
+
+uint32_t readBgra32Pixel(const uint8_t* row, int32_t x) {
+    uint32_t value = 0;
+    std::memcpy(&value, row + size_t(x) * 4, sizeof(value));
+    return 0xff000000u | (value & 0x00ffffffu);
+}
+
+void writeBgra32Pixel(uint8_t* row, int32_t x, uint32_t pixel) {
+    const uint32_t value = 0xff000000u | (pixel & 0x00ffffffu);
+    std::memcpy(row + size_t(x) * 4, &value, sizeof(value));
+}
+
+uint32_t palettePixel(const std::vector<uint32_t>& palette, uint32_t index) {
+    if (palette.empty()) return 0xff000000u;
+    if (index >= palette.size()) index = uint32_t(palette.size() - 1);
+    return palette[index];
 }
 
 #if defined(__AVX2__) || defined(__AVX512F__)
@@ -553,9 +571,7 @@ bool SyntheticDllRuntime::fillBitmapRect(const GuestBitmap& bitmap,
     top = std::clamp<int32_t>(top, 0, height);
     bottom = std::clamp<int32_t>(bottom, 0, height);
     for (int32_t y = top; y < bottom; ++y) {
-        for (int32_t x = left; x < right; ++x) {
-            writeBitmapPixel(bitmap, raw, height, x, y, pixel);
-        }
+        writeBitmapSpan(bitmap, raw, height, y, left, right, pixel);
     }
     return uc_mem_write(uc_, bitmap.bits, raw.data(), raw.size()) == UC_ERR_OK;
 }
@@ -679,14 +695,11 @@ bool SyntheticDllRuntime::fillDcPolygon(const GuestDc& dc,
 
         auto* pixels = static_cast<uint8_t*>(dibBits);
         for (int32_t y = 0; y < dibHeight; ++y) {
+            uint8_t* dibRow = pixels + size_t(y) * size_t(dibWidth) * 4;
             for (int32_t x = 0; x < dibWidth; ++x) {
                 uint32_t current = 0;
                 readBitmapPixel(bitmap, raw, bitmapHeight, clipLeft + x, clipTop + y, current);
-                const size_t offset = (size_t(y) * size_t(dibWidth) + size_t(x)) * 4;
-                pixels[offset + 0] = uint8_t(current & 0xff);
-                pixels[offset + 1] = uint8_t((current >> 8) & 0xff);
-                pixels[offset + 2] = uint8_t((current >> 16) & 0xff);
-                pixels[offset + 3] = 0xff;
+                writeBgra32Pixel(dibRow, x, current);
             }
         }
 
@@ -713,14 +726,23 @@ bool SyntheticDllRuntime::fillDcPolygon(const GuestDc& dc,
 
         if (drew) {
             GdiFlush();
+            const uint32_t fillPixel = pixel & 0x00ffffffu;
             for (int32_t y = 0; y < dibHeight; ++y) {
+                const uint8_t* row = pixels + size_t(y) * size_t(dibWidth) * 4;
+                int32_t runStart = -1;
                 for (int32_t x = 0; x < dibWidth; ++x) {
-                    const size_t offset = (size_t(y) * size_t(dibWidth) + size_t(x)) * 4;
-                    const uint32_t outPixel = 0xff000000u |
-                        (uint32_t(pixels[offset + 2]) << 16) |
-                        (uint32_t(pixels[offset + 1]) << 8) |
-                        uint32_t(pixels[offset + 0]);
-                    writeBitmapPixel(bitmap, raw, bitmapHeight, clipLeft + x, clipTop + y, outPixel);
+                    const bool filled = (readBgra32Pixel(row, x) & 0x00ffffffu) == fillPixel;
+                    if (filled && runStart < 0) {
+                        runStart = x;
+                    } else if (!filled && runStart >= 0) {
+                        writeBitmapSpan(bitmap, raw, bitmapHeight, clipTop + y,
+                                        clipLeft + runStart, clipLeft + x, pixel);
+                        runStart = -1;
+                    }
+                }
+                if (runStart >= 0) {
+                    writeBitmapSpan(bitmap, raw, bitmapHeight, clipTop + y,
+                                    clipLeft + runStart, clipLeft + dibWidth, pixel);
                 }
             }
         }
@@ -731,6 +753,7 @@ bool SyntheticDllRuntime::fillDcPolygon(const GuestDc& dc,
         return uc_mem_write(uc_, bitmap.bits, raw.data(), raw.size()) == UC_ERR_OK;
 #endif
     }
+
     if (bitmapIt == bitmaps_.end()) {
         int32_t originX = 0;
         int32_t originY = 0;
@@ -800,9 +823,7 @@ bool SyntheticDllRuntime::fillDcPolygon(const GuestDc& dc,
                 const GuestBitmap& bitmap = bitmapIt->second;
                 left = std::clamp<int32_t>(left, 0, bitmap.width - 1);
                 right = std::clamp<int32_t>(right, 0, bitmap.width - 1);
-                for (int32_t x = left; x <= right; ++x) {
-                    writeBitmapPixel(bitmap, raw, bitmapHeight, x, y, pixel);
-                }
+                writeBitmapSpan(bitmap, raw, bitmapHeight, y, left, right + 1, pixel);
             } else {
                 left = std::clamp<int32_t>(left, 0, framebufferWidth_ - 1);
                 right = std::clamp<int32_t>(right, 0, framebufferWidth_ - 1);
@@ -993,25 +1014,25 @@ bool SyntheticDllRuntime::readBitmapPixel(const GuestBitmap& bitmap,
     const int32_t rowIndex = bitmap.heightRaw < 0 ? y : (height - 1 - y);
     const uint8_t* row = bits.data() + size_t(rowIndex) * size_t(bitmap.stride);
     if (bitmap.bpp == 32) {
-        const size_t o = size_t(x) * 4;
-        pixel = 0xff000000u | (uint32_t(row[o + 2]) << 16) | (uint32_t(row[o + 1]) << 8) | row[o];
+        pixel = readBgra32Pixel(row, x);
     } else if (bitmap.bpp == 24) {
         const size_t o = size_t(x) * 3;
         pixel = 0xff000000u | (uint32_t(row[o + 2]) << 16) | (uint32_t(row[o + 1]) << 8) | row[o];
     } else if (bitmap.bpp == 16) {
         const size_t o = size_t(x) * 2;
-        const uint16_t v = uint16_t(row[o] | (row[o + 1] << 8));
+        uint16_t v = 0;
+        std::memcpy(&v, row + o, sizeof(v));
         pixel = decodeBitmap16(v, bitmap.redMask, bitmap.greenMask, bitmap.blueMask);
     } else if (bitmap.bpp == 8 && !bitmap.palette.empty()) {
-        pixel = bitmap.palette[std::min<size_t>(row[x], bitmap.palette.size() - 1)];
+        pixel = palettePixel(bitmap.palette, row[x]);
     } else if (bitmap.bpp == 4 && !bitmap.palette.empty()) {
         const uint8_t packed = row[size_t(x) / 2];
         const uint8_t index = uint8_t((x & 1) ? (packed & 0x0f) : (packed >> 4));
-        pixel = bitmap.palette[std::min<size_t>(index, bitmap.palette.size() - 1)];
+        pixel = palettePixel(bitmap.palette, index);
     } else if (bitmap.bpp == 1 && !bitmap.palette.empty()) {
         const uint8_t packed = row[size_t(x) / 8];
         const uint8_t index = uint8_t((packed >> (7 - (x & 7))) & 1);
-        pixel = bitmap.palette[std::min<size_t>(index, bitmap.palette.size() - 1)];
+        pixel = palettePixel(bitmap.palette, index);
     } else {
         return false;
     }
@@ -1027,26 +1048,21 @@ bool SyntheticDllRuntime::writeBitmapPixel(const GuestBitmap& bitmap,
     if (x < 0 || x >= bitmap.width || y < 0 || y >= height || bitmap.stride == 0) return false;
     const int32_t rowIndex = bitmap.heightRaw < 0 ? y : (height - 1 - y);
     uint8_t* row = bits.data() + size_t(rowIndex) * size_t(bitmap.stride);
-    const uint8_t r = uint8_t((pixel >> 16) & 0xff);
-    const uint8_t g = uint8_t((pixel >> 8) & 0xff);
-    const uint8_t b = uint8_t(pixel & 0xff);
     if (bitmap.bpp == 32) {
-        const size_t o = size_t(x) * 4;
-        row[o + 0] = b;
-        row[o + 1] = g;
-        row[o + 2] = r;
-        row[o + 3] = 0xff;
+        writeBgra32Pixel(row, x, pixel);
     } else if (bitmap.bpp == 24) {
         const size_t o = size_t(x) * 3;
-        row[o + 0] = b;
-        row[o + 1] = g;
-        row[o + 2] = r;
+        row[o + 0] = uint8_t(pixel & 0xff);
+        row[o + 1] = uint8_t((pixel >> 8) & 0xff);
+        row[o + 2] = uint8_t((pixel >> 16) & 0xff);
     } else if (bitmap.bpp == 16) {
         const uint16_t v = encodeBitmap16(pixel, bitmap.redMask, bitmap.greenMask, bitmap.blueMask);
         const size_t o = size_t(x) * 2;
-        row[o + 0] = uint8_t(v & 0xff);
-        row[o + 1] = uint8_t(v >> 8);
+        std::memcpy(row + o, &v, sizeof(v));
     } else if ((bitmap.bpp == 8 || bitmap.bpp == 4 || bitmap.bpp == 1) && !bitmap.palette.empty()) {
+        const uint8_t r = uint8_t((pixel >> 16) & 0xff);
+        const uint8_t g = uint8_t((pixel >> 8) & 0xff);
+        const uint8_t b = uint8_t(pixel & 0xff);
         uint32_t bestIndex = 0;
         uint32_t bestDistance = UINT32_MAX;
         const uint32_t maxColors = bitmap.bpp == 8 ? 256u : (bitmap.bpp == 4 ? 16u : 2u);
@@ -1079,6 +1095,42 @@ bool SyntheticDllRuntime::writeBitmapPixel(const GuestBitmap& bitmap,
         }
     } else {
         return false;
+    }
+    return true;
+}
+
+bool SyntheticDllRuntime::writeBitmapSpan(const GuestBitmap& bitmap,
+                                          std::vector<uint8_t>& bits,
+                                          int32_t height,
+                                          int32_t y,
+                                          int32_t left,
+                                          int32_t right,
+                                          uint32_t pixel) const {
+    if (y < 0 || y >= height || bitmap.width <= 0 || bitmap.stride == 0) return false;
+    left = std::clamp<int32_t>(left, 0, bitmap.width);
+    right = std::clamp<int32_t>(right, 0, bitmap.width);
+    if (left >= right) return true;
+
+    const int32_t rowIndex = bitmap.heightRaw < 0 ? y : (height - 1 - y);
+    uint8_t* row = bits.data() + size_t(rowIndex) * size_t(bitmap.stride);
+    const int32_t width = right - left;
+
+    if (bitmap.bpp == 32) {
+        const uint32_t value = 0xff000000u | (pixel & 0x00ffffffu);
+        auto* dst = reinterpret_cast<uint32_t*>(row + size_t(left) * 4);
+        std::fill(dst, dst + width, value);
+        return true;
+    }
+
+    if (bitmap.bpp == 16) {
+        const uint16_t value = encodeBitmap16(pixel, bitmap.redMask, bitmap.greenMask, bitmap.blueMask);
+        auto* dst = reinterpret_cast<uint16_t*>(row + size_t(left) * 2);
+        std::fill(dst, dst + width, value);
+        return true;
+    }
+
+    for (int32_t x = left; x < right; ++x) {
+        if (!writeBitmapPixel(bitmap, bits, height, x, y, pixel)) return false;
     }
     return true;
 }
@@ -1464,25 +1516,26 @@ bool SyntheticDllRuntime::stretchDibToFramebuffer(const GuestDc& dc,
             if (sx < 0 || sx >= dibWidth) continue;
             const uint8_t* p = bits.data() + size_t(row) * rowStride;
             uint32_t pixel = 0;
-            if (bpp == 32) {
-                const size_t o = size_t(sx) * 4;
-                pixel = 0xff000000u | (uint32_t(p[o + 2]) << 16) | (uint32_t(p[o + 1]) << 8) | p[o];
-            } else if (bpp == 24) {
-                const size_t o = size_t(sx) * 3;
-                pixel = 0xff000000u | (uint32_t(p[o + 2]) << 16) | (uint32_t(p[o + 1]) << 8) | p[o];
-            } else if (bpp == 16) {
-                const uint16_t v = uint16_t(p[size_t(sx) * 2] | (p[size_t(sx) * 2 + 1] << 8));
-                pixel = decodeBitmap16(v, redMask, greenMask, blueMask);
-            } else if (bpp == 8 && !palette.empty()) {
-                pixel = palette[std::min<size_t>(p[sx], palette.size() - 1)];
-            } else if (bpp == 4 && !palette.empty()) {
-                const uint8_t packed = p[size_t(sx) / 2];
-                const uint8_t index = uint8_t((sx & 1) ? (packed & 0x0f) : (packed >> 4));
-                pixel = palette[std::min<size_t>(index, palette.size() - 1)];
-            } else if (bpp == 1 && !palette.empty()) {
-                const uint8_t packed = p[size_t(sx) / 8];
-                const uint8_t index = uint8_t((packed >> (7 - (sx & 7))) & 1);
-                pixel = palette[std::min<size_t>(index, palette.size() - 1)];
+        if (bpp == 32) {
+            const size_t o = size_t(sx) * 4;
+            pixel = readBgra32Pixel(p, sx);
+        } else if (bpp == 24) {
+            const size_t o = size_t(sx) * 3;
+            pixel = 0xff000000u | (uint32_t(p[o + 2]) << 16) | (uint32_t(p[o + 1]) << 8) | p[o];
+        } else if (bpp == 16) {
+            uint16_t v = 0;
+            std::memcpy(&v, p + size_t(sx) * 2, sizeof(v));
+            pixel = decodeBitmap16(v, redMask, greenMask, blueMask);
+        } else if (bpp == 8 && !palette.empty()) {
+            pixel = palettePixel(palette, p[sx]);
+        } else if (bpp == 4 && !palette.empty()) {
+            const uint8_t packed = p[size_t(sx) / 2];
+            const uint8_t index = uint8_t((sx & 1) ? (packed & 0x0f) : (packed >> 4));
+            pixel = palettePixel(palette, index);
+        } else if (bpp == 1 && !palette.empty()) {
+            const uint8_t packed = p[size_t(sx) / 8];
+            const uint8_t index = uint8_t((packed >> (7 - (sx & 7))) & 1);
+            pixel = palettePixel(palette, index);
             } else {
                 return false;
             }
@@ -1573,25 +1626,25 @@ bool SyntheticDllRuntime::stretchDibToBitmap(const GuestBitmap& dstBitmap,
         const int32_t rowIndex = topDown ? y : (dibHeight - 1 - y);
         const uint8_t* row = srcBits.data() + size_t(rowIndex) * size_t(srcStride);
         if (bpp == 32) {
-            const size_t o = size_t(x) * 4;
-            pixel = 0xff000000u | (uint32_t(row[o + 2]) << 16) | (uint32_t(row[o + 1]) << 8) | row[o];
+            pixel = readBgra32Pixel(row, x);
         } else if (bpp == 24) {
             const size_t o = size_t(x) * 3;
             pixel = 0xff000000u | (uint32_t(row[o + 2]) << 16) | (uint32_t(row[o + 1]) << 8) | row[o];
         } else if (bpp == 16) {
             const size_t o = size_t(x) * 2;
-            const uint16_t v = uint16_t(row[o] | (row[o + 1] << 8));
+            uint16_t v = 0;
+            std::memcpy(&v, row + o, sizeof(v));
             pixel = decodeBitmap16(v, redMask, greenMask, blueMask);
         } else if (bpp == 8 && !palette.empty()) {
-            pixel = palette[std::min<size_t>(row[x], palette.size() - 1)];
+            pixel = palettePixel(palette, row[x]);
         } else if (bpp == 4 && !palette.empty()) {
             const uint8_t packed = row[size_t(x) / 2];
             const uint8_t index = uint8_t((x & 1) ? (packed & 0x0f) : (packed >> 4));
-            pixel = palette[std::min<size_t>(index, palette.size() - 1)];
+            pixel = palettePixel(palette, index);
         } else if (bpp == 1 && !palette.empty()) {
             const uint8_t packed = row[size_t(x) / 8];
             const uint8_t index = uint8_t((packed >> (7 - (x & 7))) & 1);
-            pixel = palette[std::min<size_t>(index, palette.size() - 1)];
+            pixel = palettePixel(palette, index);
         } else {
             return false;
         }
@@ -1602,26 +1655,21 @@ bool SyntheticDllRuntime::stretchDibToBitmap(const GuestBitmap& dstBitmap,
         if (x < 0 || x >= dstBitmap.width || y < 0 || y >= dstHeight) return false;
         const int32_t rowIndex = dstBitmap.heightRaw < 0 ? y : (dstHeight - 1 - y);
         uint8_t* row = dstBits.data() + size_t(rowIndex) * size_t(dstBitmap.stride);
-        const uint8_t r = uint8_t((pixel >> 16) & 0xff);
-        const uint8_t g = uint8_t((pixel >> 8) & 0xff);
-        const uint8_t b = uint8_t(pixel & 0xff);
         if (dstBitmap.bpp == 32) {
-            const size_t o = size_t(x) * 4;
-            row[o + 0] = b;
-            row[o + 1] = g;
-            row[o + 2] = r;
-            row[o + 3] = 0xff;
+            writeBgra32Pixel(row, x, pixel);
         } else if (dstBitmap.bpp == 24) {
             const size_t o = size_t(x) * 3;
-            row[o + 0] = b;
-            row[o + 1] = g;
-            row[o + 2] = r;
+            row[o + 0] = uint8_t(pixel & 0xff);
+            row[o + 1] = uint8_t((pixel >> 8) & 0xff);
+            row[o + 2] = uint8_t((pixel >> 16) & 0xff);
         } else if (dstBitmap.bpp == 16) {
             const uint16_t v = encodeBitmap16(pixel, dstBitmap.redMask, dstBitmap.greenMask, dstBitmap.blueMask);
             const size_t o = size_t(x) * 2;
-            row[o + 0] = uint8_t(v & 0xff);
-            row[o + 1] = uint8_t(v >> 8);
+            std::memcpy(row + o, &v, sizeof(v));
         } else if (dstBitmap.bpp == 8 && !dstBitmap.palette.empty()) {
+            const uint8_t r = uint8_t((pixel >> 16) & 0xff);
+            const uint8_t g = uint8_t((pixel >> 8) & 0xff);
+            const uint8_t b = uint8_t(pixel & 0xff);
             uint32_t bestIndex = 0;
             uint32_t bestDistance = UINT32_MAX;
             for (uint32_t i = 0; i < dstBitmap.palette.size(); ++i) {
@@ -1638,6 +1686,9 @@ bool SyntheticDllRuntime::stretchDibToBitmap(const GuestBitmap& dstBitmap,
             }
             row[x] = uint8_t(bestIndex);
         } else if ((dstBitmap.bpp == 4 || dstBitmap.bpp == 1) && !dstBitmap.palette.empty()) {
+            const uint8_t r = uint8_t((pixel >> 16) & 0xff);
+            const uint8_t g = uint8_t((pixel >> 8) & 0xff);
+            const uint8_t b = uint8_t(pixel & 0xff);
             uint32_t bestIndex = 0;
             uint32_t bestDistance = UINT32_MAX;
             const uint32_t maxColors = dstBitmap.bpp == 4 ? 16u : 2u;
