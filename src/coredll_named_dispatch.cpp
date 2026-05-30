@@ -2482,15 +2482,15 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
     case ord(CoredllOrdinal::CombineRgn):
     {
 #if defined(_WIN32)
-        auto dest = guestHandles_.find(a0);
-        auto src1 = guestHandles_.find(a1);
-        auto src2 = guestHandles_.find(a2);
+        auto dest = ceKernel_.handles().find(a0);
+        auto src1 = ceKernel_.handles().find(a1);
+        auto src2 = ceKernel_.handles().find(a2);
         const bool needSrc2 = a3 != RGN_COPY;
-        if (dest == guestHandles_.end() || src1 == guestHandles_.end() ||
+        if (dest == ceKernel_.handles().end() || src1 == ceKernel_.handles().end() ||
             dest->second.kind != GuestHandle::Kind::HostRegion ||
             src1->second.kind != GuestHandle::Kind::HostRegion ||
             !dest->second.hostValue || !src1->second.hostValue ||
-            (needSrc2 && (src2 == guestHandles_.end() ||
+            (needSrc2 && (src2 == ceKernel_.handles().end() ||
                           src2->second.kind != GuestHandle::Kind::HostRegion ||
                           !src2->second.hostValue))) {
             lastError_ = 6;
@@ -2530,8 +2530,8 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
     case ord(CoredllOrdinal::SelectObject):
     {
         GuestDc* dc = lookupGuestDc(a0);
-        auto object = guestHandles_.find(a1);
-        if (!dc || object == guestHandles_.end()) {
+        auto object = ceKernel_.handles().find(a1);
+        if (!dc || object == ceKernel_.handles().end()) {
             lastError_ = 6;
             ret = 0;
         } else if (object->second.kind == GuestHandle::Kind::GuestBrush) {
@@ -2558,8 +2558,8 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
     }
     case ord(CoredllOrdinal::DeleteObject):
     {
-        auto object = guestHandles_.find(a0);
-        if (object == guestHandles_.end()) {
+        auto object = ceKernel_.handles().find(a0);
+        if (object == ceKernel_.handles().end()) {
             lastError_ = 6;
             ret = 0;
         } else if (object->second.filePointer && object->second.kind != GuestHandle::Kind::HostBitmap) {
@@ -2573,7 +2573,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                 return true;
             }
             brushes_.erase(a0);
-            guestHandles_.erase(object);
+            ceKernel_.handles().erase(object);
             ret = 1;
             lastError_ = 0;
         } else if (object->second.kind == GuestHandle::Kind::GuestPen) {
@@ -2584,7 +2584,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                 return true;
             }
             pens_.erase(a0);
-            guestHandles_.erase(object);
+            ceKernel_.handles().erase(object);
             ret = 1;
             lastError_ = 0;
         } else if (object->second.kind == GuestHandle::Kind::GuestFont) {
@@ -2595,7 +2595,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                 return true;
             }
             fonts_.erase(a0);
-            guestHandles_.erase(object);
+            ceKernel_.handles().erase(object);
             ret = 1;
             lastError_ = 0;
         } else if (object->second.kind == GuestHandle::Kind::HostBitmap) {
@@ -2610,14 +2610,14 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
 #endif
             bitmaps_.erase(a0);
             if (object->second.filePointer) releaseAllocation(object->second.filePointer);
-            guestHandles_.erase(object);
+            ceKernel_.handles().erase(object);
             ret = 1;
             lastError_ = 0;
         } else if (object->second.kind == GuestHandle::Kind::HostRegion) {
 #if defined(_WIN32)
             if (object->second.hostValue) DeleteObject(reinterpret_cast<HRGN>(object->second.hostValue));
 #endif
-            guestHandles_.erase(object);
+            ceKernel_.handles().erase(object);
             ret = 1;
             lastError_ = 0;
         } else {
@@ -3005,13 +3005,13 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
     }
     case ord(CoredllOrdinal::DeleteDC):
     {
-        auto handle = guestHandles_.find(a0);
-        if (handle == guestHandles_.end() || handle->second.kind != GuestHandle::Kind::GuestDc) {
+        auto handle = ceKernel_.handles().find(a0);
+        if (handle == ceKernel_.handles().end() || handle->second.kind != GuestHandle::Kind::GuestDc) {
             lastError_ = 6;
             ret = 0;
         } else {
             dcs_.erase(a0);
-            guestHandles_.erase(handle);
+            ceKernel_.handles().erase(handle);
             lastError_ = 0;
             ret = 1;
         }
@@ -3398,9 +3398,9 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             bool hostOk = true;
             if (it->second.hostHwnd) {
                 HRGN region = nullptr;
-                auto regionHandle = guestHandles_.find(a1);
+                auto regionHandle = ceKernel_.handles().find(a1);
                 if (a1) {
-                    if (regionHandle == guestHandles_.end() ||
+                    if (regionHandle == ceKernel_.handles().end() ||
                         regionHandle->second.kind != GuestHandle::Kind::HostRegion) {
                         lastError_ = 6;
                         ret = 0;
@@ -3409,9 +3409,9 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                     region = reinterpret_cast<HRGN>(regionHandle->second.hostValue);
                 }
                 hostOk = SetWindowRgn(reinterpret_cast<HWND>(it->second.hostHwnd), region, a2 != 0) != 0;
-                if (hostOk && regionHandle != guestHandles_.end()) {
+                if (hostOk && regionHandle != ceKernel_.handles().end()) {
                     regionHandle->second.hostValue = 0;
-                    guestHandles_.erase(regionHandle);
+                    ceKernel_.handles().erase(regionHandle);
                 }
             }
             ret = hostOk ? 1 : 0;
@@ -3431,8 +3431,8 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             ret = 0;
         } else {
 #if defined(_WIN32)
-            auto region = guestHandles_.find(a1);
-            if (it->second.hostHwnd && region != guestHandles_.end() &&
+            auto region = ceKernel_.handles().find(a1);
+            if (it->second.hostHwnd && region != ceKernel_.handles().end() &&
                 region->second.kind == GuestHandle::Kind::HostRegion && region->second.hostValue) {
                 ret = uint32_t(GetWindowRgn(reinterpret_cast<HWND>(it->second.hostHwnd),
                                             reinterpret_cast<HRGN>(region->second.hostValue)));

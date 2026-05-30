@@ -275,12 +275,12 @@ bool SyntheticDllRuntime::handleCommctrlCreatePropertySheetPageW(SyntheticExport
 }
 
 bool SyntheticDllRuntime::handleCommctrlDestroyPropertySheetPage(SyntheticExportCode, const GuestCallArgs& args, uint32_t& ret) {
-    auto it = guestHandles_.find(args.a0);
-    if (it == guestHandles_.end() || it->second.kind != GuestHandle::Kind::GuestPropertySheetPage) {
+    auto it = ceKernel_.handles().find(args.a0);
+    if (it == ceKernel_.handles().end() || it->second.kind != GuestHandle::Kind::GuestPropertySheetPage) {
         lastError_ = 6;
         ret = 0;
     } else {
-        guestHandles_.erase(it);
+        ceKernel_.handles().erase(it);
         lastError_ = 0;
         ret = 1;
     }

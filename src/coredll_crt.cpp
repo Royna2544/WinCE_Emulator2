@@ -780,15 +780,15 @@ bool SyntheticDllRuntime::handleWfopen(SyntheticExportCode code, const GuestCall
 
 bool SyntheticDllRuntime::handleFclose(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
     (void)code;
-    auto it = guestHandles_.find(args.a0);
-    if (it == guestHandles_.end() || it->second.kind != GuestHandle::Kind::HostCrtFile || !it->second.hostValue) {
+    auto it = ceKernel_.handles().find(args.a0);
+    if (it == ceKernel_.handles().end() || it->second.kind != GuestHandle::Kind::HostCrtFile || !it->second.hostValue) {
         ret = 0xffffffffu;
     } else {
         FILE* host = reinterpret_cast<FILE*>(it->second.hostValue);
         ret = uint32_t(std::fclose(host));
         fileHandleDebugNames_.erase(args.a0);
         fileReadCounts_.erase(args.a0);
-        guestHandles_.erase(it);
+        ceKernel_.handles().erase(it);
     }
     return true;
 }

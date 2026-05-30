@@ -262,8 +262,8 @@ uint32_t SyntheticDllRuntime::makeGuestDc(uint32_t hwnd) {
 }
 
 SyntheticDllRuntime::GuestDc* SyntheticDllRuntime::lookupGuestDc(uint32_t hdc) {
-    auto handle = guestHandles_.find(hdc);
-    if (handle == guestHandles_.end() || handle->second.kind != GuestHandle::Kind::GuestDc) return nullptr;
+    auto handle = ceKernel_.handles().find(hdc);
+    if (handle == ceKernel_.handles().end() || handle->second.kind != GuestHandle::Kind::GuestDc) return nullptr;
     auto dc = dcs_.find(hdc);
     return dc == dcs_.end() ? nullptr : &dc->second;
 }

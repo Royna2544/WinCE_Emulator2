@@ -168,8 +168,8 @@ const SyntheticDllRuntime::ResourceEntry* SyntheticDllRuntime::findResource(uint
 }
 
 const SyntheticDllRuntime::ResourceEntry* SyntheticDllRuntime::resourceFromHandle(uint32_t guestHandle) const {
-    auto handle = guestHandles_.find(guestHandle);
-    if (handle == guestHandles_.end() || handle->second.kind != GuestHandle::Kind::GuestResource ||
+    auto handle = ceKernel_.handles().find(guestHandle);
+    if (handle == ceKernel_.handles().end() || handle->second.kind != GuestHandle::Kind::GuestResource ||
         !handle->second.hostValue) {
         return nullptr;
     }

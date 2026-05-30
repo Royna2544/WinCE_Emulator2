@@ -608,19 +608,16 @@ void SyntheticDllRuntime::hookBasicBlock(uc_engine* uc, uint64_t address, uint32
 }
 
 uint32_t SyntheticDllRuntime::makeGuestHandle(GuestHandle handle) {
-    const uint32_t guest = nextHandle_++;
-    guestHandles_[guest] = handle;
-    return guest;
+    return ceKernel_.makeHandle(handle);
 }
 
 SyntheticDllRuntime::GuestHandle* SyntheticDllRuntime::lookupGuestHandle(uint32_t guestHandle) {
-    auto it = guestHandles_.find(guestHandle);
-    return it == guestHandles_.end() ? nullptr : &it->second;
+    return ceKernel_.lookupHandle(guestHandle);
 }
 
 uint32_t SyntheticDllRuntime::closeGuestHandle(uint32_t guestHandle) {
-    auto it = guestHandles_.find(guestHandle);
-    if (it == guestHandles_.end()) {
+    auto it = ceKernel_.handles().find(guestHandle);
+    if (it == ceKernel_.handles().end()) {
         lastError_ = 6; // ERROR_INVALID_HANDLE
         return 0;
     }
@@ -710,7 +707,7 @@ uint32_t SyntheticDllRuntime::closeGuestHandle(uint32_t guestHandle) {
         }
     }
 #endif
-    guestHandles_.erase(it);
+    ceKernel_.handles().erase(it);
     lastError_ = 0;
     return 1;
 }

@@ -274,9 +274,9 @@ void SyntheticDllRuntime::flushRegistry() {
 std::optional<std::string> SyntheticDllRuntime::registryPathFromHandle(uint32_t hkey, const std::string& subKey) const {
     std::string base = registryRootName(hkey);
     if (base.empty()) {
-        auto handle = guestHandles_.find(hkey);
+        auto handle = ceKernel_.handles().find(hkey);
         auto path = registryHandles_.find(hkey);
-        if (handle == guestHandles_.end() || handle->second.kind != GuestHandle::Kind::GuestRegistryKey ||
+        if (handle == ceKernel_.handles().end() || handle->second.kind != GuestHandle::Kind::GuestRegistryKey ||
             path == registryHandles_.end()) {
             return std::nullopt;
         }
@@ -680,7 +680,7 @@ bool SyntheticDllRuntime::handleRegCloseKey(SyntheticExportCode code, const Gues
     (void)code;
     if (registryRootName(args.a0).empty()) {
         registryHandles_.erase(args.a0);
-        guestHandles_.erase(args.a0);
+        ceKernel_.handles().erase(args.a0);
     }
     ret = 0;
     return true;

@@ -36,6 +36,12 @@ Current emulator difference:
   wired into `iNavi_Unicorn_Emulator.vcxproj`. No runtime behavior has moved
   into those scaffolds yet. The 2026-05-30 Release build passed with one
   pre-existing Boost Beast warning from `remote_server.cpp`.
+- `GuestHandle`, the guest handle table, and the next-handle counter now live
+  behind `CeKernel`. `SyntheticDllRuntime` still orchestrates handle cleanup
+  for windows, DCs, host resources, mappings, and guest threads while later
+  migration phases move those owners into their CE-shaped subsystems. The
+  2026-05-30 Release build passed after this migration with the same Boost
+  Beast warning from `remote_server.cpp`.
 
 ## Threading And Message Queues
 

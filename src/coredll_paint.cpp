@@ -63,7 +63,7 @@ bool SyntheticDllRuntime::handleEndPaint(SyntheticExportCode code, const GuestCa
     if (args.a1) uc_mem_read(uc_, args.a1, &hdc, sizeof(hdc));
     if (hdc) {
         dcs_.erase(hdc);
-        guestHandles_.erase(hdc);
+        ceKernel_.handles().erase(hdc);
     }
     ret = windows_.count(args.a0) ? 1 : 0;
     lastError_ = ret ? 0 : 1400;
@@ -142,13 +142,13 @@ bool SyntheticDllRuntime::handleGetPixel(SyntheticExportCode code, const GuestCa
 
 bool SyntheticDllRuntime::handleReleaseDC(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
     (void)code;
-    auto handle = guestHandles_.find(args.a1);
-    if (handle == guestHandles_.end() || handle->second.kind != GuestHandle::Kind::GuestDc) {
+    auto handle = ceKernel_.handles().find(args.a1);
+    if (handle == ceKernel_.handles().end() || handle->second.kind != GuestHandle::Kind::GuestDc) {
         lastError_ = 6;
         ret = 0;
     } else {
         dcs_.erase(args.a1);
-        guestHandles_.erase(handle);
+        ceKernel_.handles().erase(handle);
         lastError_ = 0;
         ret = 1;
         presentHostWindows(false);

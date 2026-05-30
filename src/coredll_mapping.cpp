@@ -361,7 +361,7 @@ uint32_t SyntheticDllRuntime::handleUnmapViewOfFile(uint32_t baseAddress) {
     spdlog::info("UnmapViewOfFile base=0x{:08x} mapping=0x{:08x} name=\"{}\" size={} synced={}",
                  baseAddress, mappingHandle, name, view->second.size, synced);
     mappedViews_.erase(view);
-    const bool mappingHandleOpen = guestHandles_.find(mappingHandle) != guestHandles_.end();
+    const bool mappingHandleOpen = ceKernel_.handles().find(mappingHandle) != ceKernel_.handles().end();
     const bool hasMappedView = std::any_of(mappedViews_.begin(), mappedViews_.end(),
                                            [&](const auto& entry) {
                                                return entry.second.mappingHandle == mappingHandle;

@@ -108,7 +108,7 @@ bool SyntheticDllRuntime::dispatchOle32(const std::string& name,
             ret = 0;
         } else {
             ret = reinterpret_cast<IUnknown*>(handle->hostValue)->Release();
-            if (!ret) guestHandles_.erase(guestHandle);
+            if (!ret) ceKernel_.handles().erase(guestHandle);
         }
     } else if (name == "CoInitializeEx") {
         ret = uint32_t(::CoInitializeEx(nullptr, a1));

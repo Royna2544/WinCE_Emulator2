@@ -108,7 +108,7 @@ bool SyntheticDllRuntime::handleWinsockCloseSocket(SyntheticExportCode code, con
         ret = 0xffffffffu;
     } else {
         ret = closesocket(SOCKET(handle->hostValue));
-        guestHandles_.erase(args.a0);
+        ceKernel_.handles().erase(args.a0);
         lastError_ = ret ? WSAGetLastError() : 0;
     }
     return true;

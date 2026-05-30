@@ -2,6 +2,8 @@
 
 #include <unicorn/unicorn.h>
 
+#include "ce_kernel.h"
+
 #include <nlohmann/json.hpp>
 
 #include <array>
@@ -489,44 +491,7 @@ private:
         uint16_t maxOrdinal{};
         OrdinalHandlerMap handlers;
     };
-    struct GuestHandle {
-        enum class Kind {
-            HostFile,
-            HostFind,
-            HostCrtFile,
-            HostWaveIn,
-            HostWaveOut,
-            HostEvent,
-            HostMutex,
-            HostMenu,
-            HostAccelerator,
-            HostIcon,
-            HostCursor,
-            HostBitmap,
-            HostRegion,
-            HostSocket,
-            HostComInterface,
-            HostSerialDevice,
-            GuestFileMapping,
-            GuestPropertySheetPage,
-            GuestHeap,
-            GuestResource,
-            GuestRegistryKey,
-            GuestProcess,
-            GuestThread,
-            GuestSerialDevice,
-            GuestFind,
-            GuestWindow,
-            GuestDc,
-            GuestBrush,
-            GuestPen,
-            GuestFont,
-        };
-
-        Kind kind{Kind::GuestHeap};
-        uintptr_t hostValue{};
-        uint32_t filePointer{};
-    };
+    using GuestHandle = CeKernel::GuestHandle;
     struct SerialDeviceConfig {
         std::string guest;
         std::string type;
@@ -811,7 +776,7 @@ private:
     uint32_t heapLimit_ = 0x34000000;
     uint32_t nextHeap_ = 0x30010000;
     uint32_t lastError_ = 0;
-    uint32_t nextHandle_ = 0x10000;
+    CeKernel ceKernel_;
     uint32_t processHeapHandle_ = 0;
     uint64_t tick_ = 0;
     uint64_t windowZOrder_ = 0;
@@ -859,7 +824,6 @@ private:
     std::map<uint32_t, uint32_t> tlsValues_;
     std::map<uint32_t, uint32_t> criticalSectionDepth_;
     std::map<uint32_t, uint32_t> syntheticHandleValues_;
-    std::map<uint32_t, GuestHandle> guestHandles_;
     std::map<uint32_t, GuestThreadState> guestThreads_;
     GuestCpuContext mainThreadContext_;
     uint32_t activeGuestThread_{};

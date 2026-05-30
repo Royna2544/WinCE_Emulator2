@@ -43,9 +43,9 @@ void SyntheticDllRuntime::registerCoredllGuiExports(SyntheticModule& module) {
 bool SyntheticDllRuntime::handleSetCursor(SyntheticExportCode, const GuestCallArgs& args, uint32_t& ret) {
     ret = currentCursor_;
     currentCursor_ = args.a0;
-    auto handle = guestHandles_.find(args.a0);
+    auto handle = ceKernel_.handles().find(args.a0);
     HCURSOR hostCursor = nullptr;
-    if (handle != guestHandles_.end() && handle->second.hostValue) {
+    if (handle != ceKernel_.handles().end() && handle->second.hostValue) {
         hostCursor = reinterpret_cast<HCURSOR>(handle->second.hostValue);
     }
     ::SetCursor(hostCursor);

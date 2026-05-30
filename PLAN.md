@@ -37,7 +37,7 @@ file-name shortcuts, route-screen shortcuts, or coordinate-specific fixes.
 
 ## Phase 2: Virtual Kernel Handle/Thread/Wait Migration
 
-- [ ] Move `GuestHandle`, `guestHandles_`, `nextHandle_`, `makeGuestHandle`,
+- [x] Move `GuestHandle`, `guestHandles_`, `nextHandle_`, `makeGuestHandle`,
   `lookupGuestHandle`, and `closeGuestHandle` behind `CeKernel`.
   Current source anchors: `src/synthetic_dll.h`, `src/synthetic_dll.cpp`.
 - [ ] Move `GuestThreadState`, `GuestCpuContext`, `guestThreads_`,

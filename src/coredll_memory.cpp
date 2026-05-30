@@ -170,13 +170,13 @@ bool SyntheticDllRuntime::handleHeapCreate(SyntheticExportCode code, const Guest
 
 bool SyntheticDllRuntime::handleHeapDestroy(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
     (void)code;
-    auto it = guestHandles_.find(args.a0);
-    if (it == guestHandles_.end() || it->second.kind != GuestHandle::Kind::GuestHeap ||
+    auto it = ceKernel_.handles().find(args.a0);
+    if (it == ceKernel_.handles().end() || it->second.kind != GuestHandle::Kind::GuestHeap ||
         args.a0 == processHeapHandle_) {
         lastError_ = 6;
         ret = 0;
     } else {
-        guestHandles_.erase(it);
+        ceKernel_.handles().erase(it);
         lastError_ = 0;
         ret = 1;
     }
