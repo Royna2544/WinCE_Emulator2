@@ -202,6 +202,13 @@ public:
     bool hasMessagesForOwner(uint32_t ownerThread) const noexcept {
         return messageCountForOwner(ownerThread) != 0;
     }
+    std::optional<uint32_t> oldestPendingOwner() const {
+        for (const GuestMessage& message : messages_) {
+            const uint32_t ownerThread = ownerForMessage(message);
+            if (ownerThread != kNoOwnerThread) return ownerThread;
+        }
+        return std::nullopt;
+    }
     void postMessage(const GuestMessage& message) { postBack(message, MessageQueueKind::Posted); }
     void postMessage(GuestMessage&& message) { postBack(message, MessageQueueKind::Posted); }
     void postPostedMessage(const GuestMessage& message) { postBack(message, MessageQueueKind::Posted); }

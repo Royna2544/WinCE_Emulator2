@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -414,6 +415,22 @@ bool SyntheticDllRuntime::switchToRunnableGuestThread(const char* reason,
                                                       uint32_t returnAddress,
                                                       uint32_t preferredHandle) {
     refreshSignaledGuestWaits();
+    auto logOwnerPriority = [&](uint32_t ownerThread, const char* target) {
+        constexpr uint64_t kOwnerPriorityLogIntervalMs = 1000;
+        const uint64_t nowMs = hostTickMilliseconds();
+        if (lastGweOwnerPriorityLogMs_ &&
+            nowMs - lastGweOwnerPriorityLogMs_ < kOwnerPriorityLogIntervalMs) {
+            return;
+        }
+        lastGweOwnerPriorityLogMs_ = nowMs;
+        spdlog::info("guest scheduler owner-priority reason={} target={} owner=0x{:08x} ownerQueued={} totalQueued={} preferred=0x{:08x}",
+                     reason ? reason : "cooperate",
+                     target,
+                     ownerThread,
+                     ceGwe_.messageCountForOwner(ownerThread),
+                     ceGwe_.messageCount(),
+                     preferredHandle);
+    };
     auto switchTo = [&](uint32_t handle, GuestThreadState& thread) {
         if (ceKernel_.activeGuestThread()) {
             auto active = ceKernel_.threads().find(ceKernel_.activeGuestThread());
@@ -472,6 +489,34 @@ bool SyntheticDllRuntime::switchToRunnableGuestThread(const char* reason,
                       threadPc, threadRa, threadSp, threadV0);
         return true;
     };
+
+    if (const std::optional<uint32_t> owner = ceGwe_.oldestPendingOwner()) {
+        if (*owner == ceKernel_.mainThreadPseudoHandle()) {
+            if (ceKernel_.activeGuestThread()) {
+                auto active = ceKernel_.threads().find(ceKernel_.activeGuestThread());
+                if (active != ceKernel_.threads().end()) {
+                    active->second.context = captureGuestCpuContext();
+                    if (returnAddress) active->second.context.registers[UC_MIPS_REG_PC] = returnAddress;
+                    if (active->second.state == GuestThreadRunState::Running) {
+                        active->second.state = GuestThreadRunState::Runnable;
+                    }
+                }
+                ceKernel_.activeGuestThread() = 0;
+            }
+            if (restoreMainThreadContextIfRunnable(reason)) {
+                logOwnerPriority(*owner, "main");
+                return true;
+            }
+        } else {
+            auto queuedOwner = ceKernel_.threads().find(*owner);
+            if (queuedOwner != ceKernel_.threads().end() &&
+                queuedOwner->second.state == GuestThreadRunState::Runnable &&
+                queuedOwner->second.context.valid) {
+                logOwnerPriority(*owner, "guest");
+                return switchTo(queuedOwner->first, queuedOwner->second);
+            }
+        }
+    }
 
     if (preferredHandle) {
         auto preferred = ceKernel_.threads().find(preferredHandle);

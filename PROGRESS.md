@@ -923,3 +923,26 @@ Confirmed behavior difference:
   handles. That run did not reach an actual serial `ReadFile` before scripted
   shutdown, so the broader interactive UI responsiveness acceptance remains
   open for the owner-priority scheduler step.
+- GWE owner-priority scheduling now runs before the generic runnable-thread
+  round-robin. `CeGwe` exposes the oldest pending message owner from its
+  mirrored owner lanes, and the scheduler restores the main pseudo-thread
+  context or switches to the runnable owner thread before considering a
+  preferred worker or ordinary worker slice. The handoff logs are rate-limited
+  and include owner queue count, total queue count, and the previous preferred
+  worker. CE reference:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/cmsgque.h:798`.
+  Current source references:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_gwe.h:205`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_thread_runtime.cpp:414`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_thread_runtime.cpp:493`,
+  and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.h:878`.
+  The 2026-05-30 Release build passed with the known Boost Beast warning.
+  Bounded Release autodrive wrote `captures/inavi_autodrive_20260530_230158`
+  and captured `00_initial.png` with no new high-signal crash/ordinal
+  regressions. A longer Debug run wrote
+  `captures/inavi_autodrive_20260530_230320`; it logged
+  `guest scheduler owner-priority reason=ResumeThread target=main
+  owner=0xfffffffe ownerQueued=63 totalQueued=63`, showing that pending main
+  UI work was selected before the newly resumed worker batch. The full manual
+  dialog-switching acceptance is still pending an interactive run.

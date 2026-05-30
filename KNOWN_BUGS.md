@@ -107,9 +107,11 @@ Status:
 - `CeDevice` now owns serial config, DCB-like mode, `COMMTIMEOUTS`, comm mask,
   queue sizes, and virtual no-data backend state. No-data virtual serial reads
   now park active guest threads and wake them on remote bytes or deadline
-  expiry. The bug remains open until this is verified in a live UI interaction
-  path and GWE owner queues are preferred over serial polling workers when UI
-  work exists.
+  expiry. GWE owner-priority scheduling now prefers the oldest pending message
+  owner, and the 2026-05-30 Debug run showed the main pseudo-thread being
+  selected with 63 queued UI messages before a resumed worker batch. The bug
+  remains open until this is verified in a live UI interaction path through
+  the previous sensor-polling freeze.
 
 ## Window Visibility And Modal Ownership Are Region-Incomplete
 

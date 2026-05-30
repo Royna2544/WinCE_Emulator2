@@ -176,13 +176,13 @@ results, or timing thresholds.
 - [x] Wake parked serial-read threads when remote serial data arrives or their
   read timeout expires. Do not model no-data serial polling as an immediate
   infinite success loop.
-- [ ] Add GWE owner-priority scheduling so pending owner queues are preferred
+- [x] Add GWE owner-priority scheduling so pending owner queues are preferred
   over generic worker slices. CE source anchor:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/cmsgque.h:798`.
   Current scheduler anchor: `src/coredll_thread_runtime.cpp`.
-- [ ] Restore or continue the valid main message-pump context before
+- [x] Restore or continue the valid main message-pump context before
   `pre-queued-worker` slices when the main pseudo-thread owns pending UI work.
-- [ ] Add rate-limited diagnostics for virtual serial empty-read waits, GWE
+- [x] Add rate-limited diagnostics for virtual serial empty-read waits, GWE
   owner queue counts, and scheduler owner-priority handoff.
 - [ ] Validate with Release build, bounded smoke, and Debug interactive logs:
   `ReadFile transferred=0` must not appear as an unlimited hot loop,

@@ -875,6 +875,7 @@ private:
     uint32_t defaultSerialBaud_{9600};
     std::string defaultSerialMode_{"8N1"};
     bool diagnosticDumpsEnabled_{};
+    uint64_t lastGweOwnerPriorityLogMs_{};
 
     std::optional<SyntheticModule> createCoredll();
     std::optional<SyntheticModule> createCommctrl();
