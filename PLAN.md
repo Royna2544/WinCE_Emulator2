@@ -91,6 +91,10 @@ file-name shortcuts, route-screen shortcuts, or coordinate-specific fixes.
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/cmsgque.h:23`
   and
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/cmsgque.h:798`.
+  - [x] Add a GWE-side thread-queue/window-owner registry scaffold and
+    register created/destroyed windows without changing delivery behavior.
+    Current source anchors: `src/ce_gwe.h`, `src/coredll_window_runtime.cpp`,
+    `src/coredll_named_dispatch.cpp`.
 - [ ] Route `PostMessageW`, thread messages, input messages, timers,
   `GetMessageW`, `PeekMessageW`, `DispatchMessageW`, and
   `MsgWaitForMultipleObjectsEx` through `CeGwe`.

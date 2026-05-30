@@ -139,6 +139,21 @@ Current emulator difference:
   `captures/inavi_autodrive_20260530_184459`; startup window capture still
   completed, and `DeviceParser.exe` still followed the decoded CE kernel exit
   path.
+- `CeGwe` now has a buildable thread-queue/window-owner registry scaffold.
+  Created and imported guest windows register their current owner thread, and
+  destroyed windows unregister from GWE. Message delivery still uses the
+  existing flat backing queue, so this is a behavior-preserving step toward
+  CE-style per-thread `MsgQueue` ownership. CE reference:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/cmsgque.h:798`.
+  Current source references:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_gwe.h`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp:821`, and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_named_dispatch.cpp:3435`.
+  The 2026-05-30 Release build passed with the same Boost Beast warning.
+  Bounded autodrive with the companion enabled wrote
+  `captures/inavi_autodrive_20260530_185114`; startup window capture completed
+  and the high-signal log scan found no new zero-PC fatal, hard-error, or
+  unsupported coredll ordinal lines.
 
 ## Threading And Message Queues
 

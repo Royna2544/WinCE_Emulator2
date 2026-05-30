@@ -933,6 +933,7 @@ std::optional<uint32_t> SyntheticDllRuntime::findExternalGuestWindow(const std::
         window.externalProcessId = processId;
         window.externalHwnd = externalHwnd;
         windows_[hwnd] = window;
+        ceGwe_.registerWindowOwner(hwnd, window.ownerThread);
         externalWindowHandles_[key] = hwnd;
         spdlog::info("FindWindowW imported external guest window hwnd=0x{:08x} remotePid={} remoteHwnd=0x{:08x} class=\"{}\" title=\"{}\"",
                      hwnd, processId, externalHwnd, entryClass, entryTitle);
@@ -1210,6 +1211,7 @@ void SyntheticDllRuntime::pollCrossProcessGuestMessages() {
             window.externalProcessId = processId;
             window.externalHwnd = externalHwnd;
             windows_[hwnd] = window;
+            ceGwe_.registerWindowOwner(hwnd, window.ownerThread);
             externalWindowHandles_[key] = hwnd;
             spdlog::info("imported external guest window hwnd=0x{:08x} remotePid={} remoteHwnd=0x{:08x} class=\"{}\" title=\"{}\"",
                          hwnd, processId, externalHwnd, window.className, window.title);
@@ -1634,6 +1636,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
         window.height = height;
         window.visible = (style & 0x10000000u) != 0;
         windows_[ret] = window;
+        ceGwe_.registerWindowOwner(ret, window.ownerThread);
         ensureHostWindow(ret, windows_[ret]);
         publishGuestWindowState(ret);
 
@@ -2350,6 +2353,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             window.createStruct = createStruct;
         }
         windows_[ret] = window;
+        ceGwe_.registerWindowOwner(ret, window.ownerThread);
         ensureHostWindow(ret, windows_[ret]);
         publishGuestWindowState(ret);
         GuestMessage size{};
@@ -3452,6 +3456,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             it->second.visible = false;
             it->second.destroyed = true;
             it->second.paintBoundsValid = false;
+            ceGwe_.unregisterWindow(a0);
             publishGuestWindowState(a0);
             GuestMessage destroy{};
             destroy.hwnd = a0;

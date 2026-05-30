@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <deque>
 #include <iterator>
+#include <map>
 #include <optional>
 #include <string_view>
 
@@ -21,6 +22,14 @@ public:
         bool crossProcess{};
     };
 
+    struct ThreadQueue {
+        uint32_t ownerThread{};
+        std::deque<GuestMessage> posted;
+        std::deque<GuestMessage> sent;
+        std::deque<GuestMessage> input;
+        std::deque<GuestMessage> timers;
+    };
+
     static constexpr std::string_view name() noexcept { return "CE GWE"; }
     static constexpr std::string_view role() noexcept {
         return "Future owner for GWE message queues, windows, input, timers, and paint regions.";
@@ -30,6 +39,21 @@ public:
     const std::deque<GuestMessage>& messages() const noexcept { return messages_; }
     size_t messageCount() const noexcept { return messages_.size(); }
     bool hasMessages() const noexcept { return !messages_.empty(); }
+    void ensureThreadQueue(uint32_t ownerThread) {
+        if (!ownerThread) return;
+        threadQueues_.try_emplace(ownerThread, ThreadQueue{ownerThread});
+    }
+    void registerWindowOwner(uint32_t hwnd, uint32_t ownerThread) {
+        if (!hwnd) return;
+        if (ownerThread) ensureThreadQueue(ownerThread);
+        windowOwners_[hwnd] = ownerThread;
+    }
+    void unregisterWindow(uint32_t hwnd) { windowOwners_.erase(hwnd); }
+    uint32_t ownerForWindow(uint32_t hwnd) const {
+        auto it = windowOwners_.find(hwnd);
+        return it == windowOwners_.end() ? 0 : it->second;
+    }
+    const std::map<uint32_t, ThreadQueue>& threadQueues() const noexcept { return threadQueues_; }
     void postMessage(const GuestMessage& message) { messages_.push_back(message); }
     void postMessage(GuestMessage&& message) { messages_.push_back(message); }
     void postFront(const GuestMessage& message) { messages_.push_front(message); }
@@ -124,4 +148,6 @@ public:
 
 private:
     std::deque<GuestMessage> messages_;
+    std::map<uint32_t, ThreadQueue> threadQueues_;
+    std::map<uint32_t, uint32_t> windowOwners_;
 };

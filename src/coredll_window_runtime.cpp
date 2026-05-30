@@ -843,6 +843,7 @@ uint32_t SyntheticDllRuntime::makeGuestWindow(const std::string& className, cons
     window.height = std::max<int32_t>(1, height);
     window.visible = visible;
     windows_[hwnd] = window;
+    ceGwe_.registerWindowOwner(hwnd, window.ownerThread);
     ensureHostWindow(hwnd, windows_[hwnd]);
     publishGuestWindowState(hwnd);
     return hwnd;
