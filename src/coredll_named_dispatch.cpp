@@ -2649,8 +2649,8 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             ret = 1;
             lastError_ = 0;
         } else if (object->second.kind == GuestHandle::Kind::HostBitmap) {
-            auto bitmap = bitmaps_.find(a0);
-            if (bitmap != bitmaps_.end() && bitmap->second.stock) {
+            const CeMgdi::BitmapState* bitmapState = ceMgdi_.bitmapState(a0);
+            if (bitmapState && bitmapState->stock) {
                 ret = 1;
                 lastError_ = 0;
                 return true;

@@ -194,6 +194,9 @@ results, or timing thresholds.
   - [x] Route `SetDIBColorTable` bitmap validation and palette bounds through
     `CeMgdi::BitmapState` while the palette bytes still live in `GuestBitmap`.
     Current source anchor: `src/coredll_bitmap.cpp`.
+  - [x] Route `DeleteObject` stock-bitmap protection through
+    `CeMgdi::BitmapState` before host/guest bitmap storage teardown. Current
+    source anchor: `src/coredll_named_dispatch.cpp`.
 - [ ] Add app clip, system clip, and actual device clip state before adding
   more blit optimizations. CE source anchor:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/MGDI/INC/dc.hpp:13`.
