@@ -109,8 +109,10 @@ Status:
   app-specific modal or route-window handling.
 - Current scaffold status: `CeGwe` now owns a window-region shadow populated
   from current window geometry/visibility and invalidate/validate calls. The
-  bug remains open until hit testing, z-order visibility, and paint/DC clipping
-  consume those regions as behavioral truth.
+  input hit-test path now consumes GWE visible-region rectangles for point
+  checks and pointer-capture validity. The bug remains open until z-order
+  visibility, popup/backing behavior, and paint/DC clipping consume those
+  regions as behavioral truth.
 
 ## Paint And ValidateRect Do Not Preserve CE Update Regions
 

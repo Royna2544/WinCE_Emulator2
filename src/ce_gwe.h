@@ -157,6 +157,18 @@ public:
         auto it = windowRegions_.find(hwnd);
         return it == windowRegions_.end() ? nullptr : &it->second;
     }
+    static bool rectContainsPoint(const Rect& rect, int32_t x, int32_t y) noexcept {
+        return x >= rect.left && y >= rect.top && x < rect.right && y < rect.bottom;
+    }
+    bool visibleRegionContainsPoint(uint32_t hwnd, int32_t x, int32_t y) const {
+        const WindowRegionState* state = windowRegionState(hwnd);
+        return state && state->hasVisibleRegion && rectContainsPoint(state->visibleRect, x, y);
+    }
+    std::optional<Rect> visibleRectForWindow(uint32_t hwnd) const {
+        const WindowRegionState* state = windowRegionState(hwnd);
+        if (!state || !state->hasVisibleRegion) return std::nullopt;
+        return state->visibleRect;
+    }
     uint32_t ownerForMessage(const GuestMessage& message) const {
         const auto owner = messageOwners_.find(message.queueId);
         if (owner != messageOwners_.end()) return owner->second;

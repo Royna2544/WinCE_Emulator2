@@ -1602,8 +1602,9 @@ uint32_t SyntheticDllRuntime::windowAtPoint(uint32_t rootGuestHwnd, int32_t x, i
         const auto it = windows_.find(hwnd);
         if (it == windows_.end()) continue;
         const GuestWindow& window = it->second;
+        const auto visibleRect = ceGwe_.visibleRectForWindow(hwnd);
         if (hwnd == rootGuestHwnd || window.destroyed || !window.visible ||
-            !window.enabled || window.parent || !(window.style & 0x80000000u)) {
+            !visibleRect || !window.enabled || window.parent || !(window.style & 0x80000000u)) {
             continue;
         }
         const auto [ox, oy] = originOf(hwnd);
@@ -1611,9 +1612,7 @@ uint32_t SyntheticDllRuntime::windowAtPoint(uint32_t rootGuestHwnd, int32_t x, i
         best = hwnd;
         bestX = ox;
         bestY = oy;
-        const int32_t right = ox + window.width;
-        const int32_t bottom = oy + window.height;
-        if (x < ox || y < oy || x >= right || y >= bottom) {
+        if (!CeGwe::rectContainsPoint(*visibleRect, x, y)) {
             clientX = x - ox;
             clientY = y - oy;
             return hwnd;
@@ -1627,7 +1626,8 @@ uint32_t SyntheticDllRuntime::windowAtPoint(uint32_t rootGuestHwnd, int32_t x, i
         const auto it = windows_.find(hwnd);
         if (it == windows_.end()) continue;
         const GuestWindow& window = it->second;
-        if (window.destroyed || !window.visible || !window.enabled || !belongsToRoot(hwnd)) continue;
+        if (window.destroyed || !window.visible || !ceGwe_.visibleRectForWindow(hwnd) ||
+            !window.enabled || !belongsToRoot(hwnd)) continue;
         if (!isOwnedPopupWindow(hwnd) || guestWindowCoversFramebuffer(hwnd)) continue;
         if (hasCoveringRootPopup(hwnd)) continue;
         const auto [ox, oy] = originOf(hwnd);
@@ -1640,13 +1640,15 @@ uint32_t SyntheticDllRuntime::windowAtPoint(uint32_t rootGuestHwnd, int32_t x, i
         const auto it = windows_.find(hwnd);
         if (it == windows_.end()) continue;
         const GuestWindow& window = it->second;
-        if (window.destroyed || !window.visible || !window.enabled || !belongsToRoot(hwnd)) continue;
+        const auto visibleRect = ceGwe_.visibleRectForWindow(hwnd);
+        if (window.destroyed || !window.visible || !visibleRect ||
+            !window.enabled || !belongsToRoot(hwnd)) continue;
         if (hasCoveringRootPopup(hwnd)) continue;
         const auto [ox, oy] = originOf(hwnd);
-        int32_t left = ox;
-        int32_t top = oy;
-        int32_t right = ox + window.width;
-        int32_t bottom = oy + window.height;
+        int32_t left = visibleRect->left;
+        int32_t top = visibleRect->top;
+        int32_t right = visibleRect->right;
+        int32_t bottom = visibleRect->bottom;
         if ((window.width <= 0 || window.height <= 0) && window.paintBoundsValid) {
             left = window.paintLeft;
             top = window.paintTop;
@@ -1711,7 +1713,8 @@ void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t
         for (uint32_t current = capturedHwnd; current;) {
             auto window = windows_.find(current);
             if (window == windows_.end() || window->second.destroyed ||
-                !window->second.visible || (!window->second.enabled && !abovePopupRoot)) {
+                !ceGwe_.visibleRectForWindow(current) ||
+                (!window->second.enabled && !abovePopupRoot)) {
                 return false;
             }
             if (current == popupRoot) abovePopupRoot = true;
@@ -1791,8 +1794,7 @@ void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t
     auto targetWindow = windows_.find(hwnd);
     if (targetWindow != windows_.end() && !targetWindow->second.parent &&
         hwnd != rootGuestHwnd && (targetWindow->second.style & 0x80000000u) &&
-        (clientX < 0 || clientY < 0 || clientX >= targetWindow->second.width ||
-         clientY >= targetWindow->second.height)) {
+        !ceGwe_.visibleRegionContainsPoint(hwnd, hostX, hostY)) {
         if (message == 0x0202 && hostPointerCaptureWindow_ == hwnd) {
             hostPointerCaptureWindow_ = 0;
         }

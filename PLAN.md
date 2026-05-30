@@ -162,6 +162,11 @@ results, or timing thresholds.
 - [ ] Replace popup/backing/z-order heuristics with region-owned visibility
   decisions where possible. CE source anchor:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/window.hpp:1038`.
+  - [x] Feed GWE window-region state with absolute rectangles for all
+    non-external guest windows whenever window state is published, and use
+    GWE visible-region queries for input hit testing and pointer capture
+    validity. Current source anchors: `src/ce_gwe.h`,
+    `src/coredll_named_dispatch.cpp`, and `src/coredll_window_runtime.cpp`.
 
 ## Phase 5: MGDI DC/Window Clipping Migration
 

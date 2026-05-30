@@ -59,7 +59,8 @@ Active refactor checklist: `PLAN.md`.
      current window state and invalidate/validate calls. `BeginPaint` now
      consumes the GWE client-update rectangle when present, and `EndPaint`
      clears the GWE update region. Next step is to broaden region-owned
-     visibility, hit testing, and DC clipping.
+     visibility and DC clipping. Input hit testing now uses GWE visible-region
+     rectangles for its point checks.
 
 4. Make paint APIs consume update regions.
    - CE reference:

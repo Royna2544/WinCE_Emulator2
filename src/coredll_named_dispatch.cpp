@@ -772,24 +772,42 @@ std::filesystem::path SyntheticDllRuntime::ensureCrossProcessWindowRegistryPath(
 
 void SyntheticDllRuntime::publishGuestWindowState(uint32_t hwnd) {
     auto windowIt = windows_.find(hwnd);
-    if (windowIt == windows_.end() || windowIt->second.externalProcess) {
+    if (windowIt == windows_.end()) {
         return;
     }
-    const GuestWindow& window = windowIt->second;
-    if (window.destroyed) {
-        ceGwe_.unregisterWindow(hwnd);
-    } else {
-        ceGwe_.updateWindowState(hwnd,
-                                 window.ownerThread,
-                                 window.parent,
-                                 window.style,
-                                 window.exStyle,
-                                 window.x,
-                                 window.y,
-                                 window.width,
-                                 window.height,
-                                 window.visible,
-                                 window.destroyed);
+    auto absoluteOrigin = [&](uint32_t target) {
+        int32_t x = 0;
+        int32_t y = 0;
+        for (uint32_t current = target; current;) {
+            auto it = windows_.find(current);
+            if (it == windows_.end()) break;
+            x += it->second.x;
+            y += it->second.y;
+            current = (it->second.style & kWindowStyleChild) ? it->second.parent : 0;
+        }
+        return std::pair<int32_t, int32_t>{x, y};
+    };
+    for (const auto& [candidateHwnd, candidate] : windows_) {
+        if (candidate.externalProcess) continue;
+        if (candidate.destroyed) {
+            ceGwe_.unregisterWindow(candidateHwnd);
+            continue;
+        }
+        const auto [absoluteX, absoluteY] = absoluteOrigin(candidateHwnd);
+        ceGwe_.updateWindowState(candidateHwnd,
+                                 candidate.ownerThread,
+                                 candidate.parent,
+                                 candidate.style,
+                                 candidate.exStyle,
+                                 absoluteX,
+                                 absoluteY,
+                                 candidate.width,
+                                 candidate.height,
+                                 candidate.visible,
+                                 candidate.destroyed);
+    }
+    if (windowIt->second.externalProcess) {
+        return;
     }
     const std::filesystem::path registryPath = ensureCrossProcessWindowRegistryPath();
     if (registryPath.empty()) {
@@ -827,6 +845,7 @@ void SyntheticDllRuntime::publishGuestWindowState(uint32_t hwnd) {
         }
     }
 
+    const GuestWindow& window = windowIt->second;
     windowsJson.push_back({
         {"processId", processId},
         {"hwnd", hwnd},
