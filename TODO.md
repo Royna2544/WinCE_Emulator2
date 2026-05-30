@@ -108,9 +108,10 @@ Active refactor checklist: `PLAN.md`.
      the runtime compatibility copy. `GetPixel` now overlays that MGDI palette
      before decoding indexed bitmap pixels, and bitmap rectangle/line/polygon
      and host-text writes now refresh the compatibility palette from MGDI
-     before indexed writes. Next step is to move more pixel operations/DC
-     object ownership behind MGDI instead of keeping `GuestBitmap` and saved
-     backing layers as runtime-owned truth.
+     before indexed writes. DIB-to-bitmap, `TransparentImage`, `BitBlt`, and
+     `StretchBlt` paths now do the same before indexed reads/writes. Next step
+     is to move more pixel operations/DC object ownership behind MGDI instead
+     of keeping `GuestBitmap` and saved backing layers as runtime-owned truth.
 
 ## Next
 

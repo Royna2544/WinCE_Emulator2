@@ -2888,6 +2888,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             const CeMgdi::DcState* dcState = ceMgdi_.dcState(a0);
             const uint32_t selectedBitmap = dcState ? dcState->selectedBitmap : dc->selectedBitmap;
             auto dstBitmap = bitmaps_.find(selectedBitmap);
+            if (dstBitmap != bitmaps_.end()) syncBitmapPaletteFromMgdi(selectedBitmap, dstBitmap->second);
             const bool ok = supported && (dstBitmap != bitmaps_.end()
                 ? stretchDibToBitmap(dstBitmap->second, int32_t(a1), int32_t(a2), int32_t(a3),
                                      int32_t(stackArg(4)), int32_t(stackArg(5)),
@@ -2932,6 +2933,8 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                                                       : (srcDc ? srcDc->selectedBitmap : 0);
         auto srcBitmap = srcDc ? bitmaps_.find(srcSelectedBitmap) : bitmaps_.end();
         auto dstBitmap = dstDc ? bitmaps_.find(dstSelectedBitmap) : bitmaps_.end();
+        if (srcBitmap != bitmaps_.end()) syncBitmapPaletteFromMgdi(srcSelectedBitmap, srcBitmap->second);
+        if (dstBitmap != bitmaps_.end()) syncBitmapPaletteFromMgdi(dstSelectedBitmap, dstBitmap->second);
         const int32_t dstH = int32_t(stackArg(4));
         const int32_t srcX = int32_t(stackArg(6));
         const int32_t srcY = int32_t(stackArg(7));
@@ -3109,6 +3112,8 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                                                       : (srcDc ? srcDc->selectedBitmap : 0);
         auto srcBitmap = srcDc ? bitmaps_.find(srcSelectedBitmap) : bitmaps_.end();
         auto dstBitmap = dstDc ? bitmaps_.find(dstSelectedBitmap) : bitmaps_.end();
+        if (srcBitmap != bitmaps_.end()) syncBitmapPaletteFromMgdi(srcSelectedBitmap, srcBitmap->second);
+        if (dstBitmap != bitmaps_.end()) syncBitmapPaletteFromMgdi(dstSelectedBitmap, dstBitmap->second);
         if (!dstDc || !srcDc || srcBitmap == bitmaps_.end() || !supportedSourceRasterOp(rop)) {
             spdlog::info("{} unsupported dst=0x{:08x} dstBitmap=0x{:08x} src=0x{:08x} srcBitmap=0x{:08x} "
                          "dst={}x{} src={}x{} srcOrigin={},{} rop=0x{:08x}",

@@ -1490,6 +1490,7 @@ bool SyntheticDllRuntime::handleSetDIBitsToDevice(const GuestCallArgs& args, uin
     const CeMgdi::DcState* dcState = ceMgdi_.dcState(args.a0);
     const uint32_t selectedBitmap = dcState ? dcState->selectedBitmap : dc->selectedBitmap;
     auto dstBitmap = bitmaps_.find(selectedBitmap);
+    if (dstBitmap != bitmaps_.end()) syncBitmapPaletteFromMgdi(selectedBitmap, dstBitmap->second);
     const bool ok = supported && (dstBitmap != bitmaps_.end()
         ? stretchDibToBitmap(dstBitmap->second, int32_t(args.a1), int32_t(args.a2), dstW, scanLines,
                              srcX, srcY, dstW, scanLines, stackArg(9), stackArg(10))

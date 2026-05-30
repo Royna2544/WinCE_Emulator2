@@ -225,6 +225,10 @@ results, or timing thresholds.
     `CeMgdi::BitmapState` before indexed pixel reads/writes. Current source
     anchors: `src/synthetic_dll.h`, `src/coredll_bitmap.cpp`, and
     `src/coredll_paint.cpp`.
+  - [x] Refresh compatibility bitmap palettes from MGDI before DIB-to-bitmap,
+    `TransparentImage`, `BitBlt`, and `StretchBlt` indexed pixel reads/writes.
+    Current source anchors: `src/coredll_bitmap.cpp` and
+    `src/coredll_named_dispatch.cpp`.
 - [ ] Add app clip, system clip, and actual device clip state before adding
   more blit optimizations. CE source anchor:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/MGDI/INC/dc.hpp:13`.

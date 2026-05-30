@@ -200,6 +200,8 @@ Status:
   mirroring to the runtime compatibility copy. `GetPixel` now overlays that
   MGDI palette for indexed pixel decode, and bitmap rectangle/line/polygon and
   host-text writes refresh the compatibility palette from MGDI before indexed
-  writes. The bug remains open until more pixel storage/DC object ownership
-  moves behind MGDI instead of saved backing heuristics remaining the clipping
-  truth.
+  writes. DIB-to-bitmap, `TransparentImage`, `BitBlt`, and `StretchBlt` paths
+  now also refresh compatibility palettes from MGDI before indexed
+  reads/writes. The bug remains open until more pixel storage/DC object
+  ownership moves behind MGDI instead of saved backing heuristics remaining the
+  clipping truth.
