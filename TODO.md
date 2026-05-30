@@ -10,7 +10,27 @@ Active refactor checklist: `PLAN.md`.
 
 ## Immediate
 
-1. Introduce a CE-shaped internal `MsgQueue` model.
+1. Finish virtual serial wait semantics and scheduler responsiveness.
+   - CE reference:
+     `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/DRIVERS/SERDEV/serial.c`,
+     `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COMM/IR/IRCOMM/ircomm.c:792`,
+     and
+     `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/cmsgque.h:798`.
+   - Current source to reshape:
+     `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_device.h:25`,
+     `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_fs.cpp:512`,
+     `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_thread_runtime.cpp:410`,
+     and
+     `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp:734`.
+   - Goal: keep virtual serial devices open when configured, but park/yield
+     no-data reads according to CE timeout semantics instead of producing an
+     unlimited immediate `ReadFile TRUE + 0` polling loop. Then prefer GWE
+     message owners over hot polling workers when UI/input work is pending.
+   - Current status: serial configuration, DCB-like mode, `COMMTIMEOUTS`,
+     comm mask, queue sizes, and virtual no-data backend state now live behind
+     `CeDevice`. Next step is timeout-aware no-data parking and wakeup.
+
+2. Introduce a CE-shaped internal `MsgQueue` model.
    - CE reference:
      `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/cmsgque.h:23`
      and
@@ -35,7 +55,7 @@ Active refactor checklist: `PLAN.md`.
      Next step is to continue Phase 4 window visible/update/client region
      migration.
 
-2. Model cross-thread `SendMessageW` as a queue transaction.
+3. Model cross-thread `SendMessageW` as a queue transaction.
    - CE reference:
      `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/cmsgque.h:897`.
    - Current source to audit:
@@ -47,7 +67,7 @@ Active refactor checklist: `PLAN.md`.
      different window-owner queue. Remaining follow-up is finer
      `InSendMessage`/timeout accounting if a target app imports those APIs.
 
-3. Implement real window visible/update/client regions.
+4. Implement real window visible/update/client regions.
    - CE reference:
      `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/window.hpp:1038`
      and
@@ -64,7 +84,7 @@ Active refactor checklist: `PLAN.md`.
      visibility and DC clipping. Input hit testing now uses GWE visible-region
      rectangles for its point checks.
 
-4. Make paint APIs consume update regions.
+5. Make paint APIs consume update regions.
    - CE reference:
      `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/INC/gweapiset1.hpp:350`
      and
@@ -79,7 +99,7 @@ Active refactor checklist: `PLAN.md`.
      PAINTSTRUCT rectangles. Remaining work is to intersect updates with real
      visible/client regions and feed MGDI/DC clipping from the same model.
 
-5. Add a CE-shaped GDI clipping layer.
+6. Add a CE-shaped GDI clipping layer.
    - CE reference:
      `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/MGDI/INC/dc.hpp:13`
      and
@@ -130,7 +150,7 @@ Active refactor checklist: `PLAN.md`.
 
 ## Next
 
-6. Preserve the coredll/GWE API-set separation internally.
+7. Preserve the coredll/GWE API-set separation internally.
    - CE reference:
      `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/CORE/DLL/coredll.cpp:41`.
    - Current source to audit:
@@ -139,14 +159,14 @@ Active refactor checklist: `PLAN.md`.
      into clearer internal subsystems: scheduler, message queue, window
      manager, paint/update regions, and MGDI/DC.
 
-7. Re-test modal/overlay/input behavior after the queue and region work.
+8. Re-test modal/overlay/input behavior after the queue and region work.
    - Do not add route-screen, file-name, window-title, or coordinate-specific
      emulator behavior.
    - Use bounded runs and keep logs targeted.
 
 ## Later
 
-8. Re-profile only after correctness changes settle.
+9. Re-profile only after correctness changes settle.
    - The current GDI hot paths may change substantially once clipping and
      update regions are first-class.
    - Do not optimize around today's backing/z-order heuristics if those

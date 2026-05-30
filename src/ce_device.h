@@ -2,7 +2,6 @@
 
 #include <cstdint>
 #include <map>
-#include <optional>
 #include <string>
 #include <string_view>
 
@@ -26,6 +25,7 @@ public:
     struct SerialState {
         uint32_t handle{};
         std::string guestName;
+        std::string deviceType;
         std::string hostName;
         std::string backend;
         SerialMode mode;
@@ -44,29 +44,16 @@ public:
         return "Future owner for virtual CE device and serial state.";
     }
 
-    void registerSerial(SerialState state) {
-        if (!state.handle) return;
-        state.open = true;
-        serialStates_[state.handle] = std::move(state);
-    }
-
-    bool unregisterSerial(uint32_t handle) {
-        return serialStates_.erase(handle) != 0;
-    }
-
-    SerialState* serialState(uint32_t handle) {
-        auto it = serialStates_.find(handle);
-        return it == serialStates_.end() ? nullptr : &it->second;
-    }
-
-    const SerialState* serialState(uint32_t handle) const {
-        auto it = serialStates_.find(handle);
-        return it == serialStates_.end() ? nullptr : &it->second;
-    }
-
-    bool hasSerial(uint32_t handle) const {
-        return serialStates_.find(handle) != serialStates_.end();
-    }
+    void registerSerial(SerialState state);
+    bool unregisterSerial(uint32_t handle);
+    SerialState* serialState(uint32_t handle);
+    const SerialState* serialState(uint32_t handle) const;
+    bool hasSerial(uint32_t handle) const;
+    bool setSerialMode(uint32_t handle, SerialMode mode, uint32_t lastError = 0);
+    bool setSerialTimeouts(uint32_t handle, CommTimeouts timeouts, uint32_t lastError = 0);
+    bool setSerialMask(uint32_t handle, uint32_t mask, uint32_t lastError = 0);
+    bool setSerialQueueSizes(uint32_t handle, uint32_t inQueueSize, uint32_t outQueueSize, uint32_t lastError = 0);
+    bool markSerialPurged(uint32_t handle, uint32_t flags, uint32_t lastError = 0);
 
 private:
     std::map<uint32_t, SerialState> serialStates_;

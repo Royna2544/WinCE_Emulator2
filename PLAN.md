@@ -160,13 +160,13 @@ results, or timing thresholds.
   `src/synthetic_dll.cpp`, `src/coredll_fs.cpp`, and `src/coredll_comm.cpp`.
 - [x] Wire `CeDevice` into `iNavi_Unicorn_Emulator.vcxproj` as a build-only
   scaffold before moving behavior.
-- [ ] Move virtual serial configuration, timeout, mask, queue-size, and
+- [x] Move virtual serial configuration, timeout, mask, queue-size, and
   status bookkeeping behind `CeDevice` while preserving current `ReadFile`
   behavior for one buildable migration step. CE source anchors:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/DRIVERS/SERDEV/serial.c`
   and
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COMM/IR/IRCOMM/ircomm.c:792`.
-- [ ] Replace "disconnected serial-fallback" wording with "virtual serial
+- [x] Replace "disconnected serial-fallback" wording with "virtual serial
   no-data backend" when the emulator intentionally keeps a guest-visible
   serial device open without host bytes.
 - [ ] Implement timeout-aware virtual serial reads: transfer remote/injected

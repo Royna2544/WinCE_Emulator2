@@ -2,6 +2,7 @@
 
 #include <unicorn/unicorn.h>
 
+#include "ce_device.h"
 #include "ce_gwe.h"
 #include "ce_kernel.h"
 #include "ce_mgdi.h"
@@ -743,6 +744,7 @@ private:
     uint32_t nextHeap_ = 0x30010000;
     uint32_t lastError_ = 0;
     CeKernel ceKernel_;
+    CeDevice ceDevice_;
     CeGwe ceGwe_;
     CeMgdi ceMgdi_;
     uint32_t processHeapHandle_ = 0;
@@ -820,7 +822,6 @@ private:
     std::map<uint32_t, std::string> registryHandles_;
     std::map<uint32_t, std::string> fileHandleDebugNames_;
     std::map<std::wstring, CachedFileAttributes> fileAttributeCache_;
-    std::map<uint32_t, SerialDeviceConfig> guestDeviceConfigsByHandle_;
     std::map<uint32_t, uint32_t> fileReadCounts_;
     std::map<uint32_t, uint32_t> fileSeekCounts_;
     std::map<uint32_t, GuestFileMapping> fileMappings_;

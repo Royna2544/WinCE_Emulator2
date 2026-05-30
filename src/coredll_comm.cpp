@@ -40,6 +40,36 @@ void applyGuestSerialConfigToDcb(DCB& dcb, uint32_t baud, const std::string& con
     dcb.StopBits = mode[2] == '2' ? TWOSTOPBITS : ONESTOPBIT;
 }
 
+void applyCeSerialModeToDcb(DCB& dcb, const CeDevice::SerialMode& mode) {
+    dcb = {};
+    dcb.DCBlength = sizeof(dcb);
+    dcb.BaudRate = mode.baud ? mode.baud : 9600;
+    dcb.ByteSize = mode.byteSize ? mode.byteSize : 8;
+    dcb.Parity = mode.parity;
+    dcb.StopBits = mode.stopBits;
+    dcb.fBinary = TRUE;
+    dcb.fParity = mode.parity != NOPARITY;
+}
+
+CeDevice::SerialMode ceSerialModeFromDcb(const DCB& dcb) {
+    CeDevice::SerialMode mode{};
+    mode.baud = dcb.BaudRate;
+    mode.byteSize = dcb.ByteSize;
+    mode.parity = dcb.Parity;
+    mode.stopBits = dcb.StopBits;
+    return mode;
+}
+
+CeDevice::CommTimeouts ceCommTimeoutsFromWin32(const COMMTIMEOUTS& timeouts) {
+    return CeDevice::CommTimeouts{
+        timeouts.ReadIntervalTimeout,
+        timeouts.ReadTotalTimeoutMultiplier,
+        timeouts.ReadTotalTimeoutConstant,
+        timeouts.WriteTotalTimeoutMultiplier,
+        timeouts.WriteTotalTimeoutConstant,
+    };
+}
+
 } // namespace
 
 void SyntheticDllRuntime::registerCoredllCommExports(SyntheticModule& module) {
@@ -77,11 +107,13 @@ bool SyntheticDllRuntime::handleGetCommState(SyntheticExportCode code, const Gue
     if (handle->kind == GuestHandle::Kind::GuestSerialDevice) {
         auto debugName = fileHandleDebugNames_.find(args.a0);
         const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
-        auto config = guestDeviceConfigsByHandle_.find(args.a0);
         DCB dcb{};
-        applyGuestSerialConfigToDcb(dcb,
-                                    config == guestDeviceConfigsByHandle_.end() ? defaultSerialBaud_ : config->second.baud,
-                                    config == guestDeviceConfigsByHandle_.end() ? defaultSerialMode_ : config->second.mode);
+        const CeDevice::SerialState* serial = ceDevice_.serialState(args.a0);
+        if (serial) {
+            applyCeSerialModeToDcb(dcb, serial->mode);
+        } else {
+            applyGuestSerialConfigToDcb(dcb, defaultSerialBaud_, defaultSerialMode_);
+        }
         if (args.a1) {
             uint32_t guestLength = readU32(args.a1);
             if (!guestLength || guestLength > sizeof(dcb)) guestLength = sizeof(dcb);
@@ -127,12 +159,25 @@ bool SyntheticDllRuntime::handleSetCommState(SyntheticExportCode code, const Gue
         return true;
     }
     if (handle->kind == GuestHandle::Kind::GuestSerialDevice) {
-        lastError_ = args.a1 ? 0 : 87;
-        ret = args.a1 ? 1 : 0;
+        DCB dcb{};
+        BOOL ok = FALSE;
+        if (args.a1) {
+            uint32_t guestLength = readU32(args.a1);
+            if (!guestLength || guestLength > sizeof(dcb)) guestLength = sizeof(dcb);
+            ok = uc_mem_read(uc_, args.a1, &dcb, guestLength) == UC_ERR_OK;
+            if (ok) {
+                dcb.DCBlength = sizeof(dcb);
+                ceDevice_.setSerialMode(args.a0, ceSerialModeFromDcb(dcb));
+            }
+        }
+        lastError_ = ok ? 0 : 87;
+        ret = ok ? 1 : 0;
         auto debugName = fileHandleDebugNames_.find(args.a0);
         const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
-        spdlog::info("SetCommState guest device handle=0x{:08x} name=\"{}\" -> {} lastError={}",
-                     args.a0, debugPath, ret, lastError_);
+        spdlog::info("SetCommState guest device handle=0x{:08x} name=\"{}\" -> {} lastError={} baud={} byteSize={} parity={} stopBits={}",
+                     args.a0, debugPath, ret, lastError_,
+                     ok ? dcb.BaudRate : 0, ok ? static_cast<unsigned>(dcb.ByteSize) : 0,
+                     ok ? static_cast<unsigned>(dcb.Parity) : 0, ok ? static_cast<unsigned>(dcb.StopBits) : 0);
         return true;
     }
     HANDLE host = reinterpret_cast<HANDLE>(handle->hostValue);
@@ -169,12 +214,17 @@ bool SyntheticDllRuntime::handleSetCommTimeouts(SyntheticExportCode code, const 
         return true;
     }
     if (handle->kind == GuestHandle::Kind::GuestSerialDevice) {
-        lastError_ = args.a1 ? 0 : 87;
-        ret = args.a1 ? 1 : 0;
+        COMMTIMEOUTS timeouts{};
+        const BOOL ok = args.a1 && uc_mem_read(uc_, args.a1, &timeouts, sizeof(timeouts)) == UC_ERR_OK;
+        if (ok) ceDevice_.setSerialTimeouts(args.a0, ceCommTimeoutsFromWin32(timeouts));
+        lastError_ = ok ? 0 : 87;
+        ret = ok ? 1 : 0;
         auto debugName = fileHandleDebugNames_.find(args.a0);
         const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
-        spdlog::info("SetCommTimeouts guest device handle=0x{:08x} name=\"{}\" -> {} lastError={}",
-                     args.a0, debugPath, ret, lastError_);
+        spdlog::info("SetCommTimeouts guest device handle=0x{:08x} name=\"{}\" -> {} lastError={} interval={} readMultiplier={} readConstant={} writeMultiplier={} writeConstant={}",
+                     args.a0, debugPath, ret, lastError_, timeouts.ReadIntervalTimeout,
+                     timeouts.ReadTotalTimeoutMultiplier, timeouts.ReadTotalTimeoutConstant,
+                     timeouts.WriteTotalTimeoutMultiplier, timeouts.WriteTotalTimeoutConstant);
         return true;
     }
     COMMTIMEOUTS timeouts{};
@@ -201,6 +251,7 @@ bool SyntheticDllRuntime::handleSetCommMask(SyntheticExportCode code, const Gues
         return true;
     }
     if (handle->kind == GuestHandle::Kind::GuestSerialDevice) {
+        ceDevice_.setSerialMask(args.a0, args.a1);
         lastError_ = 0;
         ret = 1;
         auto debugName = fileHandleDebugNames_.find(args.a0);
@@ -229,6 +280,7 @@ bool SyntheticDllRuntime::handleSetupComm(SyntheticExportCode code, const GuestC
         return true;
     }
     if (handle->kind == GuestHandle::Kind::GuestSerialDevice) {
+        ceDevice_.setSerialQueueSizes(args.a0, args.a1, args.a2);
         lastError_ = 0;
         ret = 1;
         auto debugName = fileHandleDebugNames_.find(args.a0);
@@ -257,6 +309,7 @@ bool SyntheticDllRuntime::handlePurgeComm(SyntheticExportCode code, const GuestC
         return true;
     }
     if (handle->kind == GuestHandle::Kind::GuestSerialDevice) {
+        ceDevice_.markSerialPurged(args.a0, args.a1);
         lastError_ = 0;
         ret = 1;
         auto debugName = fileHandleDebugNames_.find(args.a0);

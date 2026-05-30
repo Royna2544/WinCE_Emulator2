@@ -871,3 +871,27 @@ Confirmed behavior difference:
   it captured a valid `816x519` startup frame and the high-signal log scan
   found no heap-exhaustion, `MapViewOfFile` allocation failure, unsupported
   coredll ordinal, false zero-PC success, hard-error, or UC_ERR crash lines.
+- `CeDevice` now owns guest-visible serial-device state for virtual serial
+  handles: guest name, mapped backend/type, host name, DCB-like mode,
+  `COMMTIMEOUTS`, comm mask, queue sizes, last error, and no-data backend
+  status. `CreateFileW`, close, `DeviceIoControl`, `GetCommState`,
+  `SetCommState`, `SetCommTimeouts`, `SetCommMask`, `SetupComm`, `PurgeComm`,
+  and `ReadFile` now consult or update that state while preserving the current
+  `ReadFile TRUE + transferred=0` no-data behavior for this migration step.
+  The old "disconnected serial-fallback" wording now reports a "virtual
+  serial no-data backend" when the CE device remains intentionally open
+  without host bytes. CE references:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/DRIVERS/SERDEV/serial.c`
+  and
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COMM/IR/IRCOMM/ircomm.c:792`.
+  Current source references:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_device.h:25`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_device.cpp:8`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp:734`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_comm.cpp:107`, and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_fs.cpp:512`.
+  The 2026-05-30 Release build passed. Bounded Release autodrive wrote
+  `captures/inavi_autodrive_20260530_224519`; it captured `00_initial.png`
+  and the high-signal scan found no unsupported coredll ordinal, false
+  zero-PC success, heap exhaustion, hard-error, UC_ERR, or old disconnected
+  serial-fallback wording.

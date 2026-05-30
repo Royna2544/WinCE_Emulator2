@@ -516,8 +516,10 @@ bool SyntheticDllRuntime::handleReadFile(SyntheticExportCode code, const GuestCa
         lastError_ = 0;
         auto debugName = fileHandleDebugNames_.find(args.a0);
         const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
-        spdlog::info("ReadFile guest device handle=0x{:08x} name=\"{}\" requested={} transferred={}",
-                     args.a0, debugPath, args.a2, transferred);
+        const CeDevice::SerialState* serial = ceDevice_.serialState(args.a0);
+        spdlog::info("ReadFile guest device handle=0x{:08x} name=\"{}\" requested={} transferred={} virtualNoDataBackend={}",
+                     args.a0, debugPath, args.a2, transferred,
+                     serial && serial->virtualNoDataBackend ? 1 : 0);
     } else if (!handle || (handle->kind != GuestHandle::Kind::HostFile &&
                            handle->kind != GuestHandle::Kind::HostSerialDevice) ||
                !handle->hostValue) {

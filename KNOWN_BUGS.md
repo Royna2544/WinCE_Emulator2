@@ -77,6 +77,38 @@ Status:
   bug remains open until the queue model, wake categories, and send-message
   edge cases are the behavioral truth.
 
+## Virtual Serial No-Data Reads Can Still Hot-Poll
+
+Symptom:
+
+- A configured CE serial device with no host bytes can still complete
+  `ReadFile` immediately with `TRUE` and zero bytes, which lets polling worker
+  threads consume too many slices and can delay the UI message pump.
+
+CE reference:
+
+- Serial driver behavior should be modeled as device/read timeout state rather
+  than a permanently disconnected success path:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/DRIVERS/SERDEV/serial.c`.
+- IRCOMM read paths keep timeout/no-data behavior as device state:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COMM/IR/IRCOMM/ircomm.c:792`.
+
+Current emulator reference:
+
+- Virtual serial state:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_device.h:25`.
+- Guest serial `ReadFile` completion:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_fs.cpp:512`.
+- Cooperative scheduler selection:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_thread_runtime.cpp:410`.
+
+Status:
+
+- `CeDevice` now owns serial config, DCB-like mode, `COMMTIMEOUTS`, comm mask,
+  queue sizes, and virtual no-data backend state. The bug remains open until
+  no-data reads park through `CeKernel` according to timeout mode and GWE
+  owner queues are preferred over serial polling workers when UI work exists.
+
 ## Window Visibility And Modal Ownership Are Region-Incomplete
 
 Symptom:

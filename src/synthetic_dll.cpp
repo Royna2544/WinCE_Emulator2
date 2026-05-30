@@ -659,7 +659,7 @@ uint32_t SyntheticDllRuntime::closeGuestHandle(uint32_t guestHandle) {
                it->second.kind == GuestHandle::Kind::HostSerialDevice ||
                it->second.kind == GuestHandle::Kind::GuestSerialDevice) {
         fileHandleDebugNames_.erase(guestHandle);
-        guestDeviceConfigsByHandle_.erase(guestHandle);
+        ceDevice_.unregisterSerial(guestHandle);
         fileReadCounts_.erase(guestHandle);
         fileSeekCounts_.erase(guestHandle);
     } else if (it->second.kind == GuestHandle::Kind::HostCrtFile) {
@@ -737,6 +737,25 @@ uint32_t SyntheticDllRuntime::closeGuestHandle(uint32_t guestHandle) {
 uint32_t SyntheticDllRuntime::openGuestSerialDevice(const std::string& guestPath, uint32_t access, uint32_t share) {
     const uint32_t ra = reg(UC_MIPS_REG_RA);
     const std::string deviceKey = normalizeGuestDeviceName(guestPath);
+    auto registerVirtualSerial = [&](uint32_t guest,
+                                     const SerialDeviceConfig* config,
+                                     std::string debugName,
+                                     bool virtualNoDataBackend) {
+        CeDevice::SerialState state{};
+        state.handle = guest;
+        state.guestName = guestPath;
+        state.deviceType = config ? config->type : std::string{"serial"};
+        state.hostName = config ? config->host : std::string{};
+        state.backend = config ? config->backend : std::string{"virtual"};
+        state.mode.baud = config && config->baud ? config->baud : defaultSerialBaud_;
+        state.mode.byteSize = 8;
+        state.mode.parity = 0;
+        state.mode.stopBits = 0;
+        state.timeouts.readIntervalTimeout = 0xffffffffu;
+        state.virtualNoDataBackend = virtualNoDataBackend;
+        ceDevice_.registerSerial(std::move(state));
+        fileHandleDebugNames_[guest] = std::move(debugName);
+    };
     const auto mapped = serialDevicesByGuest_.find(deviceKey);
     if (mapped != serialDevicesByGuest_.end()) {
         const SerialDeviceConfig& config = mapped->second;
@@ -744,8 +763,7 @@ uint32_t SyntheticDllRuntime::openGuestSerialDevice(const std::string& guestPath
         if (!config.enabled || config.backend == "stub" || config.type == "ioctl_device") {
             const uint32_t guest = makeGuestHandle({GuestHandle::Kind::GuestSerialDevice, 0, 0});
             const std::string state = config.enabled ? config.backend : std::string("disabled");
-            fileHandleDebugNames_[guest] = guestPath + " -> " + config.type + " " + state + note;
-            guestDeviceConfigsByHandle_[guest] = config;
+            registerVirtualSerial(guest, &config, guestPath + " -> " + config.type + " " + state + note, true);
             lastError_ = 0;
             spdlog::info("CreateFileW guest device=\"{}\" mapped type={} backend={} enabled={} guestHandle=0x{:08x} access=0x{:08x} share=0x{:08x} ra=0x{:08x}{}",
                          guestPath, config.type, config.backend, config.enabled ? 1 : 0,
@@ -802,31 +820,29 @@ uint32_t SyntheticDllRuntime::openGuestSerialDevice(const std::string& guestPath
                          ra, config.baud, config.mode, note);
             return guest;
         }
-        spdlog::warn("CreateFileW guest device=\"{}\" host=\"{}\" unavailable lastError={} ra=0x{:08x}; using stub guest device{}",
+        spdlog::warn("CreateFileW guest device=\"{}\" host=\"{}\" unavailable lastError={} ra=0x{:08x}; using virtual serial no-data backend{}",
                      guestPath, displayName, openError, ra, note);
         const uint32_t guest = makeGuestHandle({GuestHandle::Kind::GuestSerialDevice, 0, 0});
-        fileHandleDebugNames_[guest] = guestPath + " -> " + displayName + " disconnected" + note;
-        guestDeviceConfigsByHandle_[guest] = config;
+        registerVirtualSerial(guest, &config, guestPath + " -> " + displayName + " virtual no-data" + note, true);
         lastError_ = 0;
-        spdlog::info("CreateFileW guest device=\"{}\" guestHandle=0x{:08x} disconnected serial-fallback access=0x{:08x} share=0x{:08x} ra=0x{:08x}",
+        spdlog::info("CreateFileW guest device=\"{}\" guestHandle=0x{:08x} virtual serial no-data backend access=0x{:08x} share=0x{:08x} ra=0x{:08x}",
                      guestPath, guest, access, share, ra);
         return guest;
 #else
-        spdlog::warn("CreateFileW guest device=\"{}\" backend=win32_com unavailable on this host ra=0x{:08x}; using stub guest device{}",
+        spdlog::warn("CreateFileW guest device=\"{}\" backend=win32_com unavailable on this host ra=0x{:08x}; using virtual serial no-data backend{}",
                      guestPath, ra, note);
         const uint32_t guest = makeGuestHandle({GuestHandle::Kind::GuestSerialDevice, 0, 0});
-        fileHandleDebugNames_[guest] = guestPath + " -> disconnected" + note;
-        guestDeviceConfigsByHandle_[guest] = config;
+        registerVirtualSerial(guest, &config, guestPath + " -> virtual no-data" + note, true);
         lastError_ = 0;
-        spdlog::info("CreateFileW guest device=\"{}\" guestHandle=0x{:08x} disconnected serial-fallback access=0x{:08x} share=0x{:08x} ra=0x{:08x}",
+        spdlog::info("CreateFileW guest device=\"{}\" guestHandle=0x{:08x} virtual serial no-data backend access=0x{:08x} share=0x{:08x} ra=0x{:08x}",
                      guestPath, guest, access, share, ra);
         return guest;
 #endif
     }
     const uint32_t guest = makeGuestHandle({GuestHandle::Kind::GuestSerialDevice, 0, 0});
-    fileHandleDebugNames_[guest] = guestPath + " -> disconnected";
+    registerVirtualSerial(guest, nullptr, guestPath + " -> virtual no-data", true);
     lastError_ = 0;
-    spdlog::info("CreateFileW guest device=\"{}\" guestHandle=0x{:08x} disconnected access=0x{:08x} share=0x{:08x} ra=0x{:08x}",
+    spdlog::info("CreateFileW guest device=\"{}\" guestHandle=0x{:08x} virtual serial no-data backend access=0x{:08x} share=0x{:08x} ra=0x{:08x}",
                  guestPath, guest, access, share, ra);
     return guest;
 }
@@ -846,11 +862,11 @@ uint32_t SyntheticDllRuntime::dispatchDeviceIoControl(uint32_t handleValue, uint
     if (handle->kind == GuestHandle::Kind::GuestSerialDevice) {
         auto debugName = fileHandleDebugNames_.find(handleValue);
         const std::string name = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
-        auto configIt = guestDeviceConfigsByHandle_.find(handleValue);
-        if (configIt != guestDeviceConfigsByHandle_.end() &&
-            configIt->second.enabled &&
-            configIt->second.type == "ioctl_device" &&
-            configIt->second.backend == "nanduuid_return" &&
+        const CeDevice::SerialState* serial = ceDevice_.serialState(handleValue);
+        if (serial &&
+            serial->open &&
+            serial->deviceType == "ioctl_device" &&
+            serial->backend == "nanduuid_return" &&
             (controlCode == 0xa00100ccu || controlCode == 0xa00100d0u) &&
             outPtr && outSize) {
             std::array<uint8_t, 16> uid{};
@@ -874,7 +890,7 @@ uint32_t SyntheticDllRuntime::dispatchDeviceIoControl(uint32_t handleValue, uint
                     if (bytesReturnedPtr) writeU32(bytesReturnedPtr, sizeof(compactId));
                     lastError_ = 0;
                     spdlog::info("DeviceIoControl ioctl backend=NANDUUID_RETURN guest=\"{}\" code=0x{:08x} outSize={} transferred=4 source=\"{}\" compactId={:08}",
-                                 configIt->second.guest, controlCode, outSize,
+                                 serial->guestName, controlCode, outSize,
                                  pathToUtf8(sdmmcHostRoot_ / "Device.uid"), compactId);
                     return 1;
                 }
@@ -883,7 +899,7 @@ uint32_t SyntheticDllRuntime::dispatchDeviceIoControl(uint32_t handleValue, uint
                 if (bytesReturnedPtr) writeU32(bytesReturnedPtr, transferred);
                 lastError_ = 0;
                 spdlog::info("DeviceIoControl ioctl backend=NANDUUID_RETURN guest=\"{}\" code=0x{:08x} outSize={} transferred={} source=\"{}\" value=\"{}\"",
-                             configIt->second.guest, controlCode, outSize, transferred,
+                             serial->guestName, controlCode, outSize, transferred,
                              pathToUtf8(sdmmcHostRoot_ / "Device.uid"),
                              std::string(reinterpret_cast<const char*>(uid.data()),
                                          reinterpret_cast<const char*>(uid.data()) + std::min<std::streamsize>(available, uid.size())));
@@ -891,7 +907,7 @@ uint32_t SyntheticDllRuntime::dispatchDeviceIoControl(uint32_t handleValue, uint
             }
             lastError_ = 2;
             spdlog::warn("DeviceIoControl ioctl backend=NANDUUID_RETURN guest=\"{}\" code=0x{:08x} missing source=\"{}\"",
-                         configIt->second.guest, controlCode, pathToUtf8(sdmmcHostRoot_ / "Device.uid"));
+                         serial->guestName, controlCode, pathToUtf8(sdmmcHostRoot_ / "Device.uid"));
             return 0;
         }
         lastError_ = 120;
