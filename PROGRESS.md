@@ -74,6 +74,12 @@ Current emulator difference:
   `CeKernel::queryWaitObject` for host-backed wait polling in its bounded wait
   loop and for guest thread/process readiness. The 2026-05-30 Release build
   passed after this named-dispatch wait migration.
+- `CeGwe` now owns the `GuestMessage` record type and backing message deque.
+  `SyntheticDllRuntime::guestMessages_` remains a compatibility alias to that
+  deque, so this Phase 3 scaffold step should preserve delivery behavior while
+  later commits replace direct deque operations with named `CeGwe` queue APIs.
+  The 2026-05-30 Release build passed after this GWE message-storage migration
+  with the same Boost Beast warning from `remote_server.cpp`.
 
 ## Threading And Message Queues
 

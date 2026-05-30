@@ -2,6 +2,7 @@
 
 #include <unicorn/unicorn.h>
 
+#include "ce_gwe.h"
 #include "ce_kernel.h"
 
 #include <nlohmann/json.hpp>
@@ -624,17 +625,7 @@ private:
         uint16_t blockAlign{};
         uint16_t bitsPerSample{};
     };
-    struct GuestMessage {
-        uint32_t hwnd{};
-        uint32_t message{};
-        uint32_t wParam{};
-        uint32_t lParam{};
-        uint32_t time{};
-        uint32_t x{};
-        uint32_t y{};
-        uint32_t synchronousSender{};
-        bool crossProcess{};
-    };
+    using GuestMessage = CeGwe::GuestMessage;
     struct RemoteTouchEvent {
         uint32_t message{};
         int32_t x{};
@@ -746,6 +737,7 @@ private:
     uint32_t nextHeap_ = 0x30010000;
     uint32_t lastError_ = 0;
     CeKernel ceKernel_;
+    CeGwe ceGwe_;
     uint32_t processHeapHandle_ = 0;
     uint64_t tick_ = 0;
     uint64_t windowZOrder_ = 0;
@@ -832,7 +824,7 @@ private:
     std::vector<PendingBlockingApi> pendingBlockingApis_;
     std::vector<PendingUpdateWindow> pendingUpdateWindows_;
     std::vector<PendingMessageTransfer> pendingMessageTransfers_;
-    std::deque<GuestMessage> guestMessages_;
+    std::deque<GuestMessage>& guestMessages_{ceGwe_.messages()};
     std::map<uint32_t, uint32_t> retrievedSyncSendersByMsgPtr_;
     bool interactiveSliceActive_{};
     bool interactiveSliceStopRequested_{};

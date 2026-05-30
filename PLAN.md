@@ -73,6 +73,10 @@ file-name shortcuts, route-screen shortcuts, or coordinate-specific fixes.
 - [ ] Replace global `guestMessages_` access with a `CeGwe` message-queue API.
   Current source anchors: `src/synthetic_dll.h`,
   `src/coredll_window_runtime.cpp`, `src/coredll_named_dispatch.cpp`.
+  - [x] Move the `GuestMessage` record and backing deque storage into
+    `CeGwe` while preserving the existing runtime alias.
+  - [ ] Replace direct runtime deque operations with named `CeGwe` queue
+    methods in small behavior-preserving batches.
 - [ ] Add per-thread or per-owner queues aligned with CE `MsgQueue`
   behavior. CE source anchors:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/cmsgque.h:23`
