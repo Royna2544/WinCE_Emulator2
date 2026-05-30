@@ -157,6 +157,12 @@ Last refreshed: 2026-05-28.
      `/api/v1/status`, `/api/v1/frame.jpg`, `/api/v1/video.mjpg`, remote touch,
      remote key input, location/NMEA injection, and `/api/v1/control/ws` with a
      real client.
+   - 2026-05-30 Debug coverage: `/api/v1/status` returned live 800x480 state,
+     host-presenter click input stayed alive in
+     `captures/inavi_autodrive_20260530_111228`, and
+     `/api/v1/sensors/location` generated/drained NMEA into the guest serial
+     fallback. Still verify frame/video/key/control-ws behavior with the real
+     remote client.
    - Remote audio has a basic Debug verification: `/api/v1/audio/ws` emits
      miniaudio-converted 3528-byte default PCM chunks, and WebSocket delivery
      now clears stale backlog on connect, caps queued PCM, and paces chunks

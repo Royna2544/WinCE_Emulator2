@@ -224,11 +224,16 @@ Rejected explanation:
 
 Status:
 
-- Not fixed. Temporary `COM7:` host mapping is allowed only for diagnostics.
-  `captures/inavi_autodrive_20260528_083115` verified that, when the host port
-  is not held by stale emulator processes, `COM7:` -> `\\.\COM21` opens and
-  streams NMEA into the guest. The remaining issue is still the profile source
-  that selects `COM7:` in this dump instead of the real-device `COM1:` path.
+- Partially fixed. Temporary `COM7:` host mapping is allowed only for
+  diagnostics. `captures/inavi_autodrive_20260528_083115` verified that, when
+  the host port is not held by stale emulator processes, `COM7:` ->
+  `\\.\COM21` opens and streams NMEA into the guest.
+- `captures/inavi_autodrive_20260530_111228` verified the fallback path when
+  host `\\.\COM21` is unavailable: the guest serial handle still opens,
+  accepts CE comm configuration APIs, reports remote queued bytes through
+  `ClearCommError`, and drains injected NMEA through `ReadFile`.
+- The remaining issue is still the profile source that selects `COM7:` in this
+  dump instead of the real-device `COM1:` path.
 
 ## Custom Stream Devices Are Mostly Stubs
 
@@ -271,6 +276,10 @@ Current evidence:
 Status:
 
 - Partially fixed. Keep watching for lag, dead waits, and wrong return timing.
+- 2026-05-30 note: host-presenter clicks are no longer crashing through the
+  message-transfer continuation path in the latest run, but the scheduler still
+  has extra crash diagnostics for any future real `pc=0` failures. Do not
+  convert null guest callbacks into no-op returns; that would fake behavior.
 
 ## Performance Is Still Not Representative
 

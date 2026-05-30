@@ -348,6 +348,28 @@ Last refreshed: 2026-05-28.
 - Do not invent sensor values for `SMB1:` or `MFS1:` before guest IOCTL usage
   is captured.
 
+## 2026-05-30 Remote/Host Presenter Debug
+
+- `captures/inavi_autodrive_20260530_104647` verified that a disconnected
+  configured serial backend must still behave like an opened CE serial device:
+  `COM7:` -> `\\.\COM21` failed on the host, but the guest fallback accepted
+  `GetCommState`/`SetCommState`/timeouts/masks/setup/purge and then consumed
+  remote NMEA bytes through `ClearCommError cbInQue=2610` and
+  `ReadFile transferred=1023`.
+- `captures/inavi_autodrive_20260530_110721` showed a click-related
+  `pc=0` path after many private `0x0363`/route messages. The first bad path
+  was not the WndProc transfer trampoline; those transfers completed with real
+  coredll returns. A proposed null-callback no-op recovery was rejected because
+  it would invent guest behavior.
+- The current fix set keeps the emulator honest: message-transfer continuations
+  no longer jump through unreadable/zero returns, parked main-thread contexts
+  are restored only when their PC is readable, and crash logs now include the
+  pending guest-message queue for the next real failure.
+- `captures/inavi_autodrive_20260530_111228` stayed alive/responding after a
+  controlled host-presenter click. It also verified remote location injection
+  over `/api/v1/sensors/location`: the server generated NMEA, `cbInQue` rose to
+  `174`, and the guest `ReadFile` transferred all `174` bytes.
+
 ## Current Dirty Worktree Note
 
 The working tree may include documentation refreshes and active emulator fixes
