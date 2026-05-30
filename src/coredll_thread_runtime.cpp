@@ -244,6 +244,7 @@ uint32_t SyntheticDllRuntime::resumeGuestThread(uint32_t guestHandle) {
 }
 
 void SyntheticDllRuntime::wakeGuestThreadsWaitingForMessage() {
+    refreshSignaledGuestWaits();
     auto hasMessagesForThread = [this](uint32_t threadHandle) {
         return ceGwe_.hasMessagesForOwner(threadHandle);
     };
@@ -261,9 +262,13 @@ void SyntheticDllRuntime::refreshSignaledGuestWaits() {
         if (wait == WAIT_TIMEOUT) return CeKernel::HostWaitResult{false, false, 0};
         return CeKernel::HostWaitResult{false, true, GetLastError()};
     };
+    auto hasMessagesForThread = [this](uint32_t threadHandle) {
+        return ceGwe_.hasMessagesForOwner(threadHandle);
+    };
     for (const auto& event : ceKernel_.refreshSignaledWaits(hostTickMilliseconds(),
                                                            UC_MIPS_REG_V0,
-                                                           hostWaitProbe)) {
+                                                           hostWaitProbe,
+                                                           hasMessagesForThread)) {
         switch (event.kind) {
         case CeKernel::WaitRefreshKind::SleepSatisfied:
             lastError_ = 0;
@@ -287,6 +292,11 @@ void SyntheticDllRuntime::refreshSignaledGuestWaits() {
         case CeKernel::WaitRefreshKind::WaitAllSatisfied:
             lastError_ = 0;
             spdlog::info("guest thread wait-all satisfied handle=0x{:08x} count={}",
+                         event.threadHandle, event.count);
+            break;
+        case CeKernel::WaitRefreshKind::MessageWaitSatisfied:
+            lastError_ = 0;
+            spdlog::info("guest thread msg-wait satisfied handle=0x{:08x} waitCount={}",
                          event.threadHandle, event.count);
             break;
         }

@@ -112,7 +112,8 @@ CeKernel::WaitQueryResult CeKernel::queryWaitObjects(const std::vector<uint32_t>
 std::vector<CeKernel::WaitRefreshEvent> CeKernel::refreshSignaledWaits(
     uint64_t nowMs,
     int resultRegister,
-    const HostWaitProbe& hostWaitProbe) {
+    const HostWaitProbe& hostWaitProbe,
+    const MessageWaitProbe& hasMessagesForThread) {
     std::vector<WaitRefreshEvent> events;
     for (auto& [threadHandle, thread] : guestThreads_) {
         if (thread.state != GuestThreadRunState::Waiting) continue;
@@ -122,6 +123,8 @@ std::vector<CeKernel::WaitRefreshEvent> CeKernel::refreshSignaledWaits(
             thread.state = GuestThreadRunState::Runnable;
             thread.waitHandle = 0;
             thread.waitHandles.clear();
+            thread.waitForMessages = false;
+            thread.waitWakeMask = 0;
             thread.context.registers[resultRegister] = 0;
             events.push_back({WaitRefreshKind::SleepSatisfied, threadHandle});
             continue;
@@ -129,6 +132,16 @@ std::vector<CeKernel::WaitRefreshEvent> CeKernel::refreshSignaledWaits(
 
         std::vector<uint32_t> handles = thread.waitHandles;
         if (handles.empty() && thread.waitHandle) handles.push_back(thread.waitHandle);
+        if (thread.waitForMessages && hasMessagesForThread && hasMessagesForThread(threadHandle)) {
+            thread.state = GuestThreadRunState::Runnable;
+            thread.waitHandle = 0;
+            thread.waitHandles.clear();
+            thread.waitForMessages = false;
+            thread.waitWakeMask = 0;
+            thread.context.registers[resultRegister] = kWaitObject0 + uint32_t(handles.size());
+            events.push_back({WaitRefreshKind::MessageWaitSatisfied, threadHandle, 0, 0, 0, handles.size()});
+            continue;
+        }
         if (handles.empty()) continue;
 
         bool allReady = true;
@@ -139,6 +152,8 @@ std::vector<CeKernel::WaitRefreshEvent> CeKernel::refreshSignaledWaits(
                 thread.state = GuestThreadRunState::Runnable;
                 thread.waitHandle = 0;
                 thread.waitHandles.clear();
+                thread.waitForMessages = false;
+                thread.waitWakeMask = 0;
                 thread.context.registers[resultRegister] = 0xffffffffu;
                 events.push_back({WaitRefreshKind::InvalidHandle, threadHandle, waitHandle, 6});
                 break;
@@ -168,6 +183,8 @@ std::vector<CeKernel::WaitRefreshEvent> CeKernel::refreshSignaledWaits(
                 thread.state = GuestThreadRunState::Runnable;
                 thread.waitHandle = 0;
                 thread.waitHandles.clear();
+                thread.waitForMessages = false;
+                thread.waitWakeMask = 0;
                 thread.context.registers[resultRegister] = 0xffffffffu;
                 events.push_back({WaitRefreshKind::WaitFailed, threadHandle, waitHandle, error});
                 break;
@@ -178,6 +195,8 @@ std::vector<CeKernel::WaitRefreshEvent> CeKernel::refreshSignaledWaits(
                 thread.state = GuestThreadRunState::Runnable;
                 thread.waitHandle = 0;
                 thread.waitHandles.clear();
+                thread.waitForMessages = false;
+                thread.waitWakeMask = 0;
                 thread.context.registers[resultRegister] = uint32_t(i);
                 events.push_back({WaitRefreshKind::WaitSatisfied, threadHandle, waitHandle, 0, i});
                 break;
@@ -187,6 +206,8 @@ std::vector<CeKernel::WaitRefreshEvent> CeKernel::refreshSignaledWaits(
             thread.state = GuestThreadRunState::Runnable;
             thread.waitHandle = 0;
             thread.waitHandles.clear();
+            thread.waitForMessages = false;
+            thread.waitWakeMask = 0;
             thread.context.registers[resultRegister] = 0;
             events.push_back({WaitRefreshKind::WaitAllSatisfied, threadHandle, 0, 0, 0, handles.size()});
         }

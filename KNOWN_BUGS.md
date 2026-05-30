@@ -66,9 +66,11 @@ Status:
   thread messages into owner-thread lanes. `GetMessageW`/`PeekMessageW` now
   use owner-filtered selection while preserving flat ordering inside that owner
   context, and message-wait wakeup now checks the waiting thread's owner queue
-  before making it runnable. The bug remains open until
-  `MsgWaitForMultipleObjectsEx`, wake-mask checks, and cross-thread
-  `SendMessageW` use the CE-shaped queue model as behavioral truth.
+  before making it runnable. `MsgWaitForMultipleObjectsEx` now uses
+  owner-aware message readiness, but wake masks are still category-coarse and
+  cross-thread `SendMessageW` still needs a fuller sender-blocked queue
+  transaction. The bug remains open until those paths use the CE-shaped queue
+  model as behavioral truth.
 
 ## Window Visibility And Modal Ownership Are Region-Incomplete
 

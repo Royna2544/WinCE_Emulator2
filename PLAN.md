@@ -122,6 +122,15 @@ results, or timing thresholds.
     `GetMessageW` parks based on its own queue instead of the global queue.
     Current source anchors: `src/ce_kernel.cpp`,
     `src/coredll_thread_runtime.cpp`, and `src/synthetic_dll.cpp`.
+  - [x] Register and route `MsgWaitForMultipleObjectsEx` through the virtual
+    kernel/GWE boundary: handle readiness stays in `CeKernel`, message
+    readiness uses the caller's `CeGwe` owner queue, and blocking guest
+    threads can resume from either source. CE source anchors:
+    `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/CORE/DLL/core_common.def:1843`
+    and
+    `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/cmsgque.h:802`.
+    Current source anchors: `src/synthetic_dll.cpp`,
+    `src/ce_kernel.cpp`, and `src/synthetic_dll_modules.cpp`.
 - [ ] Model cross-thread `SendMessageW` as a sender-blocked queue transaction
   with receiver-context execution and result transfer back to the sender.
   Current source anchor: `src/synthetic_dll.cpp` send-message inline path.

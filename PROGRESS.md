@@ -232,6 +232,26 @@ Current emulator difference:
   was captured at 816x519, the high-signal log scan found no new unsupported
   coredll ordinal, hard-error, invalid mapping, false zero-PC, or deadlock
   markers, and `DeviceParser.exe` still exited via the decoded CE kernel path.
+- `MsgWaitForMultipleObjectsEx` is now registered at CE coredll ordinal 871
+  (`0x0367`) and routed through the virtual wait/message boundary. Immediate
+  handle readiness uses `CeKernel::queryWaitObjects`; immediate message
+  readiness uses `CeGwe::hasMessagesForOwner`; blocking guest threads store
+  both handle waits and message-wait wake state so later queue posts can make
+  them runnable. CE references:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/CORE/DLL/core_common.def:1843`
+  and
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/cmsgque.h:802`.
+  Current source references:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll_modules.cpp:131`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp:2049`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_kernel.h:86`, and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_kernel.cpp:135`.
+  The 2026-05-30 Release build passed with the pre-existing Boost Beast
+  warning from `remote_server.cpp`. Bounded autodrive with the companion
+  enabled wrote `captures/inavi_autodrive_20260530_194133`; `00_initial.png`
+  was captured at 816x519 and the high-signal log scan found no new
+  unsupported coredll ordinal, hard-error, invalid mapping, false zero-PC, or
+  deadlock markers.
 
 ## Threading And Message Queues
 

@@ -45,6 +45,7 @@
 namespace {
 constexpr uint32_t kErrorFileNotFound = 2;
 constexpr uint32_t kErrorPathNotFound = 3;
+constexpr uint32_t kCoredllMsgWaitForMultipleObjectsExOrdinal = 0x0367;
 constexpr uint32_t kWindowStyleChild = 0x40000000u; // WS_CHILD
 
 bool tracePrivateUiMessage(uint32_t msg) {
@@ -1895,6 +1896,8 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                         active->second.waitHandle = handles.size() == 1 ? handles.front() : 0;
                         active->second.waitHandles = std::move(handles);
                         active->second.waitAll = a2 != 0;
+                        active->second.waitForMessages = false;
+                        active->second.waitWakeMask = 0;
                         spdlog::info("guest thread wait-multiple handle=0x{:08x} count={} waitAll={} timeout=0x{:08x} return=0x{:08x}",
                                      ceKernel_.activeGuestThread(), a0, a2 != 0, a3, ra);
                     }
@@ -1975,6 +1978,8 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                         active->second.waitHandle = a0;
                         active->second.waitHandles.clear();
                         active->second.waitAll = false;
+                        active->second.waitForMessages = false;
+                        active->second.waitWakeMask = 0;
                         spdlog::info("guest thread wait handle=0x{:08x} wait=0x{:08x} return=0x{:08x}",
                                      ceKernel_.activeGuestThread(), a0, ra);
                     }
@@ -2039,6 +2044,116 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                 return;
             }
 
+            break;
+        }
+        case kCoredllMsgWaitForMultipleObjectsExOrdinal: {
+            constexpr uint32_t kWaitObject0 = CeKernel::kWaitObject0;
+            constexpr uint32_t kWaitTimeout = CeKernel::kWaitTimeout;
+            constexpr uint32_t kWaitFailed = CeKernel::kWaitFailed;
+            constexpr uint32_t kInfiniteTimeout = 0xffffffffu;
+            constexpr uint32_t kMwmoWaitAll = 0x00000001u;
+
+            const uint32_t waitCount = a0;
+            const uint32_t handlesPtr = a1;
+            const uint32_t timeoutMs = a2;
+            const uint32_t wakeMask = a3;
+            const uint32_t flags = stackArg(4);
+            const bool waitAll = (flags & kMwmoWaitAll) != 0;
+
+            std::vector<uint32_t> handles;
+            if (waitCount) {
+                if (!readGuestWaitHandles(waitCount, handlesPtr, handles)) {
+                    setReg(UC_MIPS_REG_V0, kWaitFailed);
+                    setReg(UC_MIPS_REG_PC, ra);
+                    pumpHostMessages();
+                    return;
+                }
+            } else if (!wakeMask) {
+                setReg(UC_MIPS_REG_V0, kWaitTimeout);
+                setReg(UC_MIPS_REG_PC, ra);
+                pumpHostMessages();
+                return;
+            }
+
+            auto pollHandles = [&]() {
+#if defined(_WIN32)
+                auto hostWaitProbe = [](const GuestHandle& handle) {
+                    const DWORD wait = ::WaitForSingleObject(reinterpret_cast<HANDLE>(handle.hostValue), 0);
+                    if (wait == WAIT_OBJECT_0) return CeKernel::HostWaitResult{true, false, 0};
+                    if (wait == WAIT_TIMEOUT) return CeKernel::HostWaitResult{false, false, 0};
+                    return CeKernel::HostWaitResult{false, true, GetLastError()};
+                };
+#else
+                CeKernel::HostWaitProbe hostWaitProbe;
+#endif
+                return handles.empty()
+                    ? CeKernel::WaitQueryResult{kWaitTimeout, 0, 0}
+                    : ceKernel_.queryWaitObjects(handles, waitAll, hostWaitProbe, false);
+            };
+
+            const uint32_t queueOwner = ceKernel_.activeGuestThread()
+                ? ceKernel_.activeGuestThread()
+                : ceKernel_.mainThreadPseudoHandle();
+            const bool messagesReady = wakeMask && ceGwe_.hasMessagesForOwner(queueOwner);
+            CeKernel::WaitQueryResult wait = pollHandles();
+            if (messagesReady && (!waitAll || handles.empty() || wait.result == kWaitObject0)) {
+                setReg(UC_MIPS_REG_V0, kWaitObject0 + waitCount);
+                setReg(UC_MIPS_REG_PC, ra);
+                lastError_ = 0;
+                pumpHostMessages();
+                return;
+            }
+            if (wait.result != kWaitTimeout) {
+                setReg(UC_MIPS_REG_V0, wait.result);
+                setReg(UC_MIPS_REG_PC, ra);
+                lastError_ = wait.error;
+                pumpHostMessages();
+                return;
+            }
+            if (timeoutMs == 0) {
+                setReg(UC_MIPS_REG_V0, kWaitTimeout);
+                setReg(UC_MIPS_REG_PC, ra);
+                lastError_ = 0;
+                pumpHostMessages();
+                return;
+            }
+
+            if (ceKernel_.activeGuestThread()) {
+                auto active = ceKernel_.threads().find(ceKernel_.activeGuestThread());
+                if (active != ceKernel_.threads().end()) {
+                    active->second.context = captureGuestCpuContext();
+                    active->second.context.registers[UC_MIPS_REG_PC] = ra;
+                    active->second.context.registers[UC_MIPS_REG_V0] = 0;
+                    active->second.state = GuestThreadRunState::Waiting;
+                    active->second.waitHandle = handles.size() == 1 ? handles.front() : 0;
+                    active->second.waitHandles = std::move(handles);
+                    active->second.waitAll = waitAll;
+                    active->second.waitForMessages = wakeMask != 0;
+                    active->second.waitWakeMask = wakeMask;
+                    spdlog::info("guest thread msg-wait handle=0x{:08x} count={} timeout=0x{:08x} wakeMask=0x{:08x} flags=0x{:08x} return=0x{:08x}",
+                                 ceKernel_.activeGuestThread(), waitCount, timeoutMs, wakeMask, flags, ra);
+                }
+                ceKernel_.activeGuestThread() = 0;
+                if (!restoreMainThreadContextIfRunnable(name.c_str())) {
+                    switchToRunnableGuestThread(name.c_str());
+                }
+                pumpHostMessages();
+                return;
+            }
+
+            if (!ceGwe_.hasMessagesForOwner(ceKernel_.mainThreadPseudoHandle()) && hasRunnableGuestThread()) {
+                switchToRunnableGuestThread(name.c_str(), 0, wait.preferredThread);
+                pumpHostMessages();
+                return;
+            }
+            if (timeoutMs == kInfiniteTimeout || wakeMask || !handles.empty()) {
+                spdlog::debug("MsgWaitForMultipleObjectsEx parking main context count={} timeout=0x{:08x} wakeMask=0x{:08x} flags=0x{:08x} queued={}",
+                              waitCount, timeoutMs, wakeMask, flags, ceGwe_.messageCount());
+                setReg(UC_MIPS_REG_PC, pc);
+                pumpHostMessages();
+                uc_emu_stop(uc_);
+                return;
+            }
             break;
         }
         case 0x039D:

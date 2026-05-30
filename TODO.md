@@ -26,9 +26,10 @@ Active refactor checklist: `PLAN.md`.
      sent, input, timer, and thread messages. `GetMessageW`/`PeekMessageW`
      now use owner-filtered selection while preserving flat ordering inside
      that owner context, and guest message-wait wakeup now checks the waiting
-     thread's owner queue before making it runnable. Next step is to route
-     `MsgWaitForMultipleObjectsEx`/wake-mask checks through the same
-     owner-aware queue state.
+     thread's owner queue before making it runnable. `MsgWaitForMultipleObjectsEx`
+     is registered and routed through the same owner-aware queue state for
+     basic message readiness. Next step is to model cross-thread
+     `SendMessageW` as a CE queue transaction.
 
 2. Model cross-thread `SendMessageW` as a queue transaction.
    - CE reference:

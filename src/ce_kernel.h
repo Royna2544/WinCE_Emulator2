@@ -83,6 +83,8 @@ public:
         uint64_t sleepUntilMs{};
         std::vector<uint32_t> waitHandles;
         bool waitAll{};
+        bool waitForMessages{};
+        uint32_t waitWakeMask{};
         GuestThreadRunState state{GuestThreadRunState::Suspended};
         GuestCpuContext context;
     };
@@ -122,6 +124,7 @@ public:
         WaitFailed,
         WaitSatisfied,
         WaitAllSatisfied,
+        MessageWaitSatisfied,
     };
 
     struct WaitRefreshEvent {
@@ -155,9 +158,11 @@ public:
                                      bool waitAll,
                                      const HostWaitProbe& hostWaitProbe,
                                      bool failOnHostError) const;
-    std::vector<WaitRefreshEvent> refreshSignaledWaits(uint64_t nowMs,
-                                                       int resultRegister,
-                                                       const HostWaitProbe& hostWaitProbe);
+    std::vector<WaitRefreshEvent> refreshSignaledWaits(
+        uint64_t nowMs,
+        int resultRegister,
+        const HostWaitProbe& hostWaitProbe,
+        const MessageWaitProbe& hasMessagesForThread = MessageWaitProbe{});
     static std::optional<EncodedKernelCall> decodeMipsKernelCall(uint32_t target);
     void terminateCurrentProcess(uint32_t exitCode);
     bool processTerminated() const noexcept { return processTerminated_; }

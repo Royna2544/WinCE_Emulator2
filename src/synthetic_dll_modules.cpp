@@ -128,6 +128,7 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x0362, "PostQuitMessage");
     registerExport(module, 0x0364, "SendMessageW");
     registerExport(module, 0x0366, "TranslateMessage");
+    registerExport(module, 0x0367, "MsgWaitForMultipleObjectsEx");
     registerExport(module, 0x0394, "GetDeviceCaps");
     registerExport(module, 0x037F, "CreateFontIndirectW");
     registerExport(module, 0x0380, "ExtTextOutW");
