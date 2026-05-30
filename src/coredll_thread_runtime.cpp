@@ -244,9 +244,7 @@ uint32_t SyntheticDllRuntime::resumeGuestThread(uint32_t guestHandle) {
 }
 
 void SyntheticDllRuntime::wakeGuestThreadsWaitingForMessage() {
-    for (auto& [threadHandle, thread] : ceKernel_.threads()) {
-        if (thread.state != GuestThreadRunState::WaitingForMessage) continue;
-        thread.state = GuestThreadRunState::Runnable;
+    for (const uint32_t threadHandle : ceKernel_.wakeThreadsWaitingForMessage()) {
         spdlog::info("guest thread message wait satisfied handle=0x{:08x}", threadHandle);
     }
 }
@@ -343,11 +341,7 @@ void SyntheticDllRuntime::refreshSignaledGuestWaits() {
 
 bool SyntheticDllRuntime::hasRunnableGuestThread() {
     refreshSignaledGuestWaits();
-    for (const auto& [handle, thread] : ceKernel_.threads()) {
-        (void)handle;
-        if (thread.state == GuestThreadRunState::Runnable) return true;
-    }
-    return false;
+    return ceKernel_.hasRunnableThread();
 }
 
 uint32_t SyntheticDllRuntime::guestContextReg(const GuestCpuContext& context, int regId) const {

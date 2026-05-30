@@ -26,3 +26,21 @@ bool CeKernel::eraseHandle(uint32_t guestHandle) {
 bool CeKernel::containsHandle(uint32_t guestHandle) const {
     return guestHandles_.find(guestHandle) != guestHandles_.end();
 }
+
+bool CeKernel::hasRunnableThread() const {
+    for (const auto& [handle, thread] : guestThreads_) {
+        (void)handle;
+        if (thread.state == GuestThreadRunState::Runnable) return true;
+    }
+    return false;
+}
+
+std::vector<uint32_t> CeKernel::wakeThreadsWaitingForMessage() {
+    std::vector<uint32_t> awakened;
+    for (auto& [threadHandle, thread] : guestThreads_) {
+        if (thread.state != GuestThreadRunState::WaitingForMessage) continue;
+        thread.state = GuestThreadRunState::Runnable;
+        awakened.push_back(threadHandle);
+    }
+    return awakened;
+}

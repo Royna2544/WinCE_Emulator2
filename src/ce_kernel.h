@@ -94,6 +94,8 @@ public:
     const GuestHandle* lookupHandle(uint32_t guestHandle) const;
     bool eraseHandle(uint32_t guestHandle);
     bool containsHandle(uint32_t guestHandle) const;
+    bool hasRunnableThread() const;
+    std::vector<uint32_t> wakeThreadsWaitingForMessage();
 
     std::map<uint32_t, GuestHandle>& handles() noexcept { return guestHandles_; }
     const std::map<uint32_t, GuestHandle>& handles() const noexcept { return guestHandles_; }
