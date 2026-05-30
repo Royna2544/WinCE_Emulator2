@@ -123,6 +123,34 @@ public:
         return state ? state->selectedFont : fallback;
     }
 
+    uint32_t textColorForDc(uint32_t hdc, uint32_t fallback = 0x00000000) const {
+        const DcState* state = dcState(hdc);
+        return state ? state->textColor : fallback;
+    }
+
+    uint32_t bkColorForDc(uint32_t hdc, uint32_t fallback = 0x00ffffff) const {
+        const DcState* state = dcState(hdc);
+        return state ? state->bkColor : fallback;
+    }
+
+    uint32_t bkModeForDc(uint32_t hdc, uint32_t fallback = 1) const {
+        const DcState* state = dcState(hdc);
+        return state ? state->bkMode : fallback;
+    }
+
+    uint32_t textAlignForDc(uint32_t hdc, uint32_t fallback = 0) const {
+        const DcState* state = dcState(hdc);
+        return state ? state->textAlign : fallback;
+    }
+
+    std::pair<int32_t, int32_t> currentPositionForDc(uint32_t hdc,
+                                                     int32_t fallbackX = 0,
+                                                     int32_t fallbackY = 0) const {
+        const DcState* state = dcState(hdc);
+        return state ? std::pair<int32_t, int32_t>{state->x, state->y}
+                     : std::pair<int32_t, int32_t>{fallbackX, fallbackY};
+    }
+
     void updateSelectedObjects(uint32_t hdc,
                                uint32_t brush,
                                uint32_t pen,

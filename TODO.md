@@ -111,9 +111,12 @@ Active refactor checklist: `PLAN.md`.
      before indexed writes. DIB-to-bitmap, `TransparentImage`, `BitBlt`, and
      `StretchBlt` paths now do the same before indexed reads/writes. Selected
      brush/pen/font lookups and `SelectObject` return values now also read
-     through the MGDI DC shadow. Next step is to move more pixel operations/DC
-     object ownership behind MGDI instead of keeping `GuestBitmap` and saved
-     backing layers as runtime-owned truth.
+     through the MGDI DC shadow. Text color, background color/mode, text
+     alignment, and current drawing position reads now also go through the
+     MGDI DC shadow for text drawing, setter return values, `MoveToEx`, and
+     `LineTo`. Next step is to move more pixel operations/DC object ownership
+     behind MGDI instead of keeping `GuestBitmap` and saved backing layers as
+     runtime-owned truth.
 
 ## Next
 

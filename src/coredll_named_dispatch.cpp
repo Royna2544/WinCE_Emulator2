@@ -613,6 +613,7 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(uint16_t ordinal,
             if (!points.empty()) {
                 dc->x = points.back().first;
                 dc->y = points.back().second;
+                ceMgdi_.setCurrentPosition(a0, dc->x, dc->y);
             }
             lastError_ = 0;
             ret = 1;
@@ -641,6 +642,7 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(uint16_t ordinal,
             }
             dc->x = prevX;
             dc->y = prevY;
+            ceMgdi_.setCurrentPosition(a0, dc->x, dc->y);
             lastError_ = 0;
             ret = 1;
         }
@@ -2692,22 +2694,22 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
         } else {
             switch (ordinal) {
             case ord(CoredllOrdinal::SetBkColor):
-                ret = dc->bkColor;
+                ret = ceMgdi_.bkColorForDc(a0, dc->bkColor);
                 dc->bkColor = a1;
                 ceMgdi_.setBkColor(a0, a1);
                 break;
             case ord(CoredllOrdinal::SetTextColor):
-                ret = dc->textColor;
+                ret = ceMgdi_.textColorForDc(a0, dc->textColor);
                 dc->textColor = a1;
                 ceMgdi_.setTextColor(a0, a1);
                 break;
             case ord(CoredllOrdinal::SetBkMode):
-                ret = dc->bkMode;
+                ret = ceMgdi_.bkModeForDc(a0, dc->bkMode);
                 dc->bkMode = a1;
                 ceMgdi_.setBkMode(a0, a1);
                 break;
             default:
-                ret = dc->textAlign;
+                ret = ceMgdi_.textAlignForDc(a0, dc->textAlign);
                 dc->textAlign = a1;
                 ceMgdi_.setTextAlign(a0, a1);
                 break;
@@ -2853,9 +2855,10 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             lastError_ = 6;
             ret = 0;
         } else {
+            const auto previousPos = ceMgdi_.currentPositionForDc(a0, dc->x, dc->y);
             if (a3) {
-                writeU32(a3, uint32_t(dc->x));
-                writeU32(a3 + 4, uint32_t(dc->y));
+                writeU32(a3, uint32_t(previousPos.first));
+                writeU32(a3 + 4, uint32_t(previousPos.second));
             }
             dc->x = int32_t(a1);
             dc->y = int32_t(a2);
@@ -2875,7 +2878,8 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             ret = 0;
         } else {
             if (pen->second.style != 5 && pen->second.colorRef != 0xffffffffu) {
-                drawDcLine(*dc, dc->x, dc->y, int32_t(a1), int32_t(a2),
+                const auto currentPos = ceMgdi_.currentPositionForDc(a0, dc->x, dc->y);
+                drawDcLine(*dc, currentPos.first, currentPos.second, int32_t(a1), int32_t(a2),
                            colorRefToPixel(pen->second.colorRef));
             }
             dc->x = int32_t(a1);

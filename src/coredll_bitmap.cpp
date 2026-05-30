@@ -1006,9 +1006,12 @@ bool SyntheticDllRuntime::drawHostTextToDc(const GuestDc& dc,
         HGDIOBJ oldBitmap = SelectObject(memDc, dib);
         HFONT hostFont = selectedFont();
         HGDIOBJ oldFont = hostFont ? SelectObject(memDc, hostFont) : nullptr;
-        SetTextColor(memDc, COLORREF(dc.textColor));
-        SetBkColor(memDc, COLORREF(dc.bkColor));
-        SetBkMode(memDc, dc.bkMode == 1 ? TRANSPARENT : OPAQUE);
+        const uint32_t textColor = ceMgdi_.textColorForDc(dc.hdc, dc.textColor);
+        const uint32_t bkColor = ceMgdi_.bkColorForDc(dc.hdc, dc.bkColor);
+        const uint32_t bkMode = ceMgdi_.bkModeForDc(dc.hdc, dc.bkMode);
+        SetTextColor(memDc, COLORREF(textColor));
+        SetBkColor(memDc, COLORREF(bkColor));
+        SetBkMode(memDc, bkMode == 1 ? TRANSPARENT : OPAQUE);
         BOOL ok = FALSE;
         if (drawTextCall) {
             RECT drawRect = rectArg ? *rectArg : RECT{x + originX, y + originY, width, height};

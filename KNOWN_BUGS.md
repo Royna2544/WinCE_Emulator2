@@ -203,6 +203,9 @@ Status:
   writes. DIB-to-bitmap, `TransparentImage`, `BitBlt`, and `StretchBlt` paths
   now also refresh compatibility palettes from MGDI before indexed
   reads/writes. Selected brush/pen/font lookups and `SelectObject` return
-  values now also read through the MGDI DC shadow. The bug remains open until
-  more pixel storage/DC object ownership moves behind MGDI instead of saved
-  backing heuristics remaining the clipping truth.
+  values now also read through the MGDI DC shadow. Text color, background
+  color/mode, text alignment, and current drawing position reads now also go
+  through the MGDI DC shadow for text drawing, setter return values,
+  `MoveToEx`, and `LineTo`. The bug remains open until more pixel storage/DC
+  object ownership moves behind MGDI instead of saved backing heuristics
+  remaining the clipping truth.

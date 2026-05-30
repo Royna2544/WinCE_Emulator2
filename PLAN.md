@@ -233,6 +233,11 @@ results, or timing thresholds.
     use them for drawing object lookup plus `SelectObject` return values.
     Current source anchors: `src/ce_mgdi.h`, `src/coredll_named_dispatch.cpp`,
     and `src/coredll_bitmap.cpp`.
+  - [x] Add `CeMgdi` accessors for text color, background color, background
+    mode, text alignment, and current drawing position; use them for text
+    drawing, setter return values, `MoveToEx`, `LineTo`, `Polygon`, and
+    `Polyline`. Current source anchors: `src/ce_mgdi.h`,
+    `src/coredll_named_dispatch.cpp`, and `src/coredll_bitmap.cpp`.
 - [ ] Add app clip, system clip, and actual device clip state before adding
   more blit optimizations. CE source anchor:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/MGDI/INC/dc.hpp:13`.
