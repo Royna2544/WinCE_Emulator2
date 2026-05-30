@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <string_view>
@@ -45,6 +46,19 @@ public:
             ++it;
         }
         messages_.insert(it, message);
+    }
+
+    template <typename Predicate>
+    size_t eraseIf(Predicate predicate) {
+        const size_t oldSize = messages_.size();
+        for (auto it = messages_.begin(); it != messages_.end();) {
+            if (predicate(*it)) {
+                it = messages_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        return oldSize - messages_.size();
     }
 
 private:

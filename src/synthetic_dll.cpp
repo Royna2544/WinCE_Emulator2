@@ -1778,11 +1778,11 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                 finishImmediateReturn(0);
                 return;
             }
-            const auto oldSize = guestMessages_.size();
-            std::erase_if(guestMessages_, [&](const GuestMessage& message) { return message.hwnd == a0; });
-            if (oldSize != guestMessages_.size()) {
+            const size_t discardedMessages =
+                ceGwe_.eraseIf([&](const GuestMessage& message) { return message.hwnd == a0; });
+            if (discardedMessages) {
                 spdlog::info("DestroyWindow discarded {} pending posted messages for hwnd=0x{:08x}",
-                             oldSize - guestMessages_.size(), a0);
+                             discardedMessages, a0);
             }
             const bool wasVisible = it->second.visible;
             const uint32_t parent = it->second.parent;

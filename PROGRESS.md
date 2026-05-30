@@ -97,6 +97,11 @@ Current emulator difference:
   while moving insertion ownership behind GWE. The 2026-05-30 Release build
   passed after this insertion migration with the same Boost Beast warning from
   `remote_server.cpp`.
+- Simple queued-message pruning now routes through `CeGwe::eraseIf`, including
+  popup mouse-move pruning, retired-popup message pruning, focus/destroy input
+  pruning, and pending-message cleanup during destroy. The 2026-05-30 Release
+  build passed after this erase migration with the same Boost Beast warning
+  from `remote_server.cpp`.
 
 ## Threading And Message Queues
 

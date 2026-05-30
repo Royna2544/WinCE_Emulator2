@@ -140,12 +140,10 @@ bool SyntheticDllRuntime::handleEnableWindow(SyntheticExportCode code, const Gue
                 }
                 return false;
             };
-            const auto oldSize = guestMessages_.size();
-            std::erase_if(guestMessages_, [&](const GuestMessage& message) {
+            discardedInput = ceGwe_.eraseIf([&](const GuestMessage& message) {
                 return message.message >= 0x0200 && message.message <= 0x0202 &&
                        isSameOrDescendant(message.hwnd);
             });
-            discardedInput = oldSize - guestMessages_.size();
             if (isSameOrDescendant(capturedWindow_)) capturedWindow_ = 0;
             if (isSameOrDescendant(hostPointerCaptureWindow_)) hostPointerCaptureWindow_ = 0;
             if (isSameOrDescendant(pendingSyntheticChildButtonUpWindow_)) {

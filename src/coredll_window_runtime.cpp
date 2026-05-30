@@ -1155,17 +1155,14 @@ void SyntheticDllRuntime::queueVisiblePopupPaint(uint32_t hwnd) {
     }
     queueGuestPaint(hwnd, true);
     size_t discardedMouseMoves = 0;
-    guestMessages_.erase(std::remove_if(guestMessages_.begin(), guestMessages_.end(),
-                                        [&](const GuestMessage& message) {
-                                            if (message.message != 0x0200) return false;
-                                            if (message.hwnd == hwnd ||
-                                                isWindowInOwnedPopupStack(message.hwnd, hwnd)) {
-                                                return false;
-                                            }
-                                            ++discardedMouseMoves;
-                                            return true;
-                                        }),
-                         guestMessages_.end());
+    ceGwe_.eraseIf([&](const GuestMessage& message) {
+        if (message.message != 0x0200) return false;
+        if (message.hwnd == hwnd || isWindowInOwnedPopupStack(message.hwnd, hwnd)) {
+            return false;
+        }
+        ++discardedMouseMoves;
+        return true;
+    });
     prioritizeQueuedWindowMessages(hwnd);
     spdlog::info("queued visible popup paint hwnd=0x{:08x} discardedMouseMoves={}",
                  hwnd, discardedMouseMoves);
@@ -1351,11 +1348,9 @@ void SyntheticDllRuntime::retireOlderFullScreenOwnedPopupsForPopup(uint32_t popu
     }
 
     if (retired.empty()) return;
-    guestMessages_.erase(std::remove_if(guestMessages_.begin(), guestMessages_.end(),
-                                        [&](const GuestMessage& message) {
-                                            return std::find(retired.begin(), retired.end(), message.hwnd) != retired.end();
-                                        }),
-                         guestMessages_.end());
+    ceGwe_.eraseIf([&](const GuestMessage& message) {
+        return std::find(retired.begin(), retired.end(), message.hwnd) != retired.end();
+    });
     for (uint32_t hwnd : retired) {
         spdlog::info("retired older full-screen owned popup hwnd=0x{:08x} for popup hwnd=0x{:08x}",
                      hwnd, popupHwnd);
