@@ -102,9 +102,11 @@ Active refactor checklist: `PLAN.md`.
      `SelectObject` bitmap validation, and DIB destination-bitmap selection now
      read through MGDI metadata/state. `TransparentImage` also reads selected
      source/destination bitmap handles through MGDI DC state, as do `BitBlt`
-     and `StretchBlt`. Next step is to move more pixel operations/DC object
-     ownership behind MGDI instead of keeping `GuestBitmap` and saved backing
-     layers as runtime-owned truth.
+     and `StretchBlt`. Rectangle/line/polygon/text, `GetPixel`, and
+     palette-write paths now use a shared MGDI selected-bitmap accessor. Next
+     step is to move more pixel operations/DC object ownership behind MGDI
+     instead of keeping `GuestBitmap` and saved backing layers as runtime-owned
+     truth.
 
 ## Next
 

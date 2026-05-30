@@ -100,6 +100,11 @@ public:
         return it == dcStates_.end() ? nullptr : &it->second;
     }
 
+    uint32_t selectedBitmapForDc(uint32_t hdc, uint32_t fallback = 0) const {
+        const DcState* state = dcState(hdc);
+        return state ? state->selectedBitmap : fallback;
+    }
+
     void updateSelectedObjects(uint32_t hdc,
                                uint32_t brush,
                                uint32_t pen,

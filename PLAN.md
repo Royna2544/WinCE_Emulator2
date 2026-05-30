@@ -210,6 +210,10 @@ results, or timing thresholds.
   - [x] Route `BitBlt` and `StretchBlt` source/destination selected-bitmap
     reads through `CeMgdi::DcState` while keeping the current blit backend.
     Current source anchor: `src/coredll_named_dispatch.cpp`.
+  - [x] Add a `CeMgdi::selectedBitmapForDc` accessor and use it for rectangle,
+    line, polygon, text, `GetPixel`, and palette-write bitmap selection.
+    Current source anchors: `src/ce_mgdi.h`, `src/coredll_bitmap.cpp`, and
+    `src/coredll_paint.cpp`.
 - [ ] Add app clip, system clip, and actual device clip state before adding
   more blit optimizations. CE source anchor:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/MGDI/INC/dc.hpp:13`.

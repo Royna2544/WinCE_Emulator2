@@ -676,7 +676,8 @@ bool SyntheticDllRuntime::fillDcRect(const GuestDc& dc,
                                      int32_t right,
                                      int32_t bottom,
                                      uint32_t pixel) {
-    auto bitmap = bitmaps_.find(dc.selectedBitmap);
+    const uint32_t selectedBitmap = ceMgdi_.selectedBitmapForDc(dc.hdc, dc.selectedBitmap);
+    auto bitmap = bitmaps_.find(selectedBitmap);
     if (bitmap != bitmaps_.end()) return fillBitmapRect(bitmap->second, left, top, right, bottom, pixel);
     fillFramebufferRect(dc, left, top, right, bottom, pixel);
     return true;
@@ -688,7 +689,8 @@ bool SyntheticDllRuntime::drawDcLine(const GuestDc& dc,
                                      int32_t x1,
                                      int32_t y1,
                                      uint32_t pixel) {
-    auto bitmap = bitmaps_.find(dc.selectedBitmap);
+    const uint32_t selectedBitmap = ceMgdi_.selectedBitmapForDc(dc.hdc, dc.selectedBitmap);
+    auto bitmap = bitmaps_.find(selectedBitmap);
     if (bitmap != bitmaps_.end()) return drawBitmapLine(bitmap->second, x0, y0, x1, y1, pixel);
     drawFramebufferLine(dc, x0, y0, x1, y1, pixel);
     return true;
@@ -700,7 +702,8 @@ bool SyntheticDllRuntime::fillDcPolygon(const GuestDc& dc,
     if (points.size() < 3 || pixel == 0) return false;
 
     std::vector<std::pair<int32_t, int32_t>> translatedPoints = points;
-    auto bitmapIt = bitmaps_.find(dc.selectedBitmap);
+    const uint32_t selectedBitmap = ceMgdi_.selectedBitmapForDc(dc.hdc, dc.selectedBitmap);
+    auto bitmapIt = bitmaps_.find(selectedBitmap);
     if (bitmapIt != bitmaps_.end()) {
 #if defined(_WIN32)
         const GuestBitmap& bitmap = bitmapIt->second;
@@ -1017,7 +1020,8 @@ bool SyntheticDllRuntime::drawHostTextToDc(const GuestDc& dc,
         return ok != FALSE;
     };
 
-    auto dstBitmap = bitmaps_.find(dc.selectedBitmap);
+    const uint32_t selectedBitmap = ceMgdi_.selectedBitmapForDc(dc.hdc, dc.selectedBitmap);
+    auto dstBitmap = bitmaps_.find(selectedBitmap);
     if (dstBitmap != bitmaps_.end()) {
         GuestBitmap& bitmap = dstBitmap->second;
         if (!bitmap.bits || bitmap.width <= 0 || bitmap.heightRaw == 0 || bitmap.stride == 0) return false;
@@ -1390,8 +1394,9 @@ bool SyntheticDllRuntime::handleGetObjectW(const GuestCallArgs& args, uint32_t& 
 
 bool SyntheticDllRuntime::handleSetDIBColorTable(const GuestCallArgs& args, uint32_t& ret) {
     GuestDc* dc = lookupGuestDc(args.a0);
-    const CeMgdi::BitmapState* bitmapState = dc ? ceMgdi_.bitmapState(dc->selectedBitmap) : nullptr;
-    auto bitmap = dc ? bitmaps_.find(dc->selectedBitmap) : bitmaps_.end();
+    const uint32_t selectedBitmap = dc ? ceMgdi_.selectedBitmapForDc(args.a0, dc->selectedBitmap) : 0;
+    const CeMgdi::BitmapState* bitmapState = ceMgdi_.bitmapState(selectedBitmap);
+    auto bitmap = dc ? bitmaps_.find(selectedBitmap) : bitmaps_.end();
     if (!dc || !bitmapState || bitmap == bitmaps_.end() || !args.a3 || bitmapState->bpp > 8) {
         lastError_ = dc ? 87 : 6;
         ret = 0;
@@ -1418,11 +1423,11 @@ bool SyntheticDllRuntime::handleSetDIBColorTable(const GuestCallArgs& args, uint
         bm.palette[size_t(start + i)] =
             0xff000000u | (uint32_t(r) << 16) | (uint32_t(g) << 8) | uint32_t(b);
     }
-    ceMgdi_.setBitmapPaletteEntries(dc->selectedBitmap, bm.palette.size());
+    ceMgdi_.setBitmapPaletteEntries(selectedBitmap, bm.palette.size());
     lastError_ = 0;
     ret = count;
     spdlog::info("SetDIBColorTable hdc=0x{:08x} bitmap=0x{:08x} start={} count={} ret={}",
-                 args.a0, dc->selectedBitmap, args.a1, args.a2, ret);
+                 args.a0, selectedBitmap, args.a1, args.a2, ret);
     return true;
 }
 

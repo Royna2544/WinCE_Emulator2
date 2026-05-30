@@ -111,8 +111,9 @@ bool SyntheticDllRuntime::handleGetPixel(SyntheticExportCode code, const GuestCa
 
     const GuestDc& dc = dcIt->second;
     uint32_t pixel = 0xff000000u;
-    if (dc.selectedBitmap) {
-        const auto bitmapIt = bitmaps_.find(dc.selectedBitmap);
+    const uint32_t selectedBitmap = ceMgdi_.selectedBitmapForDc(dc.hdc, dc.selectedBitmap);
+    if (selectedBitmap) {
+        const auto bitmapIt = bitmaps_.find(selectedBitmap);
         if (bitmapIt == bitmaps_.end() || !bitmapIt->second.bits ||
             bitmapIt->second.width <= 0 || bitmapIt->second.heightRaw == 0 ||
             bitmapIt->second.stride == 0) {

@@ -194,6 +194,8 @@ Status:
   for stock-bitmap protection and bitmap selection validation. DIB destination
   bitmap selection and `TransparentImage` source/destination bitmap selection
   also read from the MGDI DC shadow, along with `BitBlt` and `StretchBlt`
-  source/destination bitmap selection. The bug remains open until more pixel
-  storage/DC object ownership moves behind MGDI instead of saved backing
-  heuristics remaining the clipping truth.
+  source/destination bitmap selection. Rectangle/line/polygon/text,
+  `GetPixel`, and palette-write paths now use a shared MGDI selected-bitmap
+  accessor. The bug remains open until more pixel storage/DC object ownership
+  moves behind MGDI instead of saved backing heuristics remaining the clipping
+  truth.
