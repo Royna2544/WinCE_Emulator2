@@ -202,6 +202,19 @@ Current emulator difference:
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_gwe.h:91`, and
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_gwe.h:213`.
   The 2026-05-30 Release build passed with the same Boost Beast warning.
+- `GetMessageW`, `GetMessageWNoWait`, and `PeekMessageW` now use
+  `CeGwe::firstMatchingForOwner` with the active guest thread, or the main
+  pseudo-thread when no guest thread is active. The selection still walks the
+  existing flat queue to preserve current ordering inside that owner context,
+  but cross-owner messages no longer match a different thread's retrieval call.
+  Touched raw remove/filter constants were named locally. Current source
+  reference:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_named_dispatch.cpp:3790`.
+  The 2026-05-30 Release build passed with no warnings. Bounded autodrive with
+  the companion enabled wrote `captures/inavi_autodrive_20260530_192512`;
+  startup capture completed, the high-signal log scan found no new hard-error
+  or unsupported coredll ordinal lines, and `DeviceParser.exe` still exited via
+  the decoded CE kernel path.
 
 ## Threading And Message Queues
 

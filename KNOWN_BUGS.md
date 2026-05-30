@@ -63,10 +63,11 @@ Status:
 - Known behavior gap. Build a per-thread/user-input-context message queue
   model before adding more app-specific diagnostics around stuck UI work.
 - Current scaffold status: `CeGwe` now mirrors posted, sent, input, timer, and
-  thread messages into owner-thread lanes, but delivery still comes from the
-  flat queue. The bug remains open until `GetMessageW`/`PeekMessageW`,
-  `MsgWaitForMultipleObjectsEx`, and cross-thread `SendMessageW` use the
-  CE-shaped queue model as behavioral truth.
+  thread messages into owner-thread lanes. `GetMessageW`/`PeekMessageW` now
+  use owner-filtered selection while preserving flat ordering inside that owner
+  context. The bug remains open until `MsgWaitForMultipleObjectsEx`, wake-mask
+  checks, and cross-thread `SendMessageW` use the CE-shaped queue model as
+  behavioral truth.
 
 ## Window Visibility And Modal Ownership Are Region-Incomplete
 

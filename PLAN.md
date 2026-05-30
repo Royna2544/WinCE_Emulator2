@@ -113,6 +113,10 @@ results, or timing thresholds.
     and timer messages while preserving the current backing queue.
     Current source anchors: `src/ce_gwe.h`, `src/coredll_named_dispatch.cpp`,
     `src/coredll_window_runtime.cpp`, `src/remote_server.cpp`.
+  - [x] Route `GetMessageW`/`PeekMessageW` first-match selection through the
+    owner-filtered `CeGwe` query API while preserving the existing flat queue
+    ordering inside the selected owner queue.
+    Current source anchor: `src/coredll_named_dispatch.cpp`.
 - [ ] Model cross-thread `SendMessageW` as a sender-blocked queue transaction
   with receiver-context execution and result transfer back to the sender.
   Current source anchor: `src/synthetic_dll.cpp` send-message inline path.

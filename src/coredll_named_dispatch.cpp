@@ -3787,14 +3787,19 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
         default:
             break;
         }
-        const uint32_t removeFlags = peek ? stackArg(4) : 1;
+        constexpr uint32_t kThreadMessageFilterHwnd = 0xffffffffu;
+        constexpr uint32_t kRemoveMessageFlag = 0x0001;
+        const uint32_t removeFlags = peek ? stackArg(4) : kRemoveMessageFlag;
         pollCrossProcessGuestMessages();
         enqueueDueTimers();
         GuestMessage message{};
         bool haveMessage = false;
+        const uint32_t currentQueueOwner = ceKernel_.activeGuestThread()
+            ? ceKernel_.activeGuestThread()
+            : ceKernel_.mainThreadPseudoHandle();
         auto takeMessage = [&]() {
             auto matchesFilter = [&](const GuestMessage& candidate) {
-                if (a1 == 0xffffffffu) {
+                if (a1 == kThreadMessageFilterHwnd) {
                     if (candidate.hwnd != 0) return false;
                 } else if (a1 != 0 && candidate.hwnd != a1 && !isWindowOrDescendant(candidate.hwnd, a1)) {
                     if (!candidate.crossProcess) return false;
@@ -3815,7 +3820,9 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                 }
                 return true;
             };
-            auto queued = ceGwe_.firstMatching(matchesFilter, !peek || (removeFlags & 1));
+            auto queued = ceGwe_.firstMatchingForOwner(currentQueueOwner,
+                                                       matchesFilter,
+                                                       !peek || (removeFlags & kRemoveMessageFlag));
             if (!queued) return false;
             message = *queued;
             return true;
@@ -3852,11 +3859,11 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
         } else if (message.message == 0x0012) {
             spdlog::info("{} retrieved input hwnd=0x{:08x} msg=0x{:08x} wparam=0x{:08x} lparam=0x{:08x} peek={} remove={} queued={}",
                          name, message.hwnd, message.message, message.wParam, message.lParam,
-                         peek ? 1 : 0, (!peek || (removeFlags & 1)) ? 1 : 0, ceGwe_.messageCount());
+                         peek ? 1 : 0, (!peek || (removeFlags & kRemoveMessageFlag)) ? 1 : 0, ceGwe_.messageCount());
             lastMessagePos_ = uint32_t(uint16_t(message.x) | (uint32_t(uint16_t(message.y)) << 16));
             lastMessageTime_ = message.time;
             writeGuestMessage(a0, message);
-            if ((!peek || (removeFlags & 1)) && a0) {
+            if ((!peek || (removeFlags & kRemoveMessageFlag)) && a0) {
                 if (message.synchronousSender) {
                     retrievedSyncSendersByMsgPtr_[a0] = message.synchronousSender;
                 } else {
@@ -3872,12 +3879,12 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                 message.message == 0x057ed || message.message == 0x057f5) {
                 spdlog::info("{} retrieved input hwnd=0x{:08x} msg=0x{:08x} wparam=0x{:08x} lparam=0x{:08x} peek={} remove={} queued={}",
                              name, message.hwnd, message.message, message.wParam, message.lParam,
-                             peek ? 1 : 0, (!peek || (removeFlags & 1)) ? 1 : 0, ceGwe_.messageCount());
+                             peek ? 1 : 0, (!peek || (removeFlags & kRemoveMessageFlag)) ? 1 : 0, ceGwe_.messageCount());
             }
             lastMessagePos_ = uint32_t(uint16_t(message.x) | (uint32_t(uint16_t(message.y)) << 16));
             lastMessageTime_ = message.time;
             writeGuestMessage(a0, message);
-            if ((!peek || (removeFlags & 1)) && a0) {
+            if ((!peek || (removeFlags & kRemoveMessageFlag)) && a0) {
                 if (message.synchronousSender) {
                     retrievedSyncSendersByMsgPtr_[a0] = message.synchronousSender;
                 } else {

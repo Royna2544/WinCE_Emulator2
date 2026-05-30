@@ -23,10 +23,10 @@ Active refactor checklist: `PLAN.md`.
    - Goal: route posted, input, timer, and sent messages through per-thread
      queues instead of treating all guest messages as one mostly global deque.
    - Current status: `CeGwe` now has owner-thread lane mirrors for posted,
-     sent, input, timer, and thread messages, but `GetMessageW`/`PeekMessageW`
-     still consume the flat queue as dispatch truth. Owner-filtered query
-     helpers now exist; next step is to make selection owner-thread-aware
-     without changing CE-visible order.
+     sent, input, timer, and thread messages. `GetMessageW`/`PeekMessageW`
+     now use owner-filtered selection while preserving flat ordering inside
+     that owner context. Next step is to make message waits and wake masks use
+     the same owner-aware queue state.
 
 2. Model cross-thread `SendMessageW` as a queue transaction.
    - CE reference:
