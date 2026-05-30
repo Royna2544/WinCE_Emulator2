@@ -60,6 +60,12 @@ Current emulator difference:
   and supplies the host wait-handle probe/logging adapter. The 2026-05-30
   Release build passed after this wait-refresh migration with the same Boost
   Beast warning from `remote_server.cpp`.
+- Immediate `WaitForMultipleObjects` readiness now also routes through
+  `CeKernel::queryWaitObjects`, so guest wait result selection uses guest
+  handles and CE wait constants while the runtime supplies only a zero-time
+  host wait probe. The 2026-05-30 Release build passed after this
+  immediate-wait migration with the same Boost Beast warning from
+  `remote_server.cpp`.
 
 ## Threading And Message Queues
 

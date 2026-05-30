@@ -92,6 +92,16 @@ public:
         uint32_t error{};
     };
 
+    static constexpr uint32_t kWaitObject0 = 0x00000000u;
+    static constexpr uint32_t kWaitTimeout = 0x00000102u;
+    static constexpr uint32_t kWaitFailed = 0xffffffffu;
+
+    struct WaitQueryResult {
+        uint32_t result{kWaitFailed};
+        uint32_t error{};
+        uint32_t preferredThread{};
+    };
+
     enum class WaitRefreshKind {
         SleepSatisfied,
         InvalidHandle,
@@ -123,6 +133,13 @@ public:
     bool containsHandle(uint32_t guestHandle) const;
     bool hasRunnableThread() const;
     std::vector<uint32_t> wakeThreadsWaitingForMessage();
+    WaitQueryResult queryWaitObject(uint32_t guestHandle,
+                                    const HostWaitProbe& hostWaitProbe,
+                                    bool failOnHostError) const;
+    WaitQueryResult queryWaitObjects(const std::vector<uint32_t>& guestHandles,
+                                     bool waitAll,
+                                     const HostWaitProbe& hostWaitProbe,
+                                     bool failOnHostError) const;
     std::vector<WaitRefreshEvent> refreshSignaledWaits(uint64_t nowMs,
                                                        int resultRegister,
                                                        const HostWaitProbe& hostWaitProbe);

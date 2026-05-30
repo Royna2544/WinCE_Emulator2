@@ -45,6 +45,68 @@ std::vector<uint32_t> CeKernel::wakeThreadsWaitingForMessage() {
     return awakened;
 }
 
+CeKernel::WaitQueryResult CeKernel::queryWaitObject(uint32_t guestHandle,
+                                                    const HostWaitProbe& hostWaitProbe,
+                                                    bool failOnHostError) const {
+    const auto* handle = lookupHandle(guestHandle);
+    if (!handle) return {kWaitFailed, 6, 0};
+
+    uint32_t preferredThread = 0;
+    if (handle->kind == GuestHandle::Kind::GuestThread) preferredThread = guestHandle;
+
+    if (handle->hostValue &&
+        (handle->kind == GuestHandle::Kind::HostEvent ||
+         handle->kind == GuestHandle::Kind::HostMutex ||
+         handle->kind == GuestHandle::Kind::GuestProcess ||
+         handle->kind == GuestHandle::Kind::GuestThread)) {
+        const HostWaitResult wait = hostWaitProbe ? hostWaitProbe(*handle) : HostWaitResult{};
+        if (wait.ready) return {kWaitObject0, 0, preferredThread};
+        if (wait.failed && failOnHostError) return {kWaitFailed, wait.error, preferredThread};
+        return {kWaitTimeout, 0, preferredThread};
+    }
+
+    if (handle->kind == GuestHandle::Kind::GuestThread) {
+        const auto thread = guestThreads_.find(guestHandle);
+        const bool terminated = thread == guestThreads_.end() ||
+                                thread->second.state == GuestThreadRunState::Terminated;
+        return {terminated ? kWaitObject0 : kWaitTimeout, 0, preferredThread};
+    }
+
+    if (handle->kind == GuestHandle::Kind::GuestProcess && !handle->hostValue) {
+        bool processStillRunning = false;
+        for (const auto& [threadHandle, thread] : guestThreads_) {
+            (void)threadHandle;
+            if (thread.processHandle == guestHandle &&
+                thread.state != GuestThreadRunState::Terminated) {
+                processStillRunning = true;
+                break;
+            }
+        }
+        return {processStillRunning ? kWaitTimeout : kWaitObject0, 0, 0};
+    }
+
+    return {kWaitObject0, 0, 0};
+}
+
+CeKernel::WaitQueryResult CeKernel::queryWaitObjects(const std::vector<uint32_t>& guestHandles,
+                                                     bool waitAll,
+                                                     const HostWaitProbe& hostWaitProbe,
+                                                     bool failOnHostError) const {
+    bool allReady = true;
+    uint32_t preferredThread = 0;
+    for (size_t i = 0; i < guestHandles.size(); ++i) {
+        WaitQueryResult single = queryWaitObject(guestHandles[i], hostWaitProbe, failOnHostError);
+        if (!preferredThread && single.preferredThread) preferredThread = single.preferredThread;
+        if (single.result == kWaitFailed) return single;
+
+        const bool ready = single.result == kWaitObject0;
+        allReady = allReady && ready;
+        if (!waitAll && ready) return {kWaitObject0 + uint32_t(i), 0, preferredThread};
+    }
+
+    return {waitAll && allReady ? kWaitObject0 : kWaitTimeout, 0, preferredThread};
+}
+
 std::vector<CeKernel::WaitRefreshEvent> CeKernel::refreshSignaledWaits(
     uint64_t nowMs,
     int resultRegister,

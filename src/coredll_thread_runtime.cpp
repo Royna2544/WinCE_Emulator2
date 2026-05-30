@@ -518,45 +518,22 @@ bool SyntheticDllRuntime::readGuestWaitHandles(uint32_t count,
 uint32_t SyntheticDllRuntime::waitForMultipleGuestObjects(uint32_t count,
                                                           uint32_t handlesPtr,
                                                           bool waitAll) {
-    constexpr uint32_t kWaitObject0 = 0x00000000u;
-    constexpr uint32_t kWaitTimeout = 0x00000102u;
-    constexpr uint32_t kWaitFailed = 0xffffffffu;
-
     std::vector<uint32_t> handles;
-    if (!readGuestWaitHandles(count, handlesPtr, handles)) return kWaitFailed;
+    if (!readGuestWaitHandles(count, handlesPtr, handles)) return CeKernel::kWaitFailed;
 
-    bool allReady = true;
-    for (uint32_t i = 0; i < count; ++i) {
-        auto* handle = lookupGuestHandle(handles[i]);
-        if (!handle) {
-            lastError_ = 6;
-            return kWaitFailed;
-        }
-        bool ready = false;
 #if defined(_WIN32)
-        if (handle->hostValue &&
-            (handle->kind == GuestHandle::Kind::HostEvent ||
-             handle->kind == GuestHandle::Kind::HostMutex ||
-             handle->kind == GuestHandle::Kind::GuestProcess ||
-             handle->kind == GuestHandle::Kind::GuestThread)) {
-            ready = ::WaitForSingleObject(reinterpret_cast<HANDLE>(handle->hostValue), 0) == kWaitObject0;
-        } else
+    auto hostWaitProbe = [](const GuestHandle& handle) {
+        const DWORD wait = ::WaitForSingleObject(reinterpret_cast<HANDLE>(handle.hostValue), 0);
+        if (wait == WAIT_OBJECT_0) return CeKernel::HostWaitResult{true, false, 0};
+        if (wait == WAIT_TIMEOUT) return CeKernel::HostWaitResult{false, false, 0};
+        return CeKernel::HostWaitResult{false, true, GetLastError()};
+    };
+#else
+    CeKernel::HostWaitProbe hostWaitProbe;
 #endif
-        if (handle->kind == GuestHandle::Kind::GuestThread) {
-            auto thread = ceKernel_.threads().find(handles[i]);
-            ready = thread == ceKernel_.threads().end() ||
-                    thread->second.state == GuestThreadRunState::Terminated;
-        }
-        else {
-            ready = true;
-        }
-        allReady = allReady && ready;
-        if (!waitAll && ready) {
-            lastError_ = 0;
-            return kWaitObject0 + i;
-        }
-    }
 
-    lastError_ = 0;
-    return waitAll && allReady ? kWaitObject0 : kWaitTimeout;
+    const CeKernel::WaitQueryResult wait =
+        ceKernel_.queryWaitObjects(handles, waitAll, hostWaitProbe, false);
+    lastError_ = wait.error;
+    return wait.result;
 }

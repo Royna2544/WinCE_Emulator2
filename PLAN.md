@@ -59,6 +59,10 @@ file-name shortcuts, route-screen shortcuts, or coordinate-specific fixes.
     assignment into `CeKernel`.
 - [ ] Keep host handles as backing values inside CE handles; never expose host
   handles as guest-visible truth.
+  - [x] Route immediate `WaitForMultipleObjects` readiness through `CeKernel`
+    with a runtime-supplied host wait probe.
+  - [ ] Audit remaining direct `hostValue` uses so host APIs remain backing
+    services and guest-visible decisions stay in the virtual CE subsystems.
 
 ## Phase 3: GWE Message Queue And `SendMessageW` Migration
 
