@@ -960,7 +960,8 @@ bool SyntheticDllRuntime::drawHostTextToDc(const GuestDc& dc,
     bool hostFontOwned = false;
     auto selectedFont = [&]() -> HFONT {
         LOGFONTW logFont{};
-        auto font = fonts_.find(dc.selectedFont);
+        const uint32_t selectedFontHandle = ceMgdi_.selectedFontForDc(dc.hdc, dc.selectedFont);
+        auto font = fonts_.find(selectedFontHandle);
         if (font == fonts_.end() || font->second.stock) {
             HFONT stockFont = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
             if (!stockFont || GetObjectW(stockFont, sizeof(logFont), &logFont) != sizeof(logFont)) {

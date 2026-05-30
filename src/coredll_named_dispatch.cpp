@@ -562,8 +562,10 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(uint16_t ordinal,
     case ord(CoredllOrdinal::Polygon):
     {
         GuestDc* dc = lookupGuestDc(a0);
-        auto brush = dc ? brushes_.find(dc->selectedBrush) : brushes_.end();
-        auto pen = dc ? pens_.find(dc->selectedPen) : pens_.end();
+        const uint32_t selectedBrush = dc ? ceMgdi_.selectedBrushForDc(dc->hdc, dc->selectedBrush) : 0;
+        const uint32_t selectedPen = dc ? ceMgdi_.selectedPenForDc(dc->hdc, dc->selectedPen) : 0;
+        auto brush = dc ? brushes_.find(selectedBrush) : brushes_.end();
+        auto pen = dc ? pens_.find(selectedPen) : pens_.end();
         const bool hasBrush = brush != brushes_.end() && brush->second.colorRef != 0xffffffffu;
         const bool hasPen = pen != pens_.end() && pen->second.style != 5 && pen->second.colorRef != 0xffffffffu;
         if (!dc || !a1 || a2 < 2 || (brush == brushes_.end() && pen == pens_.end())) {
@@ -592,10 +594,10 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(uint16_t ordinal,
                 spdlog::debug("Polygon probe#{} dc=0x{:08x} hwnd=0x{:08x} bitmap=0x{:08x} count={} bounds={},{}..{},{} "
                               "brush=0x{:08x} brushColor=0x{:08x} pattern=0x{:08x} pen=0x{:08x} penColor=0x{:08x}",
                               polygonDebugCount, a0, dc->hwnd, dc->selectedBitmap, a2,
-                              minX, minY, maxX, maxY, dc->selectedBrush,
+                              minX, minY, maxX, maxY, selectedBrush,
                               hasBrush ? brush->second.colorRef : 0xffffffffu,
                               hasBrush ? brush->second.patternBitmap : 0,
-                              dc->selectedPen, hasPen ? pen->second.colorRef : 0xffffffffu);
+                              selectedPen, hasPen ? pen->second.colorRef : 0xffffffffu);
             }
             if (hasBrush) {
                 fillDcPolygon(*dc, points, colorRefToPixel(brush->second.colorRef));
@@ -620,7 +622,8 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(uint16_t ordinal,
     case ord(CoredllOrdinal::Polyline):
     {
         GuestDc* dc = lookupGuestDc(a0);
-        auto pen = dc ? pens_.find(dc->selectedPen) : pens_.end();
+        const uint32_t selectedPen = dc ? ceMgdi_.selectedPenForDc(dc->hdc, dc->selectedPen) : 0;
+        auto pen = dc ? pens_.find(selectedPen) : pens_.end();
         if (!dc || !a1 || a2 < 2 || pen == pens_.end()) {
             lastError_ = dc ? 87 : 6;
             ret = 0;
@@ -2581,17 +2584,17 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             lastError_ = 6;
             ret = 0;
         } else if (object->second.kind == GuestHandle::Kind::GuestBrush) {
-            ret = dc->selectedBrush;
+            ret = ceMgdi_.selectedBrushForDc(a0, dc->selectedBrush);
             dc->selectedBrush = a1;
             ceMgdi_.setSelectedBrush(a0, a1);
             lastError_ = 0;
         } else if (object->second.kind == GuestHandle::Kind::GuestPen) {
-            ret = dc->selectedPen;
+            ret = ceMgdi_.selectedPenForDc(a0, dc->selectedPen);
             dc->selectedPen = a1;
             ceMgdi_.setSelectedPen(a0, a1);
             lastError_ = 0;
         } else if (object->second.kind == GuestHandle::Kind::GuestFont) {
-            ret = dc->selectedFont;
+            ret = ceMgdi_.selectedFontForDc(a0, dc->selectedFont);
             dc->selectedFont = a1;
             ceMgdi_.setSelectedFont(a0, a1);
             lastError_ = 0;
@@ -2716,8 +2719,10 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
     case ord(CoredllOrdinal::Ellipse):
     {
         GuestDc* dc = lookupGuestDc(a0);
-        auto brush = dc ? brushes_.find(dc->selectedBrush) : brushes_.end();
-        auto pen = dc ? pens_.find(dc->selectedPen) : pens_.end();
+        const uint32_t selectedBrush = dc ? ceMgdi_.selectedBrushForDc(dc->hdc, dc->selectedBrush) : 0;
+        const uint32_t selectedPen = dc ? ceMgdi_.selectedPenForDc(dc->hdc, dc->selectedPen) : 0;
+        auto brush = dc ? brushes_.find(selectedBrush) : brushes_.end();
+        auto pen = dc ? pens_.find(selectedPen) : pens_.end();
         if (!dc || (brush == brushes_.end() && pen == pens_.end())) {
             lastError_ = dc ? 87 : 6;
             ret = 0;
@@ -2788,7 +2793,8 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
     case ord(CoredllOrdinal::PatBlt):
     {
         GuestDc* dc = lookupGuestDc(a0);
-        auto brush = dc ? brushes_.find(dc->selectedBrush) : brushes_.end();
+        const uint32_t selectedBrush = dc ? ceMgdi_.selectedBrushForDc(dc->hdc, dc->selectedBrush) : 0;
+        auto brush = dc ? brushes_.find(selectedBrush) : brushes_.end();
         const uint32_t rop = stackArg(5);
         if (!dc || brush == brushes_.end() || rop != 0x00f00021u) {
             lastError_ = dc ? 120 : 6;
@@ -2813,8 +2819,10 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
     case ord(CoredllOrdinal::Rectangle):
     {
         GuestDc* dc = lookupGuestDc(a0);
-        auto brush = dc ? brushes_.find(dc->selectedBrush) : brushes_.end();
-        auto pen = dc ? pens_.find(dc->selectedPen) : pens_.end();
+        const uint32_t selectedBrush = dc ? ceMgdi_.selectedBrushForDc(dc->hdc, dc->selectedBrush) : 0;
+        const uint32_t selectedPen = dc ? ceMgdi_.selectedPenForDc(dc->hdc, dc->selectedPen) : 0;
+        auto brush = dc ? brushes_.find(selectedBrush) : brushes_.end();
+        auto pen = dc ? pens_.find(selectedPen) : pens_.end();
         if (!dc || (brush == brushes_.end() && pen == pens_.end())) {
             lastError_ = dc ? 87 : 6;
             ret = 0;
@@ -2860,7 +2868,8 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
     case ord(CoredllOrdinal::LineTo):
     {
         GuestDc* dc = lookupGuestDc(a0);
-        auto pen = dc ? pens_.find(dc->selectedPen) : pens_.end();
+        const uint32_t selectedPen = dc ? ceMgdi_.selectedPenForDc(dc->hdc, dc->selectedPen) : 0;
+        auto pen = dc ? pens_.find(selectedPen) : pens_.end();
         if (!dc || pen == pens_.end()) {
             lastError_ = dc ? 87 : 6;
             ret = 0;

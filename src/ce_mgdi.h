@@ -108,6 +108,21 @@ public:
         return state ? state->selectedBitmap : fallback;
     }
 
+    uint32_t selectedBrushForDc(uint32_t hdc, uint32_t fallback = 0) const {
+        const DcState* state = dcState(hdc);
+        return state ? state->selectedBrush : fallback;
+    }
+
+    uint32_t selectedPenForDc(uint32_t hdc, uint32_t fallback = 0) const {
+        const DcState* state = dcState(hdc);
+        return state ? state->selectedPen : fallback;
+    }
+
+    uint32_t selectedFontForDc(uint32_t hdc, uint32_t fallback = 0) const {
+        const DcState* state = dcState(hdc);
+        return state ? state->selectedFont : fallback;
+    }
+
     void updateSelectedObjects(uint32_t hdc,
                                uint32_t brush,
                                uint32_t pen,

@@ -202,6 +202,7 @@ Status:
   host-text writes refresh the compatibility palette from MGDI before indexed
   writes. DIB-to-bitmap, `TransparentImage`, `BitBlt`, and `StretchBlt` paths
   now also refresh compatibility palettes from MGDI before indexed
-  reads/writes. The bug remains open until more pixel storage/DC object
-  ownership moves behind MGDI instead of saved backing heuristics remaining the
-  clipping truth.
+  reads/writes. Selected brush/pen/font lookups and `SelectObject` return
+  values now also read through the MGDI DC shadow. The bug remains open until
+  more pixel storage/DC object ownership moves behind MGDI instead of saved
+  backing heuristics remaining the clipping truth.

@@ -109,9 +109,11 @@ Active refactor checklist: `PLAN.md`.
      before decoding indexed bitmap pixels, and bitmap rectangle/line/polygon
      and host-text writes now refresh the compatibility palette from MGDI
      before indexed writes. DIB-to-bitmap, `TransparentImage`, `BitBlt`, and
-     `StretchBlt` paths now do the same before indexed reads/writes. Next step
-     is to move more pixel operations/DC object ownership behind MGDI instead
-     of keeping `GuestBitmap` and saved backing layers as runtime-owned truth.
+     `StretchBlt` paths now do the same before indexed reads/writes. Selected
+     brush/pen/font lookups and `SelectObject` return values now also read
+     through the MGDI DC shadow. Next step is to move more pixel operations/DC
+     object ownership behind MGDI instead of keeping `GuestBitmap` and saved
+     backing layers as runtime-owned truth.
 
 ## Next
 
