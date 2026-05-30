@@ -1835,28 +1835,26 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
         };
 #if defined(_WIN32)
         if (handle && isHostWaitable(*handle) && a1 != 0) {
-            constexpr uint32_t kWaitObject0 = WAIT_OBJECT_0;
-            constexpr uint32_t kWaitTimeout = WAIT_TIMEOUT;
-            constexpr uint32_t kWaitFailed = WAIT_FAILED;
             const uint64_t start = hostTickMilliseconds();
             const bool infinite = a1 == INFINITE;
-            const HANDLE host = reinterpret_cast<HANDLE>(handle->hostValue);
+            auto hostWaitProbe = [](const GuestHandle& guestHandle) {
+                const DWORD wait = ::WaitForSingleObject(reinterpret_cast<HANDLE>(guestHandle.hostValue), 0);
+                if (wait == WAIT_OBJECT_0) return CeKernel::HostWaitResult{true, false, 0};
+                if (wait == WAIT_TIMEOUT) return CeKernel::HostWaitResult{false, false, 0};
+                return CeKernel::HostWaitResult{false, true, GetLastError()};
+            };
             for (;;) {
                 refreshCompletedHostWaveBuffers();
-                const DWORD wait = ::WaitForSingleObject(host, 0);
-                if (wait == WAIT_OBJECT_0) {
-                    ret = kWaitObject0;
-                    lastError_ = 0;
-                    break;
-                }
-                if (wait == WAIT_FAILED) {
-                    ret = kWaitFailed;
-                    lastError_ = GetLastError();
+                const CeKernel::WaitQueryResult wait =
+                    ceKernel_.queryWaitObject(a0, hostWaitProbe, true);
+                if (wait.result != CeKernel::kWaitTimeout) {
+                    ret = wait.result;
+                    lastError_ = wait.error;
                     break;
                 }
                 const uint64_t elapsed = hostTickMilliseconds() - start;
                 if (!infinite && elapsed >= a1) {
-                    ret = kWaitTimeout;
+                    ret = CeKernel::kWaitTimeout;
                     lastError_ = 0;
                     break;
                 }
@@ -1873,25 +1871,11 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             }
         } else
 #endif
-        if (handle && handle->kind == GuestHandle::Kind::GuestThread) {
-            auto thread = ceKernel_.threads().find(a0);
-            if (thread == ceKernel_.threads().end() || thread->second.state == GuestThreadRunState::Terminated) {
-                ret = 0;
-            } else {
-                ret = a1 == 0 ? 0x00000102u : 0x00000102u; // WAIT_TIMEOUT until cooperative scheduling runs it.
-            }
-            lastError_ = 0;
-        } else if (handle && handle->kind == GuestHandle::Kind::GuestProcess && !handle->hostValue) {
-            bool processStillRunning = false;
-            for (const auto& [threadHandle, thread] : ceKernel_.threads()) {
-                (void)threadHandle;
-                if (thread.processHandle == a0 && thread.state != GuestThreadRunState::Terminated) {
-                    processStillRunning = true;
-                    break;
-                }
-            }
-            ret = processStillRunning ? 0x00000102u : 0;
-            lastError_ = 0;
+        if (handle && (handle->kind == GuestHandle::Kind::GuestThread ||
+                       (handle->kind == GuestHandle::Kind::GuestProcess && !handle->hostValue))) {
+            const CeKernel::WaitQueryResult wait = ceKernel_.queryWaitObject(a0, {}, true);
+            ret = wait.result;
+            lastError_ = wait.error;
         } else
 #if defined(_WIN32)
         if (handle && handle->hostValue) {

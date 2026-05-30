@@ -63,6 +63,8 @@ file-name shortcuts, route-screen shortcuts, or coordinate-specific fixes.
     with a runtime-supplied host wait probe.
   - [x] Route cooperative `WaitForSingleObject` readiness through `CeKernel`
     with a runtime-supplied host wait probe.
+  - [x] Route named-dispatch `WaitForSingleObject` guest thread/process
+    readiness through `CeKernel`.
   - [ ] Audit remaining direct `hostValue` uses so host APIs remain backing
     services and guest-visible decisions stay in the virtual CE subsystems.
 

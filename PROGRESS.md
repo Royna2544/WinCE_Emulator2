@@ -70,6 +70,10 @@ Current emulator difference:
   readiness through `CeKernel::queryWaitObject`, preserving sender/thread
   preference and host wait probing as runtime-supplied backing behavior.
   The 2026-05-30 Release build passed after this single-wait migration.
+- The named-dispatch `WaitForSingleObject` path now also uses
+  `CeKernel::queryWaitObject` for host-backed wait polling in its bounded wait
+  loop and for guest thread/process readiness. The 2026-05-30 Release build
+  passed after this named-dispatch wait migration.
 
 ## Threading And Message Queues
 
