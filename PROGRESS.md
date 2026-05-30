@@ -946,3 +946,24 @@ Confirmed behavior difference:
   owner=0xfffffffe ownerQueued=63 totalQueued=63`, showing that pending main
   UI work was selected before the newly resumed worker batch. The full manual
   dialog-switching acceptance is still pending an interactive run.
+- A Debug interactive run exposed a scheduler regression in the first
+  owner-priority implementation: when pending messages belonged to the main
+  pseudo-thread and the runtime was already returning from a main-thread API
+  boundary, restoring the parked main context replayed stale `CreateThread`
+  work until guest heap exhaustion. The scheduler now restores the parked main
+  context only while yielding from an active guest worker; main-boundary
+  returns fall through without replaying stale state. Current source
+  reference:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_thread_runtime.cpp:493`.
+  The 2026-05-30 Debug build and Release build passed. Debug remote-server
+  run `captures/inavi_autodrive_20260530_231358` was launched with
+  `--remote-bind 192.168.0.39`, reached the map/UI path, and showed serial
+  reads parking/waking on data instead of the previous loading freeze.
+  Follow-up run `captures/inavi_autodrive_20260530_232138` added the
+  completed scheduler guard: queued-message preemption now leaves an active
+  guest worker running when that worker already owns the oldest pending
+  message, and the old `pre-queued-worker` burst is skipped whenever GWE has a
+  pending message owner. This removed the rapid `queued-message-preempt` bounce
+  and worker-burst queue growth seen in the previous remote run. Remaining
+  slow paint spans are still visible and should be investigated as rendering
+  or remote-streaming cost, not the earlier scheduler storm.

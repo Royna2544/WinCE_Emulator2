@@ -2185,6 +2185,9 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
             !pendingMessageTransfers_.empty()) {
             return true;
         }
+        if (ceGwe_.oldestPendingOwner()) {
+            return true;
+        }
         if (ceGwe_.messageCount() < 3) {
             return true;
         }
@@ -2232,7 +2235,10 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
         if (!resumeQueuedWorkerBurst()) return;
         if (ceGwe_.hasMessages() && hasHostWindows()) {
             if (ceKernel_.activeGuestThread()) {
-                yieldActiveGuestThread("queued-message-preempt");
+                const std::optional<uint32_t> owner = ceGwe_.oldestPendingOwner();
+                if (!owner || *owner != ceKernel_.activeGuestThread()) {
+                    yieldActiveGuestThread("queued-message-preempt");
+                }
             }
             if (!ceKernel_.activeGuestThread()) {
                 uint32_t currentPc = 0;

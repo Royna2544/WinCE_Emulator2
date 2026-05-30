@@ -492,8 +492,9 @@ bool SyntheticDllRuntime::switchToRunnableGuestThread(const char* reason,
 
     if (const std::optional<uint32_t> owner = ceGwe_.oldestPendingOwner()) {
         if (*owner == ceKernel_.mainThreadPseudoHandle()) {
-            if (ceKernel_.activeGuestThread()) {
-                auto active = ceKernel_.threads().find(ceKernel_.activeGuestThread());
+            const uint32_t activeThread = ceKernel_.activeGuestThread();
+            if (activeThread) {
+                auto active = ceKernel_.threads().find(activeThread);
                 if (active != ceKernel_.threads().end()) {
                     active->second.context = captureGuestCpuContext();
                     if (returnAddress) active->second.context.registers[UC_MIPS_REG_PC] = returnAddress;
@@ -502,10 +503,10 @@ bool SyntheticDllRuntime::switchToRunnableGuestThread(const char* reason,
                     }
                 }
                 ceKernel_.activeGuestThread() = 0;
-            }
-            if (restoreMainThreadContextIfRunnable(reason)) {
-                logOwnerPriority(*owner, "main");
-                return true;
+                if (restoreMainThreadContextIfRunnable(reason)) {
+                    logOwnerPriority(*owner, "main");
+                    return true;
+                }
             }
         } else {
             auto queuedOwner = ceKernel_.threads().find(*owner);

@@ -73,9 +73,16 @@ Status:
   remains future work if the app reaches those APIs. A Debug interactive run
   on 2026-05-30 also fixed the observed stale main-message-pump context
   replay: queued-message watchdog slices now save the current readable main
-  context and only restore parked state when the current PC is invalid. The
-  bug remains open until the queue model, wake categories, and send-message
-  edge cases are the behavioral truth.
+  context, and owner-priority main pseudo-thread restore only happens while
+  yielding from an active guest worker. This avoids replaying stale
+  main-thread API-boundary state and exhausting the guest heap during loading.
+  A follow-up fix also avoids preempting an active guest worker when that
+  worker is already the oldest pending message owner, and disables the legacy
+  `pre-queued-worker` burst while GWE has a pending owner. This removed the
+  rapid `queued-message-preempt` bounce and worker-burst queue growth seen
+  after the first fix.
+  The bug remains open until the queue model, wake categories, and
+  send-message edge cases are the behavioral truth.
 
 ## Virtual Serial No-Data Reads Can Still Hot-Poll
 
@@ -108,10 +115,15 @@ Status:
   queue sizes, and virtual no-data backend state. No-data virtual serial reads
   now park active guest threads and wake them on remote bytes or deadline
   expiry. GWE owner-priority scheduling now prefers the oldest pending message
-  owner, and the 2026-05-30 Debug run showed the main pseudo-thread being
-  selected with 63 queued UI messages before a resumed worker batch. The bug
-  remains open until this is verified in a live UI interaction path through
-  the previous sensor-polling freeze.
+  owner without replaying stale parked main-thread state at main API
+  boundaries. Debug remote-server run
+  `captures/inavi_autodrive_20260530_231358` reached the UI/map path and
+  showed serial reads parking and waking on data; follow-up run
+  `captures/inavi_autodrive_20260530_232138` removed the rapid
+  `queued-message-preempt` bounce and reached serial no-data wait/wake again.
+  The bug remains open until this is verified in a live UI interaction path
+  through the previous sensor-polling freeze and the remaining slow paint
+  spans are understood.
 
 ## Window Visibility And Modal Ownership Are Region-Incomplete
 

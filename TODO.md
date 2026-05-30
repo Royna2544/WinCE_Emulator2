@@ -30,10 +30,16 @@ Active refactor checklist: `PLAN.md`.
      comm mask, queue sizes, and virtual no-data backend state now live behind
      `CeDevice`. Timeout-aware no-data reads now park active guest threads and
      wake them on remote bytes or deadline expiry. GWE owner-priority
-     scheduling now picks the oldest pending owner queue, including the main
-     pseudo-thread, before generic worker slices. Next step is live
-     interactive validation through the previous UI freeze/sensor-polling
-     path.
+     scheduling now picks the oldest pending owner queue before generic worker
+     slices, and the main pseudo-thread path now avoids replaying parked stale
+     state when already returning from a main-thread API boundary. Next step
+     is live interactive validation through the previous UI
+     freeze/sensor-polling path and investigation of the remaining slow paint
+     spans observed with the remote server enabled. The immediate
+     `queued-message-preempt` bounce is fixed by not preempting an active
+     worker that already owns the oldest pending message, and the legacy
+     `pre-queued-worker` burst now stands down while GWE has a pending message
+     owner.
 
 2. Introduce a CE-shaped internal `MsgQueue` model.
    - CE reference:
