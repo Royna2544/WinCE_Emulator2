@@ -2924,8 +2924,14 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
     {
         GuestDc* dstDc = lookupGuestDc(a0);
         GuestDc* srcDc = lookupGuestDc(stackArg(5));
-        auto srcBitmap = srcDc ? bitmaps_.find(srcDc->selectedBitmap) : bitmaps_.end();
-        auto dstBitmap = dstDc ? bitmaps_.find(dstDc->selectedBitmap) : bitmaps_.end();
+        const CeMgdi::DcState* dstDcState = dstDc ? ceMgdi_.dcState(a0) : nullptr;
+        const CeMgdi::DcState* srcDcState = srcDc ? ceMgdi_.dcState(stackArg(5)) : nullptr;
+        const uint32_t dstSelectedBitmap = dstDcState ? dstDcState->selectedBitmap
+                                                      : (dstDc ? dstDc->selectedBitmap : 0);
+        const uint32_t srcSelectedBitmap = srcDcState ? srcDcState->selectedBitmap
+                                                      : (srcDc ? srcDc->selectedBitmap : 0);
+        auto srcBitmap = srcDc ? bitmaps_.find(srcSelectedBitmap) : bitmaps_.end();
+        auto dstBitmap = dstDc ? bitmaps_.find(dstSelectedBitmap) : bitmaps_.end();
         const int32_t dstH = int32_t(stackArg(4));
         const int32_t srcX = int32_t(stackArg(6));
         const int32_t srcY = int32_t(stackArg(7));
@@ -2935,8 +2941,8 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
         if (!dstDc || !srcDc || srcBitmap == bitmaps_.end()) {
             spdlog::info("TransparentImage unsupported dst=0x{:08x} dstBitmap=0x{:08x} src=0x{:08x} "
                          "srcBitmap=0x{:08x} dst={}x{} src={}x{} srcOrigin={},{} color=0x{:08x}",
-                         a0, dstDc ? dstDc->selectedBitmap : 0, stackArg(5),
-                         srcDc ? srcDc->selectedBitmap : 0, int32_t(a3), dstH,
+                         a0, dstSelectedBitmap, stackArg(5),
+                         srcSelectedBitmap, int32_t(a3), dstH,
                          srcW, srcH, srcX, srcY, transparentColor);
             lastError_ = dstDc && srcDc ? 120 : 6;
             ret = 0;
@@ -2965,12 +2971,12 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                              "srcDc=0x{:08x} srcHwnd=0x{:08x} srcBitmap=0x{:08x} srcSize={}x{} "
                              "srcRect={},{} {}x{} srcStats sampled={} nonBlack={} unique~{} "
                              "first=0x{:08x} last=0x{:08x} color=0x{:08x}",
-                             blitProbeLogCounter_, a0, dstDc->hwnd, dstDc->selectedBitmap,
+                             blitProbeLogCounter_, a0, dstDc->hwnd, dstSelectedBitmap,
                              dstBitmap->second.width, dstBitmap->second.heightRaw,
                              int32_t(a1), int32_t(a2), int32_t(a3), dstH,
                              dstStats.sampled, dstStats.nonBlack, dstStats.uniqueApprox,
                              dstStats.firstPixel, dstStats.lastPixel, stackArg(5), srcDc->hwnd,
-                             srcDc->selectedBitmap, srcBitmap->second.width, srcBitmap->second.heightRaw,
+                             srcSelectedBitmap, srcBitmap->second.width, srcBitmap->second.heightRaw,
                              srcX, srcY, srcW, srcH, srcStats.sampled, srcStats.nonBlack,
                              srcStats.uniqueApprox, srcStats.firstPixel, srcStats.lastPixel,
                              transparentColor);
@@ -2980,9 +2986,9 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                              "dstBits=0x{:08x} dstSize={}x{} dstBpp={} src=0x{:08x} srcBitmap=0x{:08x} "
                              "srcBits=0x{:08x} srcSize={}x{} srcBpp={} dst={}x{} src={}x{} "
                              "srcOrigin={},{} color=0x{:08x}",
-                             a0, dstDc->selectedBitmap, dstBitmap->second.bits, dstBitmap->second.width,
+                             a0, dstSelectedBitmap, dstBitmap->second.bits, dstBitmap->second.width,
                              dstBitmap->second.heightRaw, dstBitmap->second.bpp, stackArg(5),
-                             srcDc->selectedBitmap, srcBitmap->second.bits, srcBitmap->second.width,
+                             srcSelectedBitmap, srcBitmap->second.bits, srcBitmap->second.width,
                              srcBitmap->second.heightRaw, srcBitmap->second.bpp, int32_t(a3), dstH,
                              srcW, srcH, srcX, srcY, transparentColor);
             }
@@ -3006,7 +3012,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                              "srcStats sampled={} nonBlack={} unique~{} first=0x{:08x} "
                              "last=0x{:08x} color=0x{:08x}",
                              blitProbeLogCounter_, a0, dstDc->hwnd, int32_t(a1), int32_t(a2),
-                             int32_t(a3), dstH, stackArg(5), srcDc->hwnd, srcDc->selectedBitmap,
+                             int32_t(a3), dstH, stackArg(5), srcDc->hwnd, srcSelectedBitmap,
                              srcBitmap->second.width, srcBitmap->second.heightRaw, srcX, srcY,
                              srcW, srcH, srcStats.sampled, srcStats.nonBlack, srcStats.uniqueApprox,
                              srcStats.firstPixel, srcStats.lastPixel, transparentColor);
@@ -3014,7 +3020,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                     ++blitProbeDumpCounter_;
                     char tag[80]{};
                     std::snprintf(tag, sizeof(tag), "transparent_present_%02u", blitProbeDumpCounter_);
-                    dumpGuestBitmapPpm(srcDc->selectedBitmap, srcBitmap->second, std::string(tag) + "_source");
+                    dumpGuestBitmapPpm(srcSelectedBitmap, srcBitmap->second, std::string(tag) + "_source");
                     dumpFramebufferPpm(tag);
                 }
             }
@@ -3022,7 +3028,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                 spdlog::info("TransparentImage framebuffer blit failed dst=0x{:08x} src=0x{:08x} "
                              "srcBitmap=0x{:08x} srcBits=0x{:08x} srcSize={}x{} srcBpp={} "
                              "dst={}x{} src={}x{} srcOrigin={},{} color=0x{:08x}",
-                             a0, stackArg(5), srcDc->selectedBitmap, srcBitmap->second.bits,
+                             a0, stackArg(5), srcSelectedBitmap, srcBitmap->second.bits,
                              srcBitmap->second.width, srcBitmap->second.heightRaw, srcBitmap->second.bpp,
                              int32_t(a3), dstH, srcW, srcH, srcX, srcY, transparentColor);
             }
