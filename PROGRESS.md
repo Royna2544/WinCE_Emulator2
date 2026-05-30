@@ -252,6 +252,21 @@ Current emulator difference:
   was captured at 816x519 and the high-signal log scan found no new
   unsupported coredll ordinal, hard-error, invalid mapping, false zero-PC, or
   deadlock markers.
+- Cross-thread `SendMessageW` queueing now applies to any different
+  window-owner queue, not only active guest-thread sends to the main
+  pseudo-thread. The sender is parked as `WaitingForSendMessage`, the sent
+  message is queued through `CeGwe`, the scheduler prefers the receiver owner
+  when it is a guest thread, and the existing message-transfer completion path
+  writes the window-proc result back to the sender. CE reference:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/cmsgque.h:897`.
+  Current source references:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp:1601` and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp:2300`.
+  The 2026-05-30 Release build passed with no warnings after this narrow
+  change. Bounded autodrive with the companion enabled wrote
+  `captures/inavi_autodrive_20260530_194442`; `00_initial.png` was captured at
+  816x519 and the high-signal log scan found no new unsupported coredll
+  ordinal, hard-error, invalid mapping, false zero-PC, or deadlock markers.
 
 ## Threading And Message Queues
 

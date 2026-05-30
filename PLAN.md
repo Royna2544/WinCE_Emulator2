@@ -134,6 +134,13 @@ results, or timing thresholds.
 - [ ] Model cross-thread `SendMessageW` as a sender-blocked queue transaction
   with receiver-context execution and result transfer back to the sender.
   Current source anchor: `src/synthetic_dll.cpp` send-message inline path.
+  - [x] Generalize cross-thread `SendMessageW` routing from worker-to-main
+    only to any different window-owner queue: enqueue a sent message, park the
+    sender as `WaitingForSendMessage`, prefer the receiver's guest thread when
+    it is not the main pseudo-thread, and return the window-proc result to the
+    sender on completion. CE source anchor:
+    `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/cmsgque.h:897`.
+    Current source anchor: `src/synthetic_dll.cpp`.
 
 ## Phase 4: Window Visible/Update/Client Region Migration
 

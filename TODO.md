@@ -28,8 +28,10 @@ Active refactor checklist: `PLAN.md`.
      that owner context, and guest message-wait wakeup now checks the waiting
      thread's owner queue before making it runnable. `MsgWaitForMultipleObjectsEx`
      is registered and routed through the same owner-aware queue state for
-     basic message readiness. Next step is to model cross-thread
-     `SendMessageW` as a CE queue transaction.
+     basic message readiness. Cross-thread `SendMessageW` now queues to any
+     different receiver owner and parks the sender until the transfer result
+     returns. Next step is to start Phase 4 window visible/update/client
+     region migration.
 
 2. Model cross-thread `SendMessageW` as a queue transaction.
    - CE reference:
@@ -39,6 +41,9 @@ Active refactor checklist: `PLAN.md`.
    - Goal: sender blocks, owner queue runs, result returns to sender, and
      `InSendMessage`/timeout behavior remains explainable without faking null
      callbacks or app-specific success.
+   - Current status: the sender-blocked queue/result path now covers any
+     different window-owner queue. Remaining follow-up is finer
+     `InSendMessage`/timeout accounting if a target app imports those APIs.
 
 3. Implement real window visible/update/client regions.
    - CE reference:

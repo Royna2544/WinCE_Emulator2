@@ -2297,23 +2297,25 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                 finishImmediateReturn(ret);
                 return;
             }
-            if (isSendMessageW && ceKernel_.activeGuestThread() &&
-                targetWindow != windows_.end() &&
-                targetWindow->second.ownerThread == ceKernel_.mainThreadPseudoHandle() &&
-                targetWindow->second.ownerThread != ceKernel_.activeGuestThread()) {
+            const uint32_t senderHandle = ceKernel_.activeGuestThread();
+            const uint32_t targetOwner = targetWindow == windows_.end()
+                ? CeGwe::kNoOwnerThread
+                : targetWindow->second.ownerThread;
+            if (isSendMessageW && senderHandle &&
+                targetOwner != CeGwe::kNoOwnerThread &&
+                targetOwner != senderHandle) {
                 GuestMessage message{};
                 message.hwnd = hwnd;
                 message.message = msg;
                 message.wParam = wParam;
                 message.lParam = lParam;
                 message.time = uint32_t(++tick_ * 16);
-                message.synchronousSender = ceKernel_.activeGuestThread();
+                message.synchronousSender = senderHandle;
                 ceGwe_.postSentBeforeFirstMatch(message, [](const GuestMessage& queued) {
                     return queued.synchronousSender == 0;
                 });
                 wakeGuestThreadsWaitingForMessage();
                 lastError_ = 0;
-                const uint32_t senderHandle = ceKernel_.activeGuestThread();
                 auto sender = ceKernel_.threads().find(senderHandle);
                 if (sender != ceKernel_.threads().end() &&
                     sender->second.state == GuestThreadRunState::Running) {
@@ -2338,7 +2340,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                                  hwnd,
                                  msg,
                                  senderHandle,
-                                 targetWindow->second.ownerThread,
+                                 targetOwner,
                                  ceGwe_.messageCount(),
                                  sender != ceKernel_.threads().end());
                 } else {
@@ -2346,12 +2348,18 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                                   hwnd,
                                   msg,
                                   senderHandle,
-                                  targetWindow->second.ownerThread,
+                                  targetOwner,
                                   ceGwe_.messageCount(),
                                   sender != ceKernel_.threads().end());
                 }
                 ceKernel_.activeGuestThread() = 0;
-                if (!restoreMainThreadContextIfRunnable("SendMessageW-cross-thread")) {
+                bool receiverRunnable = false;
+                if (targetOwner == ceKernel_.mainThreadPseudoHandle()) {
+                    receiverRunnable = restoreMainThreadContextIfRunnable("SendMessageW-cross-thread");
+                } else {
+                    receiverRunnable = switchToRunnableGuestThread("SendMessageW-cross-thread", 0, targetOwner);
+                }
+                if (!receiverRunnable && !restoreMainThreadContextIfRunnable("SendMessageW-cross-thread")) {
                     switchToRunnableGuestThread("SendMessageW-cross-thread");
                 }
                 pumpHostMessages();

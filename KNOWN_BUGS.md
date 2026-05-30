@@ -67,10 +67,12 @@ Status:
   use owner-filtered selection while preserving flat ordering inside that owner
   context, and message-wait wakeup now checks the waiting thread's owner queue
   before making it runnable. `MsgWaitForMultipleObjectsEx` now uses
-  owner-aware message readiness, but wake masks are still category-coarse and
-  cross-thread `SendMessageW` still needs a fuller sender-blocked queue
-  transaction. The bug remains open until those paths use the CE-shaped queue
-  model as behavioral truth.
+  owner-aware message readiness, but wake masks are still category-coarse.
+  Cross-thread `SendMessageW` now uses a sender-blocked queue/result path for
+  any different window-owner queue; finer `InSendMessage`/timeout accounting
+  remains future work if the app reaches those APIs. The bug remains open
+  until the queue model, wake categories, and send-message edge cases are the
+  behavioral truth.
 
 ## Window Visibility And Modal Ownership Are Region-Incomplete
 
