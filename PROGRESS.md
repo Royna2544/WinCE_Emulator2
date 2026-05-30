@@ -80,6 +80,11 @@ Current emulator difference:
   later commits replace direct deque operations with named `CeGwe` queue APIs.
   The 2026-05-30 Release build passed after this GWE message-storage migration
   with the same Boost Beast warning from `remote_server.cpp`.
+- `CeGwe::postMessage` now wraps append posting, and simple focus/foreground
+  message producers in `coredll_gui.cpp` and `coredll_window.cpp` use it while
+  preserving the existing queue order. The 2026-05-30 Release build passed
+  after this queue-API batch with the same Boost Beast warning from
+  `remote_server.cpp`.
 
 ## Threading And Message Queues
 

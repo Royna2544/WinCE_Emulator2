@@ -25,6 +25,8 @@ public:
 
     std::deque<GuestMessage>& messages() noexcept { return messages_; }
     const std::deque<GuestMessage>& messages() const noexcept { return messages_; }
+    void postMessage(const GuestMessage& message) { messages_.push_back(message); }
+    void postMessage(GuestMessage&& message) { messages_.push_back(message); }
 
 private:
     std::deque<GuestMessage> messages_;

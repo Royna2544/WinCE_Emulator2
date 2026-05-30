@@ -75,7 +75,7 @@ bool SyntheticDllRuntime::handleSetFocus(SyntheticExportCode code, const GuestCa
     if (!args.a0 || (target != windows_.end() && !target->second.destroyed)) {
         ret = focusedWindow_;
         focusedWindow_ = args.a0;
-        if (args.a0) guestMessages_.push_back({args.a0, 0x0007, 0, 0, uint32_t(++tick_ * 16), 0, 0});
+        if (args.a0) ceGwe_.postMessage({args.a0, 0x0007, 0, 0, uint32_t(++tick_ * 16), 0, 0});
         lastError_ = 0;
     } else {
         lastError_ = 1400;

@@ -75,6 +75,8 @@ file-name shortcuts, route-screen shortcuts, or coordinate-specific fixes.
   `src/coredll_window_runtime.cpp`, `src/coredll_named_dispatch.cpp`.
   - [x] Move the `GuestMessage` record and backing deque storage into
     `CeGwe` while preserving the existing runtime alias.
+  - [x] Add `CeGwe::postMessage` and route simple focus/foreground posts
+    through it.
   - [ ] Replace direct runtime deque operations with named `CeGwe` queue
     methods in small behavior-preserving batches.
 - [ ] Add per-thread or per-owner queues aligned with CE `MsgQueue`
