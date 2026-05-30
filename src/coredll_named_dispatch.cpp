@@ -2885,7 +2885,9 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             ret = 0xffffffffu;
         } else {
             const bool supported = stackArg(11) == 0 && stackArg(12) == 0x00cc0020u;
-            auto dstBitmap = bitmaps_.find(dc->selectedBitmap);
+            const CeMgdi::DcState* dcState = ceMgdi_.dcState(a0);
+            const uint32_t selectedBitmap = dcState ? dcState->selectedBitmap : dc->selectedBitmap;
+            auto dstBitmap = bitmaps_.find(selectedBitmap);
             const bool ok = supported && (dstBitmap != bitmaps_.end()
                 ? stretchDibToBitmap(dstBitmap->second, int32_t(a1), int32_t(a2), int32_t(a3),
                                      int32_t(stackArg(4)), int32_t(stackArg(5)),
@@ -2898,7 +2900,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             if (ok) {
                 if (std::abs(int32_t(a3)) >= 200 || std::abs(int32_t(stackArg(4))) >= 120 || dc->hwnd) {
                     spdlog::info("StretchDIBits ok dst=0x{:08x} hwnd=0x{:08x} dstBitmap=0x{:08x} dst={},{} {}x{} srcOrigin={},{} src={}x{} bits=0x{:08x} info=0x{:08x}",
-                                 a0, dc->hwnd, dc->selectedBitmap, int32_t(a1), int32_t(a2),
+                                 a0, dc->hwnd, selectedBitmap, int32_t(a1), int32_t(a2),
                                  int32_t(a3), int32_t(stackArg(4)), int32_t(stackArg(5)),
                                  int32_t(stackArg(6)), int32_t(stackArg(7)), int32_t(stackArg(8)),
                                  stackArg(9), stackArg(10));
@@ -2909,7 +2911,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                 spdlog::info("StretchDIBits failed dst=0x{:08x} dstBitmap=0x{:08x} "
                              "dst={}x{} src={}x{} srcOrigin={},{} bits=0x{:08x} info=0x{:08x} "
                              "usage={} rop=0x{:08x}",
-                             a0, dc->selectedBitmap, int32_t(a3), int32_t(stackArg(4)),
+                             a0, selectedBitmap, int32_t(a3), int32_t(stackArg(4)),
                              int32_t(stackArg(7)), int32_t(stackArg(8)), int32_t(stackArg(5)),
                              int32_t(stackArg(6)), stackArg(9), stackArg(10), stackArg(11), stackArg(12));
                 lastError_ = 120;

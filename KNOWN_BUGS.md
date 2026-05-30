@@ -191,6 +191,7 @@ Status:
   reads through MGDI. `SetBitmapBits` now also uses MGDI metadata for storage
   size and guest bits lookup, `SetDIBColorTable` validates palette bounds
   through MGDI metadata, and `DeleteObject`/`SelectObject` use MGDI metadata
-  for stock-bitmap protection and bitmap selection validation. The bug remains
-  open until more pixel storage/DC object ownership moves behind MGDI instead
-  of saved backing heuristics remaining the clipping truth.
+  for stock-bitmap protection and bitmap selection validation. DIB destination
+  bitmap selection also reads from the MGDI DC shadow. The bug remains open
+  until more pixel storage/DC object ownership moves behind MGDI instead of
+  saved backing heuristics remaining the clipping truth.

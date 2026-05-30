@@ -1467,7 +1467,9 @@ bool SyntheticDllRuntime::handleSetDIBitsToDevice(const GuestCallArgs& args, uin
     const bool supported = stackArg(11) == 0;
     const int32_t srcX = int32_t(stackArg(5));
     const int32_t srcY = int32_t(stackArg(6) + stackArg(7));
-    auto dstBitmap = bitmaps_.find(dc->selectedBitmap);
+    const CeMgdi::DcState* dcState = ceMgdi_.dcState(args.a0);
+    const uint32_t selectedBitmap = dcState ? dcState->selectedBitmap : dc->selectedBitmap;
+    auto dstBitmap = bitmaps_.find(selectedBitmap);
     const bool ok = supported && (dstBitmap != bitmaps_.end()
         ? stretchDibToBitmap(dstBitmap->second, int32_t(args.a1), int32_t(args.a2), dstW, scanLines,
                              srcX, srcY, dstW, scanLines, stackArg(9), stackArg(10))
@@ -1476,7 +1478,7 @@ bool SyntheticDllRuntime::handleSetDIBitsToDevice(const GuestCallArgs& args, uin
     if (ok) {
         if (std::abs(dstW) >= 200 || std::abs(scanLines) >= 120 || dc->hwnd) {
             spdlog::info("SetDIBitsToDevice ok dst=0x{:08x} hwnd=0x{:08x} dstBitmap=0x{:08x} dst={},{} {}x{} srcOrigin={},{} startScan={} scanLines={} bits=0x{:08x} info=0x{:08x}",
-                         args.a0, dc->hwnd, dc->selectedBitmap, int32_t(args.a1), int32_t(args.a2),
+                         args.a0, dc->hwnd, selectedBitmap, int32_t(args.a1), int32_t(args.a2),
                          dstW, dstH, srcX, int32_t(stackArg(6)), stackArg(7), stackArg(8),
                          stackArg(9), stackArg(10));
         }
@@ -1486,7 +1488,7 @@ bool SyntheticDllRuntime::handleSetDIBitsToDevice(const GuestCallArgs& args, uin
         spdlog::info("SetDIBitsToDevice failed dst=0x{:08x} dstBitmap=0x{:08x} "
                      "dst={}x{} srcOrigin={},{} startScan={} scanLines={} bits=0x{:08x} "
                      "info=0x{:08x} usage={}",
-                     args.a0, dc->selectedBitmap, dstW, dstH, srcX, int32_t(stackArg(6)),
+                     args.a0, selectedBitmap, dstW, dstH, srcX, int32_t(stackArg(6)),
                      stackArg(7), stackArg(8), stackArg(9), stackArg(10), stackArg(11));
         lastError_ = 120;
         ret = 0;
