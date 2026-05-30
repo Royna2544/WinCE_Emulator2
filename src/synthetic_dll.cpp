@@ -389,14 +389,14 @@ bool SyntheticDllRuntime::handleEncodedKernelCall(uint32_t target, uint32_t arg0
     if (!call) return false;
 
     if (call->kind == CeKernel::EncodedKernelCallKind::TerminateProcess) {
-        exitCode = call->oldEncoding ? arg0 : arg1;
+        exitCode = arg1;
         ceKernel_.terminateCurrentProcess(exitCode);
         quitPosted_ = true;
         spdlog::info("decoded MIPS CE kernel call TerminateProcess target=0x{:08x} "
                      "apiSet={} method={} oldEncoding={} caller=0x{:08x} return=0x{:08x} "
-                     "arg0=0x{:08x} arg1=0x{:08x} exitCode=0x{:08x}",
+                     "process=0x{:08x} exitCode=0x{:08x}",
                      target, call->apiSet, call->method, call->oldEncoding,
-                     callerPc, returnPc, arg0, arg1, exitCode);
+                     callerPc, returnPc, arg0, exitCode);
         return true;
     }
 

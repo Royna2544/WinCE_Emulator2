@@ -125,6 +125,11 @@ Current emulator difference:
   `captures/inavi_autodrive_20260530_183949`; `DeviceParser.exe` logged the
   decoded CE kernel exit instead of the previous fatal zero-PC crash, and the
   log scan found no new zero-PC fatal or unsupported coredll ordinal lines.
+  A later Debug disassembly of `DeviceParser.exe` showed the old CE
+  `TerminateProcess` thunk receives `a0=0x42` as the process handle and the
+  actual process exit code in `a1`; the decoder now reports and stores `a1`
+  as the exit code. Debug evidence:
+  `captures/inavi_autodrive_20260530_185730/child_17980_1_DeviceParser.exe.stdout.log`.
 - Phase 3 compatibility alias cleanup is complete: runtime code no longer
   touches `guestMessages_` directly. Message counts, emptiness checks,
   scans, extraction, reverse erasure, first-match dequeue, and posting now go
