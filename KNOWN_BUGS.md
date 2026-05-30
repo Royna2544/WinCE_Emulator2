@@ -193,6 +193,7 @@ Status:
   through MGDI metadata, and `DeleteObject`/`SelectObject` use MGDI metadata
   for stock-bitmap protection and bitmap selection validation. DIB destination
   bitmap selection and `TransparentImage` source/destination bitmap selection
-  also read from the MGDI DC shadow. The bug remains open until more pixel
+  also read from the MGDI DC shadow, along with `BitBlt` and `StretchBlt`
+  source/destination bitmap selection. The bug remains open until more pixel
   storage/DC object ownership moves behind MGDI instead of saved backing
   heuristics remaining the clipping truth.

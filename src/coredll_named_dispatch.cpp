@@ -3101,13 +3101,19 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
         const int32_t srcY = int32_t(stackArg(7));
         const int32_t srcW = stretch ? int32_t(stackArg(8)) : dstW;
         const int32_t srcH = stretch ? int32_t(stackArg(9)) : dstH;
-        auto srcBitmap = srcDc ? bitmaps_.find(srcDc->selectedBitmap) : bitmaps_.end();
-        auto dstBitmap = dstDc ? bitmaps_.find(dstDc->selectedBitmap) : bitmaps_.end();
+        const CeMgdi::DcState* dstDcState = dstDc ? ceMgdi_.dcState(a0) : nullptr;
+        const CeMgdi::DcState* srcDcState = srcDc ? ceMgdi_.dcState(stackArg(5)) : nullptr;
+        const uint32_t dstSelectedBitmap = dstDcState ? dstDcState->selectedBitmap
+                                                      : (dstDc ? dstDc->selectedBitmap : 0);
+        const uint32_t srcSelectedBitmap = srcDcState ? srcDcState->selectedBitmap
+                                                      : (srcDc ? srcDc->selectedBitmap : 0);
+        auto srcBitmap = srcDc ? bitmaps_.find(srcSelectedBitmap) : bitmaps_.end();
+        auto dstBitmap = dstDc ? bitmaps_.find(dstSelectedBitmap) : bitmaps_.end();
         if (!dstDc || !srcDc || srcBitmap == bitmaps_.end() || !supportedSourceRasterOp(rop)) {
             spdlog::info("{} unsupported dst=0x{:08x} dstBitmap=0x{:08x} src=0x{:08x} srcBitmap=0x{:08x} "
                          "dst={}x{} src={}x{} srcOrigin={},{} rop=0x{:08x}",
-                         name, a0, dstDc ? dstDc->selectedBitmap : 0, stackArg(5),
-                         srcDc ? srcDc->selectedBitmap : 0, dstW, dstH, srcW, srcH,
+                         name, a0, dstSelectedBitmap, stackArg(5),
+                         srcSelectedBitmap, dstW, dstH, srcW, srcH,
                          srcX, srcY, rop);
             lastError_ = dstDc && srcDc ? 120 : 6;
             ret = 0;
@@ -3136,11 +3142,11 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                              "srcDc=0x{:08x} srcHwnd=0x{:08x} srcBitmap=0x{:08x} srcSize={}x{} "
                              "srcRect={},{} {}x{} srcStats sampled={} nonBlack={} unique~{} "
                              "first=0x{:08x} last=0x{:08x} rop=0x{:08x}",
-                             name, blitProbeLogCounter_, a0, dstDc->hwnd, dstDc->selectedBitmap,
+                             name, blitProbeLogCounter_, a0, dstDc->hwnd, dstSelectedBitmap,
                              dstBitmap->second.width, dstBitmap->second.heightRaw,
                              int32_t(a1), int32_t(a2), dstW, dstH, dstStats.sampled,
                              dstStats.nonBlack, dstStats.uniqueApprox, dstStats.firstPixel,
-                             dstStats.lastPixel, stackArg(5), srcDc->hwnd, srcDc->selectedBitmap,
+                             dstStats.lastPixel, stackArg(5), srcDc->hwnd, srcSelectedBitmap,
                              srcBitmap->second.width, srcBitmap->second.heightRaw, srcX, srcY,
                              srcW, srcH, srcStats.sampled, srcStats.nonBlack, srcStats.uniqueApprox,
                              srcStats.firstPixel, srcStats.lastPixel, rop);
@@ -3149,8 +3155,8 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                     ++blitProbeDumpCounter_;
                     char tag[80]{};
                     std::snprintf(tag, sizeof(tag), "memory_blit_%02u", blitProbeDumpCounter_);
-                    dumpGuestBitmapPpm(srcDc->selectedBitmap, srcBitmap->second, std::string(tag) + "_source");
-                    dumpGuestBitmapPpm(dstDc->selectedBitmap, dstBitmap->second, std::string(tag) + "_result");
+                    dumpGuestBitmapPpm(srcSelectedBitmap, srcBitmap->second, std::string(tag) + "_source");
+                    dumpGuestBitmapPpm(dstSelectedBitmap, dstBitmap->second, std::string(tag) + "_result");
                 }
             }
             const bool splashSlice =
@@ -3171,14 +3177,14 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                 splashTag = name + "_splash_bottom";
             }
             if (dumpSplashSlice) {
-                splashCompositeBitmap_ = dstDc->selectedBitmap;
-                dumpGuestBitmapPpm(srcDc->selectedBitmap, srcBitmap->second, splashTag + "_source");
-                dumpGuestBitmapPpm(dstDc->selectedBitmap, dstBitmap->second, splashTag + "_result");
+                splashCompositeBitmap_ = dstSelectedBitmap;
+                dumpGuestBitmapPpm(srcSelectedBitmap, srcBitmap->second, splashTag + "_source");
+                dumpGuestBitmapPpm(dstSelectedBitmap, dstBitmap->second, splashTag + "_result");
                 spdlog::debug("{} splash probe dstDc=0x{:08x} dstBitmap=0x{:08x} dstSize={}x{} "
                              "srcDc=0x{:08x} srcBitmap=0x{:08x} srcSize={}x{} dst={}x{} "
                              "src={}x{} srcOrigin={},{} rop=0x{:08x}",
-                             name, a0, dstDc->selectedBitmap, dstBitmap->second.width,
-                             dstBitmap->second.heightRaw, stackArg(5), srcDc->selectedBitmap,
+                             name, a0, dstSelectedBitmap, dstBitmap->second.width,
+                             dstBitmap->second.heightRaw, stackArg(5), srcSelectedBitmap,
                              srcBitmap->second.width, srcBitmap->second.heightRaw, dstW, dstH,
                              srcW, srcH, srcX, srcY, rop);
             }
@@ -3187,9 +3193,9 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                              "dstBits=0x{:08x} dstSize={}x{} dstBpp={} src=0x{:08x} "
                              "srcBitmap=0x{:08x} srcBits=0x{:08x} srcSize={}x{} srcBpp={} "
                              "dst={}x{} src={}x{} srcOrigin={},{} rop=0x{:08x}",
-                             name, a0, dstDc->selectedBitmap, dstBitmap->second.bits,
+                             name, a0, dstSelectedBitmap, dstBitmap->second.bits,
                              dstBitmap->second.width, dstBitmap->second.heightRaw, dstBitmap->second.bpp,
-                             stackArg(5), srcDc->selectedBitmap, srcBitmap->second.bits,
+                             stackArg(5), srcSelectedBitmap, srcBitmap->second.bits,
                              srcBitmap->second.width, srcBitmap->second.heightRaw, srcBitmap->second.bpp,
                              dstW, dstH, srcW, srcH, srcX, srcY, rop);
             }
@@ -3213,7 +3219,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                              "srcStats sampled={} nonBlack={} unique~{} first=0x{:08x} "
                              "last=0x{:08x} rop=0x{:08x}",
                              name, blitProbeLogCounter_, a0, dstDc->hwnd, int32_t(a1), int32_t(a2),
-                             dstW, dstH, stackArg(5), srcDc->hwnd, srcDc->selectedBitmap,
+                             dstW, dstH, stackArg(5), srcDc->hwnd, srcSelectedBitmap,
                              srcBitmap->second.width, srcBitmap->second.heightRaw, srcX, srcY,
                              srcW, srcH, srcStats.sampled, srcStats.nonBlack, srcStats.uniqueApprox,
                              srcStats.firstPixel, srcStats.lastPixel, rop);
@@ -3221,24 +3227,24 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                     ++blitProbeDumpCounter_;
                     char tag[80]{};
                     std::snprintf(tag, sizeof(tag), "framebuffer_blit_%02u", blitProbeDumpCounter_);
-                    dumpGuestBitmapPpm(srcDc->selectedBitmap, srcBitmap->second, std::string(tag) + "_source");
+                    dumpGuestBitmapPpm(srcSelectedBitmap, srcBitmap->second, std::string(tag) + "_source");
                     dumpFramebufferPpm(tag);
                 }
             }
             const bool splashFrame =
-                ok && !splashFramebufferDumped_ && srcDc->selectedBitmap == splashCompositeBitmap_ &&
+                ok && !splashFramebufferDumped_ && srcSelectedBitmap == splashCompositeBitmap_ &&
                 srcBitmap->second.width == 800 && std::abs(srcBitmap->second.heightRaw) == 480 &&
                 std::abs(dstW) == 800 && std::abs(dstH) == 480 &&
                 std::abs(srcW) == 800 && std::abs(srcH) == 480;
             if (splashFrame) {
                 splashFramebufferDumped_ = true;
                 const std::string tag = name + "_splash_framebuffer";
-                dumpGuestBitmapPpm(srcDc->selectedBitmap, srcBitmap->second, tag + "_source");
+                dumpGuestBitmapPpm(srcSelectedBitmap, srcBitmap->second, tag + "_source");
                 dumpFramebufferPpm(tag);
                 spdlog::debug("{} splash probe dstDc=0x{:08x} framebuffer srcDc=0x{:08x} "
                              "srcBitmap=0x{:08x} srcSize={}x{} dst={}x{} src={}x{} "
                              "srcOrigin={},{} rop=0x{:08x}",
-                             name, a0, stackArg(5), srcDc->selectedBitmap,
+                             name, a0, stackArg(5), srcSelectedBitmap,
                              srcBitmap->second.width, srcBitmap->second.heightRaw, dstW, dstH,
                              srcW, srcH, srcX, srcY, rop);
             }
@@ -3246,7 +3252,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                 spdlog::info("{} framebuffer blit failed dst=0x{:08x} src=0x{:08x} "
                              "srcBitmap=0x{:08x} srcBits=0x{:08x} srcSize={}x{} srcBpp={} "
                              "dst={}x{} src={}x{} srcOrigin={},{} rop=0x{:08x}",
-                             name, a0, stackArg(5), srcDc->selectedBitmap, srcBitmap->second.bits,
+                             name, a0, stackArg(5), srcSelectedBitmap, srcBitmap->second.bits,
                              srcBitmap->second.width, srcBitmap->second.heightRaw, srcBitmap->second.bpp,
                              dstW, dstH, srcW, srcH, srcX, srcY, rop);
             }

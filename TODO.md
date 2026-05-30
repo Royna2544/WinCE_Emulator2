@@ -101,9 +101,10 @@ Active refactor checklist: `PLAN.md`.
      `SetDIBColorTable` palette bounds, `DeleteObject` stock-bitmap protection,
      `SelectObject` bitmap validation, and DIB destination-bitmap selection now
      read through MGDI metadata/state. `TransparentImage` also reads selected
-     source/destination bitmap handles through MGDI DC state. Next step is to
-     move more pixel operations/DC object ownership behind MGDI instead of
-     keeping `GuestBitmap` and saved backing layers as runtime-owned truth.
+     source/destination bitmap handles through MGDI DC state, as do `BitBlt`
+     and `StretchBlt`. Next step is to move more pixel operations/DC object
+     ownership behind MGDI instead of keeping `GuestBitmap` and saved backing
+     layers as runtime-owned truth.
 
 ## Next
 

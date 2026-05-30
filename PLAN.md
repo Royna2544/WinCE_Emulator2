@@ -207,6 +207,9 @@ results, or timing thresholds.
   - [x] Route `TransparentImage` source/destination selected-bitmap reads
     through `CeMgdi::DcState` while keeping the current blit backend. Current
     source anchor: `src/coredll_named_dispatch.cpp`.
+  - [x] Route `BitBlt` and `StretchBlt` source/destination selected-bitmap
+    reads through `CeMgdi::DcState` while keeping the current blit backend.
+    Current source anchor: `src/coredll_named_dispatch.cpp`.
 - [ ] Add app clip, system clip, and actual device clip state before adding
   more blit optimizations. CE source anchor:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/MGDI/INC/dc.hpp:13`.
