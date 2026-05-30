@@ -185,6 +185,9 @@ results, or timing thresholds.
     changes, and bitmap deletion while keeping pixel storage in the current
     runtime bitmap map. Current source anchors: `src/ce_mgdi.h`,
     `src/coredll_bitmap.cpp`, and `src/coredll_named_dispatch.cpp`.
+  - [x] Route `GetObjectW` bitmap metadata through `CeMgdi::BitmapState`
+    instead of reading `GuestBitmap` directly. Current source anchor:
+    `src/coredll_bitmap.cpp`.
 - [ ] Add app clip, system clip, and actual device clip state before adding
   more blit optimizations. CE source anchor:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/MGDI/INC/dc.hpp:13`.

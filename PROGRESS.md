@@ -404,6 +404,19 @@ Current emulator difference:
   was captured at 816x519 and the high-signal log scan found no new
   unsupported coredll ordinal, hard-error, invalid mapping, false zero-PC, or
   deadlock markers.
+- `GetObjectW` for bitmap handles now reports width, absolute height, stride,
+  bpp, and guest bits pointer from `CeMgdi::BitmapState` instead of reading
+  the runtime `GuestBitmap` map directly. Pixel operations still use
+  `GuestBitmap` storage until the later MGDI pixel-storage migration. CE
+  reference:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/MGDI/INC/gdiobj.h:358`.
+  Current source reference:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_bitmap.cpp:1335`.
+  The 2026-05-30 Release build passed with no warnings. Bounded autodrive with
+  the companion enabled wrote `captures/inavi_autodrive_20260530_202549`;
+  `00_initial.png` was captured at 816x519 and the high-signal log scan found
+  no new unsupported coredll ordinal, hard-error, invalid mapping, false
+  zero-PC, or deadlock markers.
 
 ## Threading And Message Queues
 

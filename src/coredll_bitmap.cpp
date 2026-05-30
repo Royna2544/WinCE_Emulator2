@@ -1333,8 +1333,8 @@ bool SyntheticDllRuntime::handleCreateBitmap(const GuestCallArgs& args, uint32_t
 }
 
 bool SyntheticDllRuntime::handleGetObjectW(const GuestCallArgs& args, uint32_t& ret) {
-    auto bitmap = bitmaps_.find(args.a0);
-    if (bitmap == bitmaps_.end()) {
+    const CeMgdi::BitmapState* bitmap = ceMgdi_.bitmapState(args.a0);
+    if (!bitmap) {
         lastError_ = 6;
         ret = 0;
         return true;
@@ -1345,8 +1345,7 @@ bool SyntheticDllRuntime::handleGetObjectW(const GuestCallArgs& args, uint32_t& 
         return true;
     }
 
-    const GuestBitmap& bm = bitmap->second;
-    const int32_t height = bm.heightRaw < 0 ? -bm.heightRaw : bm.heightRaw;
+    const int32_t height = bitmap->heightRaw < 0 ? -bitmap->heightRaw : bitmap->heightRaw;
     std::array<uint8_t, 24> raw{};
     auto putU32 = [&](uint32_t offset, uint32_t value) {
         raw[offset + 0] = uint8_t(value & 0xff);
@@ -1359,12 +1358,12 @@ bool SyntheticDllRuntime::handleGetObjectW(const GuestCallArgs& args, uint32_t& 
         raw[offset + 1] = uint8_t(value >> 8);
     };
     putU32(0, 0);
-    putU32(4, uint32_t(bm.width));
+    putU32(4, uint32_t(bitmap->width));
     putU32(8, uint32_t(height));
-    putU32(12, bm.stride);
+    putU32(12, bitmap->stride);
     putU16(16, 1);
-    putU16(18, bm.bpp);
-    putU32(20, bm.bits);
+    putU16(18, bitmap->bpp);
+    putU32(20, bitmap->bits);
     const uint32_t bytes = std::min<uint32_t>(args.a1, uint32_t(raw.size()));
     if (bytes && uc_mem_write(uc_, args.a2, raw.data(), bytes) != UC_ERR_OK) {
         lastError_ = 998;

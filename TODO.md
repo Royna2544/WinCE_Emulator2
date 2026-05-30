@@ -97,9 +97,9 @@ Active refactor checklist: `PLAN.md`.
      transparent image writes. Bitmap metadata now also mirrors into
      `CeMgdi::BitmapState`, and published windows now mirror into a
      `CeMgdi::WindowBitmapState` scaffold with viewport, system clip, and live
-     DC count. Next step is to move pixel storage/DC object ownership behind
-     MGDI instead of keeping `GuestBitmap` and saved backing layers as
-     runtime-owned truth.
+     DC count. `GetObjectW` bitmap metadata now reads through MGDI. Next step
+     is to move pixel storage/DC object ownership behind MGDI instead of
+     keeping `GuestBitmap` and saved backing layers as runtime-owned truth.
 
 ## Next
 
