@@ -1858,7 +1858,9 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                 if (active != ceKernel_.threads().end()) {
                     active->second.context = captureGuestCpuContext();
                     active->second.context.registers[UC_MIPS_REG_PC] = ra;
+                    active->second.context.registers[UC_MIPS_REG_GP] = guestGpForCodeAddress(ra);
                     active->second.context.registers[UC_MIPS_REG_V0] = 0;
+                    active->second.waitTimeoutResult = 0;
                     if (a0 == 0) {
                         active->second.state = GuestThreadRunState::Runnable;
                         active->second.sleepUntilMs = 0;
@@ -1867,6 +1869,8 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                         active->second.waitHandle = 0;
                         active->second.waitHandles.clear();
                         active->second.waitAll = false;
+                        active->second.waitForMessages = false;
+                        active->second.waitWakeMask = 0;
                         active->second.sleepUntilMs = hostTickMilliseconds() + uint64_t(a0);
                     }
                     const uint32_t savedRa = active->second.context.registers.count(UC_MIPS_REG_RA)
@@ -1899,6 +1903,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
         case 0x01F2: {
             constexpr uint32_t kWaitTimeout = 0x00000102u;
             constexpr uint32_t kWaitFailed = 0xffffffffu;
+            constexpr uint32_t kInfiniteTimeout = 0xffffffffu;
             if (ceKernel_.activeGuestThread()) {
                 uint32_t ret = waitForMultipleGuestObjects(a0, a1, a2 != 0);
                 const bool wouldBlock = ret == kWaitTimeout && a3 != 0;
@@ -1914,6 +1919,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                     if (active != ceKernel_.threads().end()) {
                         active->second.context = captureGuestCpuContext();
                         active->second.context.registers[UC_MIPS_REG_PC] = ra;
+                        active->second.context.registers[UC_MIPS_REG_GP] = guestGpForCodeAddress(ra);
                         active->second.context.registers[UC_MIPS_REG_V0] = 0;
                         active->second.state = GuestThreadRunState::Waiting;
                         active->second.waitHandle = handles.size() == 1 ? handles.front() : 0;
@@ -1921,6 +1927,10 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                         active->second.waitAll = a2 != 0;
                         active->second.waitForMessages = false;
                         active->second.waitWakeMask = 0;
+                        active->second.waitTimeoutResult = kWaitTimeout;
+                        active->second.sleepUntilMs = a3 == kInfiniteTimeout
+                            ? 0
+                            : hostTickMilliseconds() + uint64_t(a3);
                         spdlog::info("guest thread wait-multiple handle=0x{:08x} count={} waitAll={} timeout=0x{:08x} return=0x{:08x}",
                                      ceKernel_.activeGuestThread(), a0, a2 != 0, a3, ra);
                     }
@@ -1996,6 +2006,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                     if (active != ceKernel_.threads().end()) {
                         active->second.context = captureGuestCpuContext();
                         active->second.context.registers[UC_MIPS_REG_PC] = ra;
+                        active->second.context.registers[UC_MIPS_REG_GP] = guestGpForCodeAddress(ra);
                         active->second.context.registers[UC_MIPS_REG_V0] = 0; // completed wait result after wake
                         active->second.state = GuestThreadRunState::Waiting;
                         active->second.waitHandle = a0;
@@ -2003,6 +2014,10 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                         active->second.waitAll = false;
                         active->second.waitForMessages = false;
                         active->second.waitWakeMask = 0;
+                        active->second.waitTimeoutResult = kWaitTimeout;
+                        active->second.sleepUntilMs = a1 == kInfiniteTimeout
+                            ? 0
+                            : hostTickMilliseconds() + uint64_t(a1);
                         spdlog::info("guest thread wait handle=0x{:08x} wait=0x{:08x} return=0x{:08x}",
                                      ceKernel_.activeGuestThread(), a0, ra);
                     }
@@ -2146,6 +2161,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                 if (active != ceKernel_.threads().end()) {
                     active->second.context = captureGuestCpuContext();
                     active->second.context.registers[UC_MIPS_REG_PC] = ra;
+                    active->second.context.registers[UC_MIPS_REG_GP] = guestGpForCodeAddress(ra);
                     active->second.context.registers[UC_MIPS_REG_V0] = 0;
                     active->second.state = GuestThreadRunState::Waiting;
                     active->second.waitHandle = handles.size() == 1 ? handles.front() : 0;
@@ -2153,6 +2169,10 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                     active->second.waitAll = waitAll;
                     active->second.waitForMessages = wakeMask != 0;
                     active->second.waitWakeMask = wakeMask;
+                    active->second.waitTimeoutResult = kWaitTimeout;
+                    active->second.sleepUntilMs = timeoutMs == kInfiniteTimeout
+                        ? 0
+                        : hostTickMilliseconds() + uint64_t(timeoutMs);
                     spdlog::info("guest thread msg-wait handle=0x{:08x} count={} timeout=0x{:08x} wakeMask=0x{:08x} flags=0x{:08x} return=0x{:08x}",
                                  ceKernel_.activeGuestThread(), waitCount, timeoutMs, wakeMask, flags, ra);
                 }

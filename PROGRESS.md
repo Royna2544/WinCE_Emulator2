@@ -74,6 +74,32 @@ Current emulator difference:
   `CeKernel::queryWaitObject` for host-backed wait polling in its bounded wait
   loop and for guest thread/process readiness. The 2026-05-30 Release build
   passed after this named-dispatch wait migration.
+- The named-dispatch `WaitForSingleObject` host polling/sleep loop was removed
+  after interactive evidence showed startup audio/event waits could block the
+  emulator. Host-backed waits are now zero-probed through
+  `CeKernel::queryWaitObject`; normal guest waits park through the inline
+  virtual scheduler. Parked waits now carry an explicit timeout result so
+  finite `WaitForSingleObject`, `WaitForMultipleObjects`, and
+  `MsgWaitForMultipleObjectsEx` waits resume with `WAIT_TIMEOUT`, while
+  `Sleep` still resumes with zero. Current source anchors:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_named_dispatch.cpp:1879`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp:1902`, and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_kernel.cpp:112`. The 2026-05-30
+  Release build passed with zero warnings after this change.
+- Named shared mappings now follow a more CE-shaped map/unmap model:
+  `UnmapViewOfFile` syncs only changed named-view bytes, while explicit
+  `FlushViewOfFile` remains the force-write path. This targets the observed
+  `iNavi_sharedMem_traffic_static` map/unmap storm without special-casing that
+  mapping name. CE references:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/NK/MAPFILE/mapfile.c:1273`
+  and
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/NK/MAPFILE/mapfile.c:1333`.
+  Current source anchor:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_mapping.cpp:180`. Bounded
+  Release smoke runs wrote `captures/inavi_autodrive_20260530_235343` and
+  `captures/inavi_autodrive_20260530_235445`; both captured startup without
+  high-signal fatal/unsupported-ordinal log hits, but neither run exercised
+  the full interactive remote-server button-stall path.
 - `CeGwe` now owns the `GuestMessage` record type and backing message deque.
   `SyntheticDllRuntime::guestMessages_` remains a compatibility alias to that
   deque, so this Phase 3 scaffold step should preserve delivery behavior while

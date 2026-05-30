@@ -82,6 +82,7 @@ public:
         std::string modulePath;
         uint32_t waitHandle{};
         uint64_t sleepUntilMs{};
+        uint32_t waitTimeoutResult{};
         std::vector<uint32_t> waitHandles;
         bool waitAll{};
         bool waitForMessages{};

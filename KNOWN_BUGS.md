@@ -90,6 +90,46 @@ Status:
   The bug remains open until the queue model, wake categories, and
   send-message edge cases are the behavioral truth.
 
+## UI Can Stall During Host Waits Or Shared Mapping Storms
+
+Symptom:
+
+- Startup audio/event waits could block the emulator instead of only parking
+  the waiting guest thread.
+- During remote interactive testing, button release/paint could be delayed
+  while `iNavi_sharedMem_traffic_static` was repeatedly mapped, force-written,
+  and unmapped.
+
+CE/MFC reference:
+
+- MFC CE `CWnd::OnLButtonDown` delegates to default window handling after CE
+  gesture recognition:
+  `/mnt/c/Program Files (x86)/Microsoft Visual Studio 8/VC/ce/atlmfc/src/mfc/wincore.cpp:5246`.
+- CE GWE owns capture/message routing:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/cmsgque.h:1297`.
+- CE mapfile keeps map/unmap and explicit flush behavior separate:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/NK/MAPFILE/mapfile.c:1273`
+  and
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/NK/MAPFILE/mapfile.c:1333`.
+
+Current emulator reference:
+
+- Named-dispatch `WaitForSingleObject` fallback:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_named_dispatch.cpp:1879`.
+- Parked wait timeout bookkeeping:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_kernel.cpp:112`.
+- Named shared mapping sync:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_mapping.cpp:180`.
+
+Status:
+
+- Partially fixed on 2026-05-30. The named-dispatch host wait sleep loop was
+  removed, finite parked waits now carry explicit timeout return values, and
+  named shared mapping unmap no longer force-writes unchanged whole views.
+  Release build passed and bounded startup smokes captured frames. The bug
+  remains open until a Debug interactive remote-server run verifies button
+  release/paint responsiveness through the previous mapping-storm path.
+
 ## Virtual Serial No-Data Reads Can Still Hot-Poll
 
 Symptom:

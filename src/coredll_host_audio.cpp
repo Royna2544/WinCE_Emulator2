@@ -157,6 +157,11 @@ void SyntheticDllRuntime::refreshCompletedHostWaveBuffers() {
                 if (thread.state == GuestThreadRunState::Waiting && thread.waitHandle == context->guestEvent) {
                     thread.state = GuestThreadRunState::Runnable;
                     thread.waitHandle = 0;
+                    thread.waitHandles.clear();
+                    thread.waitForMessages = false;
+                    thread.waitWakeMask = 0;
+                    thread.waitTimeoutResult = 0;
+                    thread.sleepUntilMs = 0;
                     thread.context.registers[UC_MIPS_REG_V0] = 0;
                 }
             }

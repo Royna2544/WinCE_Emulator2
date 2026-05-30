@@ -117,27 +117,32 @@ std::vector<CeKernel::WaitRefreshEvent> CeKernel::refreshSignaledWaits(
     std::vector<WaitRefreshEvent> events;
     for (auto& [threadHandle, thread] : guestThreads_) {
         if (thread.state != GuestThreadRunState::Waiting) continue;
-        if (thread.sleepUntilMs) {
-            if (nowMs < thread.sleepUntilMs) continue;
-            thread.sleepUntilMs = 0;
-            thread.state = GuestThreadRunState::Runnable;
-            thread.waitHandle = 0;
-            thread.waitHandles.clear();
-            thread.waitForMessages = false;
-            thread.waitWakeMask = 0;
-            thread.context.registers[resultRegister] = 0;
-            events.push_back({WaitRefreshKind::SleepSatisfied, threadHandle});
-            continue;
-        }
-
         std::vector<uint32_t> handles = thread.waitHandles;
         if (handles.empty() && thread.waitHandle) handles.push_back(thread.waitHandle);
+        if (thread.sleepUntilMs) {
+            if (nowMs >= thread.sleepUntilMs) {
+                const uint32_t timeoutResult = thread.waitTimeoutResult;
+                thread.sleepUntilMs = 0;
+                thread.state = GuestThreadRunState::Runnable;
+                thread.waitHandle = 0;
+                thread.waitHandles.clear();
+                thread.waitForMessages = false;
+                thread.waitWakeMask = 0;
+                thread.waitTimeoutResult = 0;
+                thread.context.registers[resultRegister] = timeoutResult;
+                events.push_back({WaitRefreshKind::SleepSatisfied, threadHandle});
+                continue;
+            }
+            if (handles.empty() && !thread.waitForMessages) continue;
+        }
+
         if (thread.waitForMessages && hasMessagesForThread && hasMessagesForThread(threadHandle)) {
             thread.state = GuestThreadRunState::Runnable;
             thread.waitHandle = 0;
             thread.waitHandles.clear();
             thread.waitForMessages = false;
             thread.waitWakeMask = 0;
+            thread.waitTimeoutResult = 0;
             thread.context.registers[resultRegister] = kWaitObject0 + uint32_t(handles.size());
             events.push_back({WaitRefreshKind::MessageWaitSatisfied, threadHandle, 0, 0, 0, handles.size()});
             continue;
@@ -154,6 +159,7 @@ std::vector<CeKernel::WaitRefreshEvent> CeKernel::refreshSignaledWaits(
                 thread.waitHandles.clear();
                 thread.waitForMessages = false;
                 thread.waitWakeMask = 0;
+                thread.waitTimeoutResult = 0;
                 thread.context.registers[resultRegister] = 0xffffffffu;
                 events.push_back({WaitRefreshKind::InvalidHandle, threadHandle, waitHandle, 6});
                 break;
@@ -185,6 +191,7 @@ std::vector<CeKernel::WaitRefreshEvent> CeKernel::refreshSignaledWaits(
                 thread.waitHandles.clear();
                 thread.waitForMessages = false;
                 thread.waitWakeMask = 0;
+                thread.waitTimeoutResult = 0;
                 thread.context.registers[resultRegister] = 0xffffffffu;
                 events.push_back({WaitRefreshKind::WaitFailed, threadHandle, waitHandle, error});
                 break;
@@ -197,6 +204,7 @@ std::vector<CeKernel::WaitRefreshEvent> CeKernel::refreshSignaledWaits(
                 thread.waitHandles.clear();
                 thread.waitForMessages = false;
                 thread.waitWakeMask = 0;
+                thread.waitTimeoutResult = 0;
                 thread.context.registers[resultRegister] = uint32_t(i);
                 events.push_back({WaitRefreshKind::WaitSatisfied, threadHandle, waitHandle, 0, i});
                 break;
@@ -208,6 +216,7 @@ std::vector<CeKernel::WaitRefreshEvent> CeKernel::refreshSignaledWaits(
             thread.waitHandles.clear();
             thread.waitForMessages = false;
             thread.waitWakeMask = 0;
+            thread.waitTimeoutResult = 0;
             thread.context.registers[resultRegister] = 0;
             events.push_back({WaitRefreshKind::WaitAllSatisfied, threadHandle, 0, 0, 0, handles.size()});
         }

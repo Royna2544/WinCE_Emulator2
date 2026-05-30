@@ -40,6 +40,12 @@ Active refactor checklist: `PLAN.md`.
      worker that already owns the oldest pending message, and the legacy
      `pre-queued-worker` burst now stands down while GWE has a pending message
      owner.
+     Startup audio/event waits no longer use the named-dispatch host sleep
+     loop, and finite parked waits now resume with explicit `WAIT_TIMEOUT`
+     results. Shared named mappings also no longer force-write the whole view
+     on every `UnmapViewOfFile`; explicit `FlushViewOfFile` remains the
+     force-sync path. Next validation should be a Debug interactive run with
+     remote server and companion enabled through the button/update stall path.
 
 2. Introduce a CE-shaped internal `MsgQueue` model.
    - CE reference:

@@ -286,6 +286,7 @@ void SyntheticDllRuntime::refreshPendingSerialReads() {
         thread->second.waitHandles.clear();
         thread->second.waitForMessages = false;
         thread->second.waitWakeMask = 0;
+        thread->second.waitTimeoutResult = 0;
         thread->second.sleepUntilMs = 0;
         ceDevice_.completePendingSerialRead(read.threadHandle);
         lastError_ = 0;

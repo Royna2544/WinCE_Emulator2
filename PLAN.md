@@ -68,6 +68,13 @@ results, or timing thresholds.
     with a runtime-supplied host wait probe.
   - [x] Route named-dispatch `WaitForSingleObject` guest thread/process
     readiness through `CeKernel`.
+  - [x] Remove the named-dispatch `WaitForSingleObject` host sleep/poll loop
+    so host-backed waits are zero-probed and guest waits park through the
+    virtual scheduler instead of blocking the whole emulator.
+  - [x] Add explicit parked-wait timeout return state so finite
+    `WaitForSingleObject`, `WaitForMultipleObjects`, and
+    `MsgWaitForMultipleObjectsEx` waits resume with `WAIT_TIMEOUT`, while
+    plain `Sleep` still resumes with zero.
   - [ ] Audit remaining direct `hostValue` uses so host APIs remain backing
     services and guest-visible decisions stay in the virtual CE subsystems.
 
@@ -188,6 +195,23 @@ results, or timing thresholds.
   `ReadFile transferred=0` must not appear as an unlimited hot loop,
   `pre-queued-no-runnable` must not repeat while message owners have work, and
   UI/dialog switching must remain responsive after sensor polling starts.
+
+## Phase 3.6: Source-Aligned Shared Mapping And UI Stall Fixes
+
+- [x] Stop force-writing named shared mappings on every `UnmapViewOfFile`;
+  unmap now syncs only changed bytes, while explicit `FlushViewOfFile` remains
+  the force-sync path. CE source anchors:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/NK/MAPFILE/mapfile.c:1273`
+  and
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/NK/MAPFILE/mapfile.c:1333`.
+  Current source anchor: `src/coredll_mapping.cpp`.
+- [x] Demote non-forced shared-mapping write diagnostics to debug logging so
+  repeated memory-backed map updates stay observable without flooding normal
+  interactive logs.
+- [ ] Validate in Debug interactive with remote server and companion enabled:
+  startup audio must not block the whole emulator, button release/paint should
+  clear through normal GWE/MFC paths, and logs should not show
+  `iNavi_sharedMem_traffic_static` forced writes from `UnmapViewOfFile`.
 
 ## Phase 4: Window Visible/Update/Client Region Migration
 

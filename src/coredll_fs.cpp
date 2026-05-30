@@ -215,6 +215,7 @@ bool SyntheticDllRuntime::tryParkGuestSerialRead(const GuestCallArgs& args, uint
     active->second.waitAll = false;
     active->second.waitForMessages = false;
     active->second.waitWakeMask = 0;
+    active->second.waitTimeoutResult = 0;
     active->second.sleepUntilMs = decision.deadlineMs;
 
     ceDevice_.beginPendingSerialRead(CeDevice::PendingSerialRead{

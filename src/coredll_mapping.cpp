@@ -193,8 +193,13 @@ bool SyntheticDllRuntime::syncNamedMappedView(uint32_t baseAddress, GuestMappedV
         }
         view.shadow = std::move(current);
         view.backingVersion = sharedMappingVersion(mapping->second.backingPath);
-        spdlog::info("shared mapping sync write name=\"{}\" base=0x{:08x} size={} version={} forced={}",
-                     name, baseAddress, view.size, view.backingVersion, forceWrite);
+        if (forceWrite) {
+            spdlog::info("shared mapping sync write name=\"{}\" base=0x{:08x} size={} version={} forced={}",
+                         name, baseAddress, view.size, view.backingVersion, forceWrite);
+        } else {
+            spdlog::debug("shared mapping sync write name=\"{}\" base=0x{:08x} size={} version={} forced={}",
+                          name, baseAddress, view.size, view.backingVersion, forceWrite);
+        }
         return true;
     }
     const uint64_t version = sharedMappingVersion(mapping->second.backingPath);
@@ -377,7 +382,7 @@ uint32_t SyntheticDllRuntime::handleUnmapViewOfFile(uint32_t baseAddress) {
     const auto mapping = fileMappings_.find(view->second.mappingHandle);
     const std::string name = mapping == fileMappings_.end() ? std::string{} : mapping->second.name;
     const uint32_t mappingHandle = view->second.mappingHandle;
-    const bool synced = syncNamedMappedView(baseAddress, view->second, true);
+    const bool synced = syncNamedMappedView(baseAddress, view->second, false);
     if (view->second.refCount > 1) {
         --view->second.refCount;
         spdlog::info("UnmapViewOfFile decremented shared view base=0x{:08x} mapping=0x{:08x} name=\"{}\" size={} refs={} synced={}",
