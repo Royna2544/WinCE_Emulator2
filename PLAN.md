@@ -196,6 +196,10 @@ results, or timing thresholds.
 - [ ] Add a CE-shaped internal window-bitmap model before treating current
   saved backing layers as faithful. CE source anchor:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/MGDI/INC/gdiobj.h:358`.
+  - [x] Add a `CeMgdi` window-bitmap scaffold with per-window viewport,
+    system clip, and live DC count, fed from GWE window-state publication.
+    Current source anchors: `src/ce_mgdi.h` and
+    `src/coredll_named_dispatch.cpp`.
 - [ ] Keep host framebuffer and host windows as final rendering/presentation
   backends, not as owners of guest-visible clipping semantics.
 

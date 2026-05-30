@@ -793,6 +793,7 @@ void SyntheticDllRuntime::publishGuestWindowState(uint32_t hwnd) {
         if (candidate.externalProcess) continue;
         if (candidate.destroyed) {
             ceGwe_.unregisterWindow(candidateHwnd);
+            ceMgdi_.destroyWindowBitmap(candidateHwnd);
             continue;
         }
         const auto [absoluteX, absoluteY] = absoluteOrigin(candidateHwnd);
@@ -807,6 +808,13 @@ void SyntheticDllRuntime::publishGuestWindowState(uint32_t hwnd) {
                                  candidate.height,
                                  candidate.visible,
                                  candidate.destroyed);
+        const CeMgdi::Rect windowRect{absoluteX,
+                                      absoluteY,
+                                      absoluteX + candidate.width,
+                                      absoluteY + candidate.height};
+        const std::optional<CeMgdi::Rect> systemClip =
+            candidate.visible ? std::optional<CeMgdi::Rect>{windowRect} : std::nullopt;
+        ceMgdi_.updateWindowBitmap(candidateHwnd, windowRect, systemClip);
     }
     if (windowIt->second.externalProcess) {
         return;

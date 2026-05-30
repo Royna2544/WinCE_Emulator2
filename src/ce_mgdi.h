@@ -48,6 +48,14 @@ public:
         bool stock{};
     };
 
+    struct WindowBitmapState {
+        uint32_t hwnd{};
+        Rect viewport;
+        Rect systemClip;
+        bool hasSystemClip{};
+        size_t dcCount{};
+    };
+
     static constexpr std::string_view name() noexcept { return "CE MGDI"; }
     static constexpr std::string_view role() noexcept {
         return "Future owner for DC state, GDI objects, clipping, and window bitmap semantics.";
@@ -59,14 +67,22 @@ public:
 
     void createDc(uint32_t hdc, uint32_t hwnd) {
         if (!hdc) return;
+        if (const auto existing = dcStates_.find(hdc); existing != dcStates_.end()) {
+            removeDcFromWindowBitmap(existing->second.hwnd);
+        }
         auto& state = dcStates_[hdc];
         state = DcState{};
         state.hdc = hdc;
         state.hwnd = hwnd;
+        addDcToWindowBitmap(hwnd);
     }
 
     void destroyDc(uint32_t hdc) {
-        dcStates_.erase(hdc);
+        auto it = dcStates_.find(hdc);
+        if (it != dcStates_.end()) {
+            removeDcFromWindowBitmap(it->second.hwnd);
+            dcStates_.erase(it);
+        }
     }
 
     DcState* dcState(uint32_t hdc) {
@@ -192,7 +208,48 @@ public:
 
     const std::map<uint32_t, BitmapState>& bitmapStates() const noexcept { return bitmapStates_; }
 
+    void updateWindowBitmap(uint32_t hwnd, Rect viewport, std::optional<Rect> systemClip) {
+        if (!hwnd) return;
+        auto& state = windowBitmapStates_[hwnd];
+        state.hwnd = hwnd;
+        state.viewport = viewport;
+        if (systemClip) {
+            state.hasSystemClip = true;
+            state.systemClip = *systemClip;
+        } else {
+            state.hasSystemClip = false;
+            state.systemClip = Rect{};
+        }
+    }
+
+    void destroyWindowBitmap(uint32_t hwnd) {
+        windowBitmapStates_.erase(hwnd);
+    }
+
+    const WindowBitmapState* windowBitmapState(uint32_t hwnd) const {
+        auto it = windowBitmapStates_.find(hwnd);
+        return it == windowBitmapStates_.end() ? nullptr : &it->second;
+    }
+
+    const std::map<uint32_t, WindowBitmapState>& windowBitmapStates() const noexcept {
+        return windowBitmapStates_;
+    }
+
 private:
+    void addDcToWindowBitmap(uint32_t hwnd) {
+        if (!hwnd) return;
+        auto& state = windowBitmapStates_[hwnd];
+        state.hwnd = hwnd;
+        ++state.dcCount;
+    }
+
+    void removeDcFromWindowBitmap(uint32_t hwnd) {
+        if (!hwnd) return;
+        auto it = windowBitmapStates_.find(hwnd);
+        if (it != windowBitmapStates_.end() && it->second.dcCount) --it->second.dcCount;
+    }
+
     std::map<uint32_t, DcState> dcStates_;
     std::map<uint32_t, BitmapState> bitmapStates_;
+    std::map<uint32_t, WindowBitmapState> windowBitmapStates_;
 };

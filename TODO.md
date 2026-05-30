@@ -95,9 +95,11 @@ Active refactor checklist: `PLAN.md`.
      Central framebuffer drawing helpers now consult MGDI system clipping for
      rectangle fills, line drawing, bitmap blits, `StretchDIBits`, and
      transparent image writes. Bitmap metadata now also mirrors into
-     `CeMgdi::BitmapState`. Next step is to move pixel storage/DC object
-     ownership and window-bitmap semantics behind MGDI instead of keeping
-     `GuestBitmap` and saved backing layers as runtime-owned truth.
+     `CeMgdi::BitmapState`, and published windows now mirror into a
+     `CeMgdi::WindowBitmapState` scaffold with viewport, system clip, and live
+     DC count. Next step is to move pixel storage/DC object ownership behind
+     MGDI instead of keeping `GuestBitmap` and saved backing layers as
+     runtime-owned truth.
 
 ## Next
 

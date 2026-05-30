@@ -386,6 +386,24 @@ Current emulator difference:
   was captured at 816x519 and the high-signal log scan found no new
   unsupported coredll ordinal, hard-error, invalid mapping, false zero-PC, or
   deadlock markers.
+- `CeMgdi` now has a CE-shaped window-bitmap scaffold for each published guest
+  window: viewport rectangle, system clip rectangle, and live DC count. The
+  state is fed from the same absolute window rectangles used by GWE
+  publication and removed when a guest window is destroyed. This is still a
+  scaffold; saved backing pixels remain runtime-owned. CE reference:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/MGDI/INC/gdiobj.h:358`.
+  Current source references:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_mgdi.h:51`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_mgdi.h:211`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_mgdi.h:239`,
+  and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_named_dispatch.cpp:792`.
+  The 2026-05-30 Release build passed with the pre-existing Boost Beast
+  warning from `remote_server.cpp`. Bounded autodrive with the companion
+  enabled wrote `captures/inavi_autodrive_20260530_202249`; `00_initial.png`
+  was captured at 816x519 and the high-signal log scan found no new
+  unsupported coredll ordinal, hard-error, invalid mapping, false zero-PC, or
+  deadlock markers.
 
 ## Threading And Message Queues
 

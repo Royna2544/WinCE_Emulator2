@@ -186,6 +186,7 @@ Status:
   with window DC system clips seeded from GWE visible rectangles. Central
   framebuffer drawing helpers now enforce that system clip for fills, lines,
   bitmap blits, `StretchDIBits`, and transparent image writes. MGDI also now
-  mirrors bitmap metadata for created/deleted bitmaps. The bug remains open
-  until pixel storage/DC object ownership and the window-bitmap model move
-  behind MGDI instead of saved backing heuristics remaining the clipping truth.
+  mirrors bitmap metadata for created/deleted bitmaps and a window-bitmap
+  scaffold for published guest windows. The bug remains open until pixel
+  storage/DC object ownership move behind MGDI instead of saved backing
+  heuristics remaining the clipping truth.
