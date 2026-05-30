@@ -38,6 +38,10 @@ public:
         return "Future owner for DC state, GDI objects, clipping, and window bitmap semantics.";
     }
 
+    static bool rectContainsPoint(const Rect& rect, int32_t x, int32_t y) noexcept {
+        return x >= rect.left && y >= rect.top && x < rect.right && y < rect.bottom;
+    }
+
     void createDc(uint32_t hdc, uint32_t hwnd) {
         if (!hdc) return;
         auto& state = dcStates_[hdc];

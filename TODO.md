@@ -92,8 +92,11 @@ Active refactor checklist: `PLAN.md`.
    - Current status: `CeMgdi` now has a DC-state shadow for DC lifetime,
      selected objects, text state, current drawing position, app/system clip
      storage, and window-DC system clips seeded from GWE visible rectangles.
-     Next step is to make drawing helpers consult MGDI clipping instead of
-     relying on framebuffer/backing checks alone.
+     Central framebuffer drawing helpers now consult MGDI system clipping for
+     rectangle fills, line drawing, bitmap blits, `StretchDIBits`, and
+     transparent image writes. Next step is to move bitmap/DC object ownership
+     and window-bitmap semantics behind MGDI instead of keeping `GuestBitmap`
+     and saved backing layers as runtime-owned truth.
 
 ## Next
 

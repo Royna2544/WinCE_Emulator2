@@ -257,6 +257,7 @@ uint32_t SyntheticDllRuntime::makeGuestDc(uint32_t hwnd) {
     dc.selectedPen = makeStockObject(7); // BLACK_PEN
     dc.selectedFont = makeStockObject(17); // DEFAULT_GUI_FONT
     const uint32_t handle = makeGuestHandle({GuestHandle::Kind::GuestDc, 0, 0});
+    dc.hdc = handle;
     dcs_[handle] = dc;
     ceMgdi_.createDc(handle, hwnd);
     ceMgdi_.updateSelectedObjects(handle, dc.selectedBrush, dc.selectedPen, dc.selectedFont, dc.selectedBitmap);
@@ -460,6 +461,16 @@ void SyntheticDllRuntime::writeGuestRect(uint32_t address,
     writeU32(address + 12, uint32_t(bottom));
 }
 
+std::optional<CeMgdi::Rect> SyntheticDllRuntime::framebufferClipForDc(const GuestDc& dc) const {
+    auto clip = ceMgdi_.systemClip(dc.hdc);
+    if (!clip) return std::nullopt;
+    clip->left = std::clamp<int32_t>(clip->left, 0, framebufferWidth_);
+    clip->right = std::clamp<int32_t>(clip->right, 0, framebufferWidth_);
+    clip->top = std::clamp<int32_t>(clip->top, 0, framebufferHeight_);
+    clip->bottom = std::clamp<int32_t>(clip->bottom, 0, framebufferHeight_);
+    return clip;
+}
+
 void SyntheticDllRuntime::fillFramebufferRect(const GuestDc& dc,
                                               int32_t left,
                                               int32_t top,
@@ -481,6 +492,13 @@ void SyntheticDllRuntime::fillFramebufferRect(const GuestDc& dc,
     right = std::clamp<int32_t>(right, 0, framebufferWidth_);
     top = std::clamp<int32_t>(top, 0, framebufferHeight_);
     bottom = std::clamp<int32_t>(bottom, 0, framebufferHeight_);
+    if (const auto clip = framebufferClipForDc(dc)) {
+        left = std::max(left, clip->left);
+        right = std::min(right, clip->right);
+        top = std::max(top, clip->top);
+        bottom = std::min(bottom, clip->bottom);
+    }
+    if (left >= right || top >= bottom) return;
     noteGuestWindowPaint(dc.hwnd, left, top, right, bottom);
 
     const uint32_t coveringPopup = dc.hwnd ? coveringFullScreenOwnedPopup(dc.hwnd) : 0;
@@ -533,6 +551,7 @@ void SyntheticDllRuntime::drawFramebufferLine(const GuestDc& dc,
     x1 += originX;
     y0 += originY;
     y1 += originY;
+    const auto clip = framebufferClipForDc(dc);
     noteGuestWindowPaint(dc.hwnd,
                          std::clamp<int32_t>(std::min(x0, x1), 0, framebufferWidth_),
                          std::clamp<int32_t>(std::min(y0, y1), 0, framebufferHeight_),
@@ -544,7 +563,8 @@ void SyntheticDllRuntime::drawFramebufferLine(const GuestDc& dc,
     const int32_t sy = y0 < y1 ? 1 : -1;
     int32_t err = dx + dy;
     for (;;) {
-        if (x0 >= 0 && x0 < framebufferWidth_ && y0 >= 0 && y0 < framebufferHeight_) {
+        if (x0 >= 0 && x0 < framebufferWidth_ && y0 >= 0 && y0 < framebufferHeight_ &&
+            (!clip || CeMgdi::rectContainsPoint(*clip, x0, y0))) {
             writeFramebufferTargetPixel(dc.hwnd, x0, y0, pixel);
         }
         if (x0 == x1 && y0 == y1) break;
@@ -1512,6 +1532,7 @@ bool SyntheticDllRuntime::stretchDibToFramebuffer(const GuestDc& dc,
     if (dc.hwnd) std::tie(originX, originY) = guestWindowOrigin(dc.hwnd);
     outLeft += originX;
     outTop += originY;
+    const auto clip = framebufferClipForDc(dc);
     for (int32_t y = 0; y < outH; ++y) {
         const int32_t dstPy = outTop + y;
         if (dstPy < 0 || dstPy >= framebufferHeight_) continue;
@@ -1521,6 +1542,7 @@ bool SyntheticDllRuntime::stretchDibToFramebuffer(const GuestDc& dc,
         for (int32_t x = 0; x < outW; ++x) {
             const int32_t dstPx = outLeft + x;
             if (dstPx < 0 || dstPx >= framebufferWidth_) continue;
+            if (clip && !CeMgdi::rectContainsPoint(*clip, dstPx, dstPy)) continue;
             const int32_t sx = srcX + (int64_t(x) * srcW) / outW;
             if (sx < 0 || sx >= dibWidth) continue;
             const uint8_t* p = bits.data() + size_t(row) * rowStride;
@@ -1786,10 +1808,16 @@ bool SyntheticDllRuntime::bitBltToFramebuffer(const GuestDc& dstDc,
     outTop += originY;
     noteGuestWindowPaint(dstDc.hwnd, outLeft, outTop, outLeft + outW, outTop + outH);
 
-    const int32_t clipLeft = std::clamp<int32_t>(outLeft, 0, framebufferWidth_);
-    const int32_t clipTop = std::clamp<int32_t>(outTop, 0, framebufferHeight_);
-    const int32_t clipRight = std::clamp<int32_t>(outLeft + outW, 0, framebufferWidth_);
-    const int32_t clipBottom = std::clamp<int32_t>(outTop + outH, 0, framebufferHeight_);
+    int32_t clipLeft = std::clamp<int32_t>(outLeft, 0, framebufferWidth_);
+    int32_t clipTop = std::clamp<int32_t>(outTop, 0, framebufferHeight_);
+    int32_t clipRight = std::clamp<int32_t>(outLeft + outW, 0, framebufferWidth_);
+    int32_t clipBottom = std::clamp<int32_t>(outTop + outH, 0, framebufferHeight_);
+    if (const auto dcClip = framebufferClipForDc(dstDc)) {
+        clipLeft = std::max(clipLeft, dcClip->left);
+        clipTop = std::max(clipTop, dcClip->top);
+        clipRight = std::min(clipRight, dcClip->right);
+        clipBottom = std::min(clipBottom, dcClip->bottom);
+    }
     if (clipLeft >= clipRight || clipTop >= clipBottom) {
         invalidateHostWindows();
         return true;
@@ -2171,6 +2199,7 @@ bool SyntheticDllRuntime::transparentImageToFramebuffer(const GuestDc& dstDc,
     int32_t outTop = dstH < 0 ? dstY + dstH : dstY;
     outLeft += originX;
     outTop += originY;
+    const auto clip = framebufferClipForDc(dstDc);
     noteGuestWindowPaint(dstDc.hwnd, outLeft, outTop, outLeft + outW, outTop + outH);
 
     for (int32_t y = 0; y < outH; ++y) {
@@ -2180,6 +2209,7 @@ bool SyntheticDllRuntime::transparentImageToFramebuffer(const GuestDc& dstDc,
         for (int32_t x = 0; x < outW; ++x) {
             const int32_t dstPx = outLeft + x;
             if (dstPx < 0 || dstPx >= framebufferWidth_) continue;
+            if (clip && !CeMgdi::rectContainsPoint(*clip, dstPx, dstPy)) continue;
             const int32_t sx = srcX + (int64_t(x) * srcW) / outW;
             uint32_t pixel = 0;
             if (readBitmapPixel(srcBitmap, srcBits, srcHeight, sx, sy, pixel) &&

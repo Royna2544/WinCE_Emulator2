@@ -552,6 +552,7 @@ private:
         std::map<int32_t, uint32_t> extraLongs;
     };
     struct GuestDc {
+        uint32_t hdc{};
         uint32_t hwnd{};
         uint32_t selectedBrush{};
         uint32_t selectedPen{};
@@ -1372,6 +1373,7 @@ private:
     uint32_t colorRefToPixel(uint32_t colorRef) const;
     bool readGuestRect(uint32_t address, int32_t& left, int32_t& top, int32_t& right, int32_t& bottom) const;
     void writeGuestRect(uint32_t address, int32_t left, int32_t top, int32_t right, int32_t bottom) const;
+    std::optional<CeMgdi::Rect> framebufferClipForDc(const GuestDc& dc) const;
     void fillFramebufferRect(const GuestDc& dc, int32_t left, int32_t top, int32_t right, int32_t bottom, uint32_t pixel);
     void drawFramebufferLine(const GuestDc& dc, int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint32_t pixel);
     bool fillBitmapRect(const GuestBitmap& bitmap, int32_t left, int32_t top, int32_t right, int32_t bottom, uint32_t pixel);

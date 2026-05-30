@@ -183,6 +183,11 @@ results, or timing thresholds.
 - [ ] Add app clip, system clip, and actual device clip state before adding
   more blit optimizations. CE source anchor:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/MGDI/INC/dc.hpp:13`.
+  - [x] Make central framebuffer drawing paths consult the MGDI system clip:
+    rectangle fills and bitmap blits intersect their output bounds, while
+    line, `StretchDIBits`, and transparent image writes point-check against
+    the clip. Current source anchors: `src/ce_mgdi.h`,
+    `src/synthetic_dll.h`, and `src/coredll_bitmap.cpp`.
 - [ ] Add a CE-shaped internal window-bitmap model before treating current
   saved backing layers as faithful. CE source anchor:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/MGDI/INC/gdiobj.h:358`.

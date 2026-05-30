@@ -183,6 +183,8 @@ Status:
   treating current blit behavior as faithful.
 - Current scaffold status: `CeMgdi` now mirrors DC lifetime, selected object
   state, text state, current drawing position, and app/system clip storage,
-  with window DC system clips seeded from GWE visible rectangles. The bug
-  remains open until drawing paths enforce MGDI clipping and the window-bitmap
-  model replaces saved backing heuristics as the clipping truth.
+  with window DC system clips seeded from GWE visible rectangles. Central
+  framebuffer drawing helpers now enforce that system clip for fills, lines,
+  bitmap blits, `StretchDIBits`, and transparent image writes. The bug remains
+  open until bitmap/DC object ownership and the window-bitmap model move behind
+  MGDI instead of saved backing heuristics remaining the clipping truth.

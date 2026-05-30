@@ -339,6 +339,30 @@ Current emulator difference:
   was captured at 816x519 and the high-signal log scan found no new
   unsupported coredll ordinal, hard-error, invalid mapping, false zero-PC, or
   deadlock markers.
+- The central framebuffer drawing helpers now consult the MGDI system clip for
+  window DCs. Rectangle fills and bitmap blits intersect their output bounds
+  with the clip; line drawing, `StretchDIBits`, and transparent-image writes
+  point-check against the same clip before touching the framebuffer/backing
+  path. CE references:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/MGDI/INC/dc.hpp:203`
+  and
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/MGDI/INC/gdiobj.h:358`.
+  Current source references:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_mgdi.h:41`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.h:555`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_bitmap.cpp:464`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_bitmap.cpp:474`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_bitmap.cpp:539`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_bitmap.cpp:1444`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_bitmap.cpp:1752`,
+  and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_bitmap.cpp:2140`.
+  The 2026-05-30 Release build passed with the pre-existing Boost Beast
+  warning from `remote_server.cpp`. Bounded autodrive with the companion
+  enabled wrote `captures/inavi_autodrive_20260530_201529`; `00_initial.png`
+  was captured at 816x519 and the high-signal log scan found no new
+  unsupported coredll ordinal, hard-error, invalid mapping, false zero-PC, or
+  deadlock markers.
 
 ## Threading And Message Queues
 
