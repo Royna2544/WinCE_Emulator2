@@ -340,6 +340,11 @@ void SyntheticDllRuntime::refreshSignaledGuestWaits() {
             spdlog::info("guest thread wait-all satisfied handle=0x{:08x} count={}",
                          event.threadHandle, event.count);
             break;
+        case CeKernel::WaitRefreshKind::QueueEventSatisfied:
+            lastError_ = 0;
+            spdlog::info("guest thread queue-event satisfied handle=0x{:08x}",
+                         event.threadHandle);
+            break;
         case CeKernel::WaitRefreshKind::MessageWaitSatisfied:
             lastError_ = 0;
             spdlog::info("guest thread msg-wait satisfied handle=0x{:08x} waitCount={}",

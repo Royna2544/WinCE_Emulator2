@@ -137,6 +137,14 @@ Current emulator difference:
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/remote_server.cpp:759`. The
   2026-05-31 Release builds passed with the existing Boost Beast warning from
   `remote_server.cpp`.
+- Remote input press/release now wakes a window-owner thread parked in a
+  non-`waitAll` multi-object wait when that owner has pending GWE messages.
+  This models CE `MsgQueue::m_hNewEvents` enough to avoid button-up messages
+  sitting behind unrelated worker/event pulses. Current source anchors:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_kernel.cpp:148` and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_thread_runtime.cpp:345`. CE
+  reference:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/cmsgque.h:590`.
 - Host-backed serial open no longer retries a missing/unavailable Win32 COM
   port inside the guest `CreateFileW` path. A mapped `win32_com` backend gets
   one immediate host-open probe; if unavailable, the guest still receives the

@@ -94,6 +94,10 @@ Status:
   preemption now requires a schedulable GWE owner. Current source:
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp:1691` and
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_thread_runtime.cpp:415`.
+  A 2026-05-31 run then showed the release was queued but delayed about 1.85s
+  because the window owner was parked in a non-message multi-object wait;
+  `CeKernel` now wakes such owner waits when their GWE queue has pending input,
+  modeling CE `MsgQueue::m_hNewEvents`.
   The bug remains open until the queue model, wake categories, and
   send-message edge cases are the behavioral truth.
 

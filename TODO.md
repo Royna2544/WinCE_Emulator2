@@ -56,7 +56,11 @@ Active refactor checklist: `PLAN.md`.
      startup audio. Audio websocket delivery now wakes on new chunks and uses
      TCP_NODELAY to avoid short-click PCM frames grouping into delayed bursts;
      the live audio queue is also capped to a small latency window so older PCM
-     is dropped instead of delaying later clicks.
+     is dropped instead of delaying later clicks. Remote input now also wakes
+     a window-owner thread parked in a non-`waitAll` multi-object wait when
+     GWE has pending messages for that owner, matching CE's queue new-events
+     signal more closely. Next validation should confirm remote button-up
+     dispatch is no longer delayed until unrelated worker/event pulses.
      Host-backed
      mapped serial open now does only one immediate host COM probe before
      falling back to the virtual serial device, so missing host COM devices no

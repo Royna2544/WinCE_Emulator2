@@ -147,6 +147,21 @@ std::vector<CeKernel::WaitRefreshEvent> CeKernel::refreshSignaledWaits(
             events.push_back({WaitRefreshKind::MessageWaitSatisfied, threadHandle, 0, 0, 0, handles.size()});
             continue;
         }
+        if (!thread.waitForMessages && !thread.waitAll && handles.size() > 1 &&
+            hasMessagesForThread && hasMessagesForThread(threadHandle)) {
+            // CE MsgQueue owns m_hNewEvents for new queue work. Until that
+            // handle is represented explicitly, wake multi-object owner waits
+            // as the queue-event component when GWE posts input to them.
+            thread.state = GuestThreadRunState::Runnable;
+            thread.waitHandle = 0;
+            thread.waitHandles.clear();
+            thread.waitForMessages = false;
+            thread.waitWakeMask = 0;
+            thread.waitTimeoutResult = 0;
+            thread.context.registers[resultRegister] = kWaitObject0;
+            events.push_back({WaitRefreshKind::QueueEventSatisfied, threadHandle});
+            continue;
+        }
         if (handles.empty()) continue;
 
         bool allReady = true;

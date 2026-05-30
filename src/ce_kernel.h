@@ -126,6 +126,7 @@ public:
         WaitFailed,
         WaitSatisfied,
         WaitAllSatisfied,
+        QueueEventSatisfied,
         MessageWaitSatisfied,
     };
 
