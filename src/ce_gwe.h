@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <iterator>
 #include <optional>
 #include <string_view>
 
@@ -27,9 +28,19 @@ public:
 
     std::deque<GuestMessage>& messages() noexcept { return messages_; }
     const std::deque<GuestMessage>& messages() const noexcept { return messages_; }
+    size_t messageCount() const noexcept { return messages_.size(); }
+    bool hasMessages() const noexcept { return !messages_.empty(); }
     void postMessage(const GuestMessage& message) { messages_.push_back(message); }
     void postMessage(GuestMessage&& message) { messages_.push_back(message); }
     void postFront(const GuestMessage& message) { messages_.push_front(message); }
+
+    template <typename Predicate>
+    bool anyMessage(Predicate predicate) const {
+        for (const auto& message : messages_) {
+            if (predicate(message)) return true;
+        }
+        return false;
+    }
 
     template <typename Predicate>
     void postAfterLeadingMatches(const GuestMessage& message, Predicate predicate) {
@@ -63,6 +74,35 @@ public:
     }
 
     template <typename Predicate>
+    std::deque<GuestMessage> takeIf(Predicate predicate) {
+        std::deque<GuestMessage> selected;
+        for (auto it = messages_.begin(); it != messages_.end();) {
+            if (predicate(*it)) {
+                selected.push_back(*it);
+                it = messages_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        return selected;
+    }
+
+    template <typename Predicate>
+    size_t eraseReverseIf(Predicate predicate) {
+        size_t erased = 0;
+        for (auto it = messages_.rbegin(); it != messages_.rend();) {
+            if (predicate(*it)) {
+                auto eraseIt = std::next(it).base();
+                it = std::make_reverse_iterator(messages_.erase(eraseIt));
+                ++erased;
+            } else {
+                ++it;
+            }
+        }
+        return erased;
+    }
+
+    template <typename Predicate>
     std::optional<GuestMessage> firstMatching(Predicate predicate, bool remove) {
         for (auto it = messages_.begin(); it != messages_.end(); ++it) {
             if (!predicate(*it)) continue;
@@ -71,6 +111,15 @@ public:
             return message;
         }
         return std::nullopt;
+    }
+
+    template <typename Visitor>
+    void forEachMessage(Visitor visitor) const {
+        size_t index = 0;
+        for (const auto& message : messages_) {
+            if (!visitor(message, index)) break;
+            ++index;
+        }
     }
 
 private:

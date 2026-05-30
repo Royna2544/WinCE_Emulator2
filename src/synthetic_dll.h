@@ -827,7 +827,6 @@ private:
     std::vector<PendingBlockingApi> pendingBlockingApis_;
     std::vector<PendingUpdateWindow> pendingUpdateWindows_;
     std::vector<PendingMessageTransfer> pendingMessageTransfers_;
-    std::deque<GuestMessage>& guestMessages_{ceGwe_.messages()};
     std::map<uint32_t, uint32_t> retrievedSyncSendersByMsgPtr_;
     bool interactiveSliceActive_{};
     bool interactiveSliceStopRequested_{};

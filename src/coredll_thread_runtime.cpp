@@ -479,7 +479,7 @@ bool SyntheticDllRuntime::cooperateGuestThreadsAfterCall(const std::string& name
                               name == "WaitForMultipleObjects";
     const bool queuedUiWork = name == "PostMessageW" || name == "InvalidateRect" ||
                               name == "SetTimer" || name == "ShowWindow";
-    if (ceKernel_.activeGuestThread() && (yieldingCall || (queuedUiWork && !guestMessages_.empty()))) {
+    if (ceKernel_.activeGuestThread() && (yieldingCall || (queuedUiWork && ceGwe_.hasMessages()))) {
         return yieldActiveGuestThread(name.c_str(), returnAddress);
     }
     const bool processStarterCall = name == "CreateProcessW";

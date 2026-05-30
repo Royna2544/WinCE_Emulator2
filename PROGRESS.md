@@ -125,6 +125,20 @@ Current emulator difference:
   `captures/inavi_autodrive_20260530_183949`; `DeviceParser.exe` logged the
   decoded CE kernel exit instead of the previous fatal zero-PC crash, and the
   log scan found no new zero-PC fatal or unsupported coredll ordinal lines.
+- Phase 3 compatibility alias cleanup is complete: runtime code no longer
+  touches `guestMessages_` directly. Message counts, emptiness checks,
+  scans, extraction, reverse erasure, first-match dequeue, and posting now go
+  through named `CeGwe` queue helpers. This is still one backing deque, not yet
+  CE-style per-thread `MsgQueue` ownership. Current source references:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_gwe.h`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_named_dispatch.cpp`, and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp`.
+  The 2026-05-30 Release build passed with the same Boost Beast warning.
+  Bounded autodrive with the companion enabled wrote
+  `captures/inavi_autodrive_20260530_184459`; startup window capture still
+  completed, and `DeviceParser.exe` still followed the decoded CE kernel exit
+  path.
 
 ## Threading And Message Queues
 

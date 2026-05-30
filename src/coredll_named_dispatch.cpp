@@ -1292,7 +1292,7 @@ void SyntheticDllRuntime::pollCrossProcessGuestMessages() {
                          hwnd,
                          guestMessage.message,
                          it->value("sourceProcessId", 0u),
-                         guestMessages_.size());
+                         ceGwe_.messageCount());
             wakeGuestThreadsWaitingForMessage();
         } else {
             spdlog::info("cross-process message dropped missing hwnd=0x{:08x} msg=0x{:08x} fromPid={}",
@@ -3626,7 +3626,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             visibleRoots += fmt::format("0x{:08x}:{}", hwnd, window.title);
         }
         spdlog::warn("PostQuitMessage exitCode=0x{:08x} ra=0x{:08x} activeThread=0x{:08x} queued={} visibleRoots=[{}]",
-                     a0, args.ra, ceKernel_.activeGuestThread(), guestMessages_.size(), visibleRoots);
+                     a0, args.ra, ceKernel_.activeGuestThread(), ceGwe_.messageCount(), visibleRoots);
         GuestMessage message{};
         message.message = 0x0012; // WM_QUIT
         message.wParam = a0;
@@ -3704,7 +3704,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             ret = posted ? 1 : 0;
             if (tracePostMessage) {
                 spdlog::info("PostMessageW broadcast msg=0x{:08x} posted={} queued={}",
-                             a1, posted, guestMessages_.size());
+                             a1, posted, ceGwe_.messageCount());
             }
         } else if (a0 == 0) {
             GuestMessage message{};
@@ -3717,7 +3717,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             lastError_ = 0;
             ret = 1;
             if (tracePostMessage) {
-                spdlog::info("PostMessageW thread msg=0x{:08x} queued={}", a1, guestMessages_.size());
+                spdlog::info("PostMessageW thread msg=0x{:08x} queued={}", a1, ceGwe_.messageCount());
             }
         } else if (!windows_.count(a0)) {
             lastError_ = 1400;
@@ -3760,7 +3760,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                 const std::string className = postedWindow == windows_.end() ? std::string{} : postedWindow->second.className;
                 const std::string title = postedWindow == windows_.end() ? std::string{} : postedWindow->second.title;
                 spdlog::info("PostMessageW target hwnd=0x{:08x} class=\"{}\" title=\"{}\" msg=0x{:08x} queued={}",
-                             a0, className, title, a1, guestMessages_.size());
+                             a0, className, title, a1, ceGwe_.messageCount());
             }
         }
         if (ret) wakeGuestThreadsWaitingForMessage();
@@ -3844,7 +3844,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
         } else if (message.message == 0x0012) {
             spdlog::info("{} retrieved input hwnd=0x{:08x} msg=0x{:08x} wparam=0x{:08x} lparam=0x{:08x} peek={} remove={} queued={}",
                          name, message.hwnd, message.message, message.wParam, message.lParam,
-                         peek ? 1 : 0, (!peek || (removeFlags & 1)) ? 1 : 0, guestMessages_.size());
+                         peek ? 1 : 0, (!peek || (removeFlags & 1)) ? 1 : 0, ceGwe_.messageCount());
             lastMessagePos_ = uint32_t(uint16_t(message.x) | (uint32_t(uint16_t(message.y)) << 16));
             lastMessageTime_ = message.time;
             writeGuestMessage(a0, message);
@@ -3864,7 +3864,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                 message.message == 0x057ed || message.message == 0x057f5) {
                 spdlog::info("{} retrieved input hwnd=0x{:08x} msg=0x{:08x} wparam=0x{:08x} lparam=0x{:08x} peek={} remove={} queued={}",
                              name, message.hwnd, message.message, message.wParam, message.lParam,
-                             peek ? 1 : 0, (!peek || (removeFlags & 1)) ? 1 : 0, guestMessages_.size());
+                             peek ? 1 : 0, (!peek || (removeFlags & 1)) ? 1 : 0, ceGwe_.messageCount());
             }
             lastMessagePos_ = uint32_t(uint16_t(message.x) | (uint32_t(uint16_t(message.y)) << 16));
             lastMessageTime_ = message.time;

@@ -602,7 +602,7 @@ void SyntheticDllRuntime::hookBasicBlock(uc_engine* uc, uint64_t address, uint32
                           "budget={} block=0x{:08x} pc=0x{:08x} ra=0x{:08x} pendingTransfers={} queued={}",
                           runtime->interactiveSliceReason_, runtime->ceKernel_.activeGuestThread(),
                           runtime->interactiveSliceInstructionBudget_, uint32_t(address), pc, ra,
-                          runtime->pendingMessageTransfers_.size(), runtime->guestMessages_.size());
+                          runtime->pendingMessageTransfers_.size(), runtime->ceGwe_.messageCount());
         }
         return;
     }
@@ -616,12 +616,12 @@ void SyntheticDllRuntime::hookBasicBlock(uc_engine* uc, uint64_t address, uint32
             spdlog::debug("guest slice watchdog stop reason={} stopCause=host-queue activeThread=0x{:08x} budget={} block=0x{:08x} pc=0x{:08x} ra=0x{:08x} queued={}",
                           runtime->interactiveSliceReason_, runtime->ceKernel_.activeGuestThread(),
                           runtime->interactiveSliceInstructionBudget_, uint32_t(address), pc, ra,
-                          runtime->guestMessages_.size());
+                          runtime->ceGwe_.messageCount());
         } else {
             spdlog::info("guest slice watchdog stop reason={} stopCause=deadline activeThread=0x{:08x} budget={} block=0x{:08x} pc=0x{:08x} ra=0x{:08x} queued={}",
                          runtime->interactiveSliceReason_, runtime->ceKernel_.activeGuestThread(),
                          runtime->interactiveSliceInstructionBudget_, uint32_t(address), pc, ra,
-                         runtime->guestMessages_.size());
+                         runtime->ceGwe_.messageCount());
         }
         runtime->interactiveSliceStopRequested_ = true;
     }
@@ -1500,7 +1500,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
         setReg(UC_MIPS_REG_PC, normalizeGuestCodeAddress(pendingCall.args.ra, name.c_str()));
         spdlog::info("{} resumed after cooperative paint wait=0x{:08x} timeout=0x{:08x} return=0x{:08x} ra=0x{:08x} queued={} activeThread=0x{:08x}",
                      pendingCall.name, pendingCall.args.a0, pendingCall.args.a1, ret,
-                     pendingCall.args.ra, guestMessages_.size(), ceKernel_.activeGuestThread());
+                     pendingCall.args.ra, ceGwe_.messageCount(), ceKernel_.activeGuestThread());
         pumpHostMessages();
         cooperateGuestThreadsAfterCall(pendingCall.name);
         return;
@@ -1576,7 +1576,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
         if (pendingMessageTransfers_.empty()) {
             spdlog::error("message transfer continuation reached with no pending message pc=0x{:08x} ra=0x{:08x} "
                           "v0=0x{:08x} queued={} activeThread=0x{:08x}",
-                          pc, ra, reg(UC_MIPS_REG_V0), guestMessages_.size(), ceKernel_.activeGuestThread());
+                          pc, ra, reg(UC_MIPS_REG_V0), ceGwe_.messageCount(), ceKernel_.activeGuestThread());
             const uint32_t normalizedRa = normalizeGuestCodeAddress(ra, name.c_str());
             if (normalizedRa && normalizedRa != messageTransferContinuationStub_ &&
                 isGuestRangeReadable(normalizedRa, 4)) {
@@ -1659,7 +1659,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                 spdlog::error("{} cannot resolve orphaned message-transfer continuation hwnd=0x{:08x} msg=0x{:08x} "
                               "result=0x{:08x} queued={} activeThread=0x{:08x}",
                               pending.sourceName, pending.hwnd, pending.message, wndProcResult,
-                              guestMessages_.size(), ceKernel_.activeGuestThread());
+                              ceGwe_.messageCount(), ceKernel_.activeGuestThread());
                 setReg(UC_MIPS_REG_PC, 0);
                 uc_emu_stop(uc_);
                 return;
@@ -1688,7 +1688,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                 spdlog::error("{} cannot resolve unreadable message-transfer return hwnd=0x{:08x} msg=0x{:08x} "
                               "result=0x{:08x} return=0x{:08x} outer=0x{:08x} queued={} activeThread=0x{:08x}",
                               pending.sourceName, pending.hwnd, pending.message, wndProcResult,
-                              returnRa, pending.outerReturnRa, guestMessages_.size(), ceKernel_.activeGuestThread());
+                              returnRa, pending.outerReturnRa, ceGwe_.messageCount(), ceKernel_.activeGuestThread());
                 setReg(UC_MIPS_REG_PC, 0);
                 uc_emu_stop(uc_);
                 return;
@@ -1910,7 +1910,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                 pumpHostMessages();
                 return;
             }
-            if (guestMessages_.empty() && hasRunnableGuestThread()) {
+            if (!ceGwe_.hasMessages() && hasRunnableGuestThread()) {
                 uint32_t preferredThread = 0;
                 std::vector<uint32_t> handles;
                 if (readGuestWaitHandles(a0, a1, handles)) {
@@ -1999,7 +1999,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                 pumpHostMessages();
                 return;
             }
-            if (guestMessages_.empty() && hasRunnableGuestThread()) {
+            if (!ceGwe_.hasMessages() && hasRunnableGuestThread()) {
                 spdlog::info("WaitForSingleObject cooperative guest-thread slice wait=0x{:08x} timeout=0x{:08x} retry=1",
                              a0, a1);
                 switchToRunnableGuestThread(name.c_str(), 0, preferredThread);
@@ -2023,16 +2023,16 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                 pumpHostMessages();
                 return;
             }
-            if (guestMessages_.empty() && hasRunnableGuestThread()) {
+            if (!ceGwe_.hasMessages() && hasRunnableGuestThread()) {
                 spdlog::info("WaitForSingleObject cooperative guest-thread slice wait=0x{:08x} timeout=0x{:08x} retry=1",
                              a0, a1);
                 switchToRunnableGuestThread(name.c_str(), 0, preferredThread);
                 pumpHostMessages();
                 return;
             }
-            if (a1 == kInfiniteTimeout || !guestMessages_.empty() || !timers_.empty()) {
+            if (a1 == kInfiniteTimeout || ceGwe_.hasMessages() || !timers_.empty()) {
                 spdlog::debug("WaitForSingleObject parking main context wait=0x{:08x} timeout=0x{:08x} pc=0x{:08x} queued={} timers={}",
-                              a0, a1, pc, guestMessages_.size(), timers_.size());
+                              a0, a1, pc, ceGwe_.messageCount(), timers_.size());
                 setReg(UC_MIPS_REG_PC, pc);
                 pumpHostMessages();
                 uc_emu_stop(uc_);
@@ -2091,7 +2091,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
             return;
         }
         case 0x035D: {
-            if (ceKernel_.activeGuestThread() && guestMessages_.empty() && !quitPosted_) {
+            if (ceKernel_.activeGuestThread() && !ceGwe_.hasMessages() && !quitPosted_) {
                 auto active = ceKernel_.threads().find(ceKernel_.activeGuestThread());
                 if (active != ceKernel_.threads().end()) {
                     active->second.context = captureGuestCpuContext();
@@ -2223,7 +2223,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                                  msg,
                                  senderHandle,
                                  targetWindow->second.ownerThread,
-                                 guestMessages_.size(),
+                                 ceGwe_.messageCount(),
                                  sender != ceKernel_.threads().end());
                 } else {
                     spdlog::debug("SendMessageW cross-thread queued hwnd=0x{:08x} msg=0x{:08x} sender=0x{:08x} owner=0x{:08x} queued={} waiting={}",
@@ -2231,7 +2231,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                                   msg,
                                   senderHandle,
                                   targetWindow->second.ownerThread,
-                                  guestMessages_.size(),
+                                  ceGwe_.messageCount(),
                                   sender != ceKernel_.threads().end());
                 }
                 ceKernel_.activeGuestThread() = 0;
@@ -2300,10 +2300,9 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
             }
             const bool hasQueuedPaintForHwnd =
                 msg == 0x0014 &&
-                std::any_of(guestMessages_.begin(), guestMessages_.end(),
-                            [&](const GuestMessage& queued) {
-                                return queued.hwnd == hwnd && queued.message == 0x000f;
-                            });
+                ceGwe_.anyMessage([&](const GuestMessage& queued) {
+                    return queued.hwnd == hwnd && queued.message == 0x000f;
+                });
             const bool deferredHostPresentForErase =
                 msg == 0x0014 && hasQueuedPaintForHwnd && beginHostErasePresentDeferral(hwnd);
             const bool releaseHostPresentAfterPaint = msg == 0x000f && hasHostErasePresentDeferral(hwnd);
@@ -2362,7 +2361,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
         case 0x035D:
             if (ret != 0 || quitPosted_) break;
             spdlog::debug("GetMessageW empty queue blocks main context pc=0x{:08x} ra=0x{:08x} queued={}",
-                          pc, ra, guestMessages_.size());
+                          pc, ra, ceGwe_.messageCount());
             setReg(UC_MIPS_REG_PC, pc);
             pumpHostMessages();
             if (!switchToRunnableGuestThread("GetMessageW-blocking", pc)) {

@@ -1053,10 +1053,9 @@ void SyntheticDllRuntime::queueGuestPaint(uint32_t hwnd, bool erase) {
     auto it = windows_.find(hwnd);
     if (!hwnd || it == windows_.end() || it->second.destroyed || !it->second.visible) return;
     const auto hasQueued = [&](uint32_t message) {
-        return std::any_of(guestMessages_.begin(), guestMessages_.end(),
-                           [&](const GuestMessage& queued) {
-                               return queued.hwnd == hwnd && queued.message == message;
-                           });
+        return ceGwe_.anyMessage([&](const GuestMessage& queued) {
+            return queued.hwnd == hwnd && queued.message == message;
+        });
     };
     if (erase) {
         if (!hasQueued(0x0014)) {
@@ -1079,15 +1078,8 @@ void SyntheticDllRuntime::queueGuestPaint(uint32_t hwnd, bool erase) {
 }
 
 void SyntheticDllRuntime::prioritizeQueuedWindowMessages(uint32_t hwnd) {
-    std::deque<GuestMessage> selected;
-    for (auto it = guestMessages_.begin(); it != guestMessages_.end();) {
-        if (it->hwnd == hwnd) {
-            selected.push_back(*it);
-            it = guestMessages_.erase(it);
-        } else {
-            ++it;
-        }
-    }
+    std::deque<GuestMessage> selected =
+        ceGwe_.takeIf([&](const GuestMessage& message) { return message.hwnd == hwnd; });
     while (!selected.empty()) {
         ceGwe_.postFront(selected.back());
         selected.pop_back();
@@ -1112,10 +1104,9 @@ void SyntheticDllRuntime::queueVisibleFullScreenPopupPaint(uint32_t hwnd) {
     if (!replacesOlderFullScreenPopup) return;
 
     retireOlderFullScreenOwnedPopupsForPopup(hwnd);
-    const bool hasShow = std::any_of(guestMessages_.begin(), guestMessages_.end(),
-                                     [&](const GuestMessage& message) {
-                                         return message.hwnd == hwnd && message.message == 0x0018;
-                                     });
+    const bool hasShow = ceGwe_.anyMessage([&](const GuestMessage& message) {
+        return message.hwnd == hwnd && message.message == 0x0018;
+    });
     if (!hasShow) {
         GuestMessage show{};
         show.hwnd = hwnd;
@@ -1141,10 +1132,9 @@ void SyntheticDllRuntime::queueVisiblePopupPaint(uint32_t hwnd) {
     if (!ownedPopup && !topLevelPopup) return;
     if (ownedPopup && guestWindowCoversFramebuffer(hwnd)) return;
 
-    const bool hasShow = std::any_of(guestMessages_.begin(), guestMessages_.end(),
-                                     [&](const GuestMessage& message) {
-                                         return message.hwnd == hwnd && message.message == 0x0018;
-                                     });
+    const bool hasShow = ceGwe_.anyMessage([&](const GuestMessage& message) {
+        return message.hwnd == hwnd && message.message == 0x0018;
+    });
     if (!hasShow) {
         GuestMessage show{};
         show.hwnd = hwnd;
@@ -1545,12 +1535,11 @@ void SyntheticDllRuntime::enqueueDueTimers() {
     for (auto& [key, timer] : timers_) {
         (void)key;
         if (timer.intervalMs == 0 || now < timer.nextDueMs) continue;
-        const bool alreadyQueued = std::any_of(guestMessages_.begin(), guestMessages_.end(),
-                                               [&](const GuestMessage& queued) {
-                                                   return queued.hwnd == timer.hwnd &&
-                                                          queued.message == 0x0113 &&
-                                                          queued.wParam == timer.id;
-                                               });
+        const bool alreadyQueued = ceGwe_.anyMessage([&](const GuestMessage& queued) {
+            return queued.hwnd == timer.hwnd &&
+                   queued.message == 0x0113 &&
+                   queued.wParam == timer.id;
+        });
         if (alreadyQueued) continue;
         GuestMessage message{};
         message.hwnd = timer.hwnd;
@@ -1681,18 +1670,13 @@ uint32_t SyntheticDllRuntime::windowAtPoint(uint32_t rootGuestHwnd, int32_t x, i
 
 void SyntheticDllRuntime::compactQueuedPointerMotion(size_t maxMotionPerWindow) {
     std::map<uint32_t, size_t> keptMotion;
-    for (auto it = guestMessages_.rbegin(); it != guestMessages_.rend();) {
-        if (it->message == 0x0200) {
-            size_t& kept = keptMotion[it->hwnd];
-            if (kept >= maxMotionPerWindow) {
-                auto eraseIt = std::next(it).base();
-                it = std::make_reverse_iterator(guestMessages_.erase(eraseIt));
-                continue;
-            }
-            ++kept;
-        }
-        ++it;
-    }
+    ceGwe_.eraseReverseIf([&](const GuestMessage& message) {
+        if (message.message != 0x0200) return false;
+        size_t& kept = keptMotion[message.hwnd];
+        if (kept >= maxMotionPerWindow) return true;
+        ++kept;
+        return false;
+    });
 }
 
 void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t message,
@@ -1757,19 +1741,18 @@ void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t
     const auto isPointerMessage = [](uint32_t msg) {
         return msg == 0x0200 || msg == 0x0201 || msg == 0x0202;
     };
-    const bool hasQueuedPointer = std::any_of(guestMessages_.begin(), guestMessages_.end(),
-                                              [&](const GuestMessage& queued) {
-                                                  return isPointerMessage(queued.message);
-                                              });
+    const bool hasQueuedPointer = ceGwe_.anyMessage([&](const GuestMessage& queued) {
+        return isPointerMessage(queued.message);
+    });
     if (message == 0x0201 && hasQueuedPointer) {
         spdlog::info("discarded host mouse down while previous touch sequence is still queued hwnd=0x{:08x} point={},{} queued={}",
-                     hwnd, hostX, hostY, guestMessages_.size());
+                     hwnd, hostX, hostY, ceGwe_.messageCount());
         return;
     }
     if (message == 0x0200) {
         if (hasQueuedPointer || !pendingMessageTransfers_.empty()) {
             spdlog::debug("discarded host mouse move while pointer dispatch is in flight hwnd=0x{:08x} point={},{} queued={} transfers={}",
-                          hwnd, hostX, hostY, guestMessages_.size(), pendingMessageTransfers_.size());
+                          hwnd, hostX, hostY, ceGwe_.messageCount(), pendingMessageTransfers_.size());
             return;
         }
         if (hostPointerCaptureWindow_) {
@@ -1863,7 +1846,7 @@ void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t
                    message == 0x000f;   // WM_PAINT
         };
         const bool hasPendingLifecycleForTarget =
-            std::any_of(guestMessages_.begin(), guestMessages_.end(), [&](const GuestMessage& queued) {
+            ceGwe_.anyMessage([&](const GuestMessage& queued) {
                 return queued.hwnd == input.hwnd && mustRunBeforeInputForSameWindow(queued.message);
             });
         if (hasPendingLifecycleForTarget) {
@@ -1923,7 +1906,7 @@ void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t
     lastHostInputQueuedAt_ = std::chrono::steady_clock::now();
     queueInputMessage(guest);
     spdlog::info("queued host mouse msg=0x{:04x} root=0x{:08x} hwnd=0x{:08x} point={},{} client={},{} queued={}",
-                 message, rootGuestHwnd, hwnd, hostX, hostY, clientX, clientY, guestMessages_.size());
+                 message, rootGuestHwnd, hwnd, hostX, hostY, clientX, clientY, ceGwe_.messageCount());
     uc_emu_stop(uc_);
 }
 
@@ -1977,7 +1960,7 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
                  showHostWindows ? "visible" : "headless");
     MSG message{};
     auto hasPendingUserInput = [&]() {
-        return std::any_of(guestMessages_.begin(), guestMessages_.end(), [](const GuestMessage& message) {
+        return ceGwe_.anyMessage([](const GuestMessage& message) {
             return message.message >= 0x0200 && message.message <= 0x0202;
         });
     };
@@ -1986,7 +1969,7 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
                (std::chrono::steady_clock::now() - lastHostInputQueuedAt_) < std::chrono::milliseconds(750);
     };
     auto hasPendingSynchronousMessage = [&]() {
-        return std::any_of(guestMessages_.begin(), guestMessages_.end(), [](const GuestMessage& message) {
+        return ceGwe_.anyMessage([](const GuestMessage& message) {
             return message.synchronousSender != 0;
         });
     };
@@ -2004,7 +1987,7 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
         if (!pc || !isGuestRangeReadable(pc, 4)) {
             spdlog::error("refusing to start guest slice at invalid pc reason={} pc=0x{:08x} ra=0x{:08x} "
                           "activeThread=0x{:08x} queued={}",
-                          reason, pc, ra, ceKernel_.activeGuestThread(), guestMessages_.size());
+                          reason, pc, ra, ceKernel_.activeGuestThread(), ceGwe_.messageCount());
             return false;
         }
         const uint32_t startPc = pc;
@@ -2016,7 +1999,7 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
         const bool synchronousQueuedMessage = servicingQueuedMessages && hasPendingSynchronousMessage();
         const bool pendingUserInput = hasPendingUserInput();
         const bool recentUserInput = recentlyQueuedUserInput();
-        const bool backloggedQueuedWork = servicingQueuedMessages && guestMessages_.size() >= 3;
+        const bool backloggedQueuedWork = servicingQueuedMessages && ceGwe_.messageCount() >= 3;
         if (synchronousQueuedMessage && ceKernel_.activeGuestThread() && !pendingUserInput && !recentUserInput) {
             instructionBudget = std::min<uint64_t>(instructionBudget, backloggedQueuedWork ? 500000u : 250000u);
         } else if (synchronousQueuedMessage) {
@@ -2080,7 +2063,7 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
             spdlog::warn("interactive crash context activeThread=0x{:08x} pc={} ra={} sp=0x{:08x} gp=0x{:08x} "
                          "v0=0x{:08x} a0=0x{:08x} a1=0x{:08x} a2=0x{:08x} a3=0x{:08x} t9=0x{:08x} queued={}",
                          ceKernel_.activeGuestThread(), describeAddress(pc), describeAddress(ra), sp, gp,
-                         v0, a0, a1, a2, a3, t9, guestMessages_.size());
+                         v0, a0, a1, a2, a3, t9, ceGwe_.messageCount());
             std::array<uint32_t, 8> stackWords{};
             if (sp && isGuestRangeReadable(sp, uint32_t(stackWords.size() * sizeof(uint32_t))) &&
                 uc_mem_read(uc_, sp, stackWords.data(), stackWords.size() * sizeof(uint32_t)) == UC_ERR_OK) {
@@ -2089,26 +2072,25 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
                              stackWords[0], stackWords[1], stackWords[2], stackWords[3],
                              stackWords[4], stackWords[5], stackWords[6], stackWords[7]);
             }
-            size_t queuedIndex = 0;
-            for (const auto& queued : guestMessages_) {
-                if (queuedIndex >= 8) break;
+            ceGwe_.forEachMessage([&](const GuestMessage& queued, size_t queuedIndex) {
+                if (queuedIndex >= 8) return false;
                 spdlog::warn("interactive crash queued[{}] hwnd=0x{:08x} msg=0x{:08x} wparam=0x{:08x} "
                              "lparam=0x{:08x} sync=0x{:08x} crossProcess={}",
                              queuedIndex, queued.hwnd, queued.message, queued.wParam,
                              queued.lParam, queued.synchronousSender, queued.crossProcess);
-                ++queuedIndex;
-            }
+                return true;
+            });
             return false;
         }
         const auto elapsedMs =
             std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - sliceStart).count();
         if (elapsedMs >= 250) {
             spdlog::info("long guest slice reason={} activeThread=0x{:08x} budget={} startPc=0x{:08x} pc=0x{:08x} ra=0x{:08x} queued={}",
-                         reason, ceKernel_.activeGuestThread(), instructionBudget, startPc, pc, ra, guestMessages_.size());
+                         reason, ceKernel_.activeGuestThread(), instructionBudget, startPc, pc, ra, ceGwe_.messageCount());
         }
         if (stoppedByWatchdog && ceKernel_.activeGuestThread()) {
             spdlog::info("guest thread timeslice yield handle=0x{:08x} reason={} pc=0x{:08x} queued={}",
-                         ceKernel_.activeGuestThread(), reason, pc, guestMessages_.size());
+                         ceKernel_.activeGuestThread(), reason, pc, ceGwe_.messageCount());
             yieldActiveGuestThread("timeslice");
         }
         pumpHostMessages();
@@ -2178,20 +2160,20 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
             threads << " sleep=" << std::dec << thread.sleepUntilMs;
         }
         spdlog::info("guest scheduler diag where={} active=0x{:08x} queued={} timers={} threads=[{}]",
-                     where, ceKernel_.activeGuestThread(), guestMessages_.size(), timers_.size(), threads.str());
+                     where, ceKernel_.activeGuestThread(), ceGwe_.messageCount(), timers_.size(), threads.str());
     };
     auto resumeQueuedWorkerBurst = [&]() -> bool {
-        if (guestMessages_.empty() || !hasHostWindows() ||
+        if (!ceGwe_.hasMessages() || !hasHostWindows() ||
             hasPendingUserInput() || hasPendingSynchronousMessage() ||
             !pendingMessageTransfers_.empty()) {
             return true;
         }
-        if (guestMessages_.size() < 3) {
+        if (ceGwe_.messageCount() < 3) {
             return true;
         }
         constexpr uint32_t kMaxWorkerSlicesBeforeMessage = 4;
         for (uint32_t slice = 0;
-             slice < kMaxWorkerSlicesBeforeMessage && !guestMessages_.empty() && hasHostWindows() &&
+             slice < kMaxWorkerSlicesBeforeMessage && ceGwe_.hasMessages() && hasHostWindows() &&
              !hasPendingUserInput() && !hasPendingSynchronousMessage();
              ++slice) {
             if (!ceKernel_.activeGuestThread()) {
@@ -2231,20 +2213,20 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
             continue;
         }
         if (!resumeQueuedWorkerBurst()) return;
-        if (!guestMessages_.empty() && hasHostWindows()) {
+        if (ceGwe_.hasMessages() && hasHostWindows()) {
             if (ceKernel_.activeGuestThread()) {
                 yieldActiveGuestThread("queued-message-preempt");
             }
             if (!ceKernel_.activeGuestThread() && restoreMainThreadContextIfRunnable("queued-message")) {
-                spdlog::debug("restored parked main thread for queued messages queued={}", guestMessages_.size());
+                spdlog::debug("restored parked main thread for queued messages queued={}", ceGwe_.messageCount());
             }
             compactQueuedPointerMotion();
             const uint64_t budget = 250000u;
-            spdlog::debug("resuming guest for queued message queued={} budget={}", guestMessages_.size(), budget);
+            spdlog::debug("resuming guest for queued message queued={} budget={}", ceGwe_.messageCount(), budget);
             if (!resumeGuestSlice(budget, "queued-message")) {
                 return;
             }
-            if (guestMessages_.empty() && hasHostWindows() && hasRunnableGuestThread()) {
+            if (!ceGwe_.hasMessages() && hasHostWindows() && hasRunnableGuestThread()) {
                 if (!ceKernel_.activeGuestThread()) {
                     switchToRunnableGuestThread("queued-worker");
                 }
@@ -2260,17 +2242,17 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
             DispatchMessageW(&message);
         }
         presentHostWindows(false);
-        if (guestMessages_.empty() && hasHostWindows() && !ceKernel_.activeGuestThread()) {
+        if (!ceGwe_.hasMessages() && hasHostWindows() && !ceKernel_.activeGuestThread()) {
             if (hasRunnableGuestThread()) {
                 switchToRunnableGuestThread("idle-worker");
             } else {
                 logGuestSchedulerDiag("idle-no-runnable");
             }
         }
-        if (guestMessages_.empty() && hasHostWindows() && !resumeGuestSlice(5000000, "idle")) {
+        if (!ceGwe_.hasMessages() && hasHostWindows() && !resumeGuestSlice(5000000, "idle")) {
             return;
         }
-        if (guestMessages_.empty() && !ceKernel_.activeGuestThread() && !hasRunnableGuestThread()) {
+        if (!ceGwe_.hasMessages() && !ceKernel_.activeGuestThread() && !hasRunnableGuestThread()) {
             logGuestSchedulerDiag("wait-no-runnable");
             MsgWaitForMultipleObjects(0, nullptr, FALSE, waitMs, QS_ALLINPUT);
         }

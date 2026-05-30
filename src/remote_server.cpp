@@ -868,7 +868,7 @@ void SyntheticDllRuntime::drainRemoteInputEvents() {
         ceGwe_.postMessage(guest);
         lastHostInputQueuedAt_ = std::chrono::steady_clock::now();
         spdlog::info("queued remote key msg=0x{:04x} hwnd=0x{:08x} vk=0x{:02x} queued={}",
-                     event.message, hwnd, event.vk, guestMessages_.size());
+                     event.message, hwnd, event.vk, ceGwe_.messageCount());
         uc_emu_stop(uc_);
     }
 }

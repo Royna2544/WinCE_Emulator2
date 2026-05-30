@@ -84,7 +84,7 @@ file-name shortcuts, route-screen shortcuts, or coordinate-specific fixes.
   - [x] Route simple queued-message pruning through `CeGwe::eraseIf`.
   - [x] Route first-match dequeue/peek operations through
     `CeGwe::firstMatching`.
-  - [ ] Replace direct runtime deque operations with named `CeGwe` queue
+  - [x] Replace direct runtime deque operations with named `CeGwe` queue
     methods in small behavior-preserving batches.
 - [ ] Add per-thread or per-owner queues aligned with CE `MsgQueue`
   behavior. CE source anchors:
