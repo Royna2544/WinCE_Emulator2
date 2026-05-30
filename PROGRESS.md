@@ -130,7 +130,9 @@ Current emulator difference:
   late clients do not hear delayed startup audio. Audio websocket delivery is
   also event-driven instead of sleep-poll-only, and the audio websocket socket
   disables Nagle so short click sounds are not coalesced into delayed TCP
-  bursts. Current source anchors:
+  bursts. The live websocket audio queue is capped to a small latency window,
+  so long guest wave buffers cannot become a multi-second delay line ahead of
+  later click sounds. Current source anchors:
   `/mnt/d/GitHub/WinCE_Emulator_v2/tools/autodrive_inavi.ps1:20` and
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/remote_server.cpp:759`. The
   2026-05-31 Release builds passed with the existing Boost Beast warning from

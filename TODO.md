@@ -54,7 +54,9 @@ Active refactor checklist: `PLAN.md`.
      remote-server autodrive runs, but remote PCM is only buffered while an
      audio websocket client is connected so late clients do not receive stale
      startup audio. Audio websocket delivery now wakes on new chunks and uses
-     TCP_NODELAY to avoid short-click PCM frames grouping into delayed bursts.
+     TCP_NODELAY to avoid short-click PCM frames grouping into delayed bursts;
+     the live audio queue is also capped to a small latency window so older PCM
+     is dropped instead of delaying later clicks.
      Host-backed
      mapped serial open now does only one immediate host COM probe before
      falling back to the virtual serial device, so missing host COM devices no

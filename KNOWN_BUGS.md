@@ -154,6 +154,9 @@ Symptom:
 - Short live click sounds could arrive over the audio websocket grouped in
   small bursts because the audio websocket loop slept between polls and tiny
   frames could be coalesced by TCP.
+- When a websocket client was connected during a long guest `waveOutWrite`,
+  the remote audio queue could hold seconds of old PCM, so later click sounds
+  waited behind that backlog.
 
 Evidence:
 
@@ -169,7 +172,9 @@ Status:
   websocket client is connected, and stale queued audio is dropped on first
   connect and last disconnect. The audio websocket now wakes when new PCM is
   published and sets `TCP_NODELAY` on the socket so short sounds are delivered
-  without waiting for poll ticks or TCP coalescing.
+  without waiting for poll ticks or TCP coalescing. The live audio queue is
+  capped to a small latency window, dropping older PCM instead of letting long
+  guest wave buffers delay later click sounds.
 
 ## Resolved: Missing Host Serial Port Added Startup Delay
 

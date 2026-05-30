@@ -49,6 +49,8 @@ namespace net = boost::asio;
 using tcp = net::ip::tcp;
 
 constexpr const char* kRemoteBoundary = "frame";
+constexpr size_t kRemoteAudioChunkDurationMs = 20;
+constexpr size_t kMaxRemoteAudioQueuedChunks = 6;
 
 class RemoteLogSink final : public spdlog::sinks::base_sink<std::mutex> {
 public:
@@ -782,7 +784,7 @@ struct RemoteServerHandle {
                 ws.write(net::buffer(chunk.payload), ec);
                 if (ec) return;
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(chunkMs));
+            if (!chunks.empty()) std::this_thread::sleep_for(std::chrono::milliseconds(chunkMs));
         }
         ws.close(websocket::close_code::normal, ec);
     }
@@ -994,7 +996,7 @@ void SyntheticDllRuntime::publishRemoteAudioChunk(const std::vector<uint8_t>& pc
     const size_t remoteFrameBytes = size_t(targetChannels) * targetSampleBytes;
     const size_t chunkBytes = std::max<size_t>(
         remoteFrameBytes,
-        (size_t(targetSampleRate) * remoteFrameBytes * 20u) / 1000u);
+        (size_t(targetSampleRate) * remoteFrameBytes * kRemoteAudioChunkDurationMs) / 1000u);
 
     std::lock_guard<std::mutex> lock(remoteMutex_);
     if (remoteAudioClientCount_ == 0) {
@@ -1013,8 +1015,7 @@ void SyntheticDllRuntime::publishRemoteAudioChunk(const std::vector<uint8_t>& pc
         remoteAudioNextPtsMs_ += chunk.durationMs;
         remoteAudioChunks_.push_back(std::move(chunk));
     }
-    constexpr size_t kMaxAudioChunks = 600;
-    while (remoteAudioChunks_.size() > kMaxAudioChunks) remoteAudioChunks_.pop_front();
+    while (remoteAudioChunks_.size() > kMaxRemoteAudioQueuedChunks) remoteAudioChunks_.pop_front();
     if (wasEmpty && !remoteAudioChunks_.empty()) remoteAudioCv_.notify_all();
 }
 
