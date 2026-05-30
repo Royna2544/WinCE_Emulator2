@@ -53,7 +53,9 @@ Active refactor checklist: `PLAN.md`.
      message pump drains them. Remote audio is now enabled by default in
      remote-server autodrive runs, but remote PCM is only buffered while an
      audio websocket client is connected so late clients do not receive stale
-     startup audio. Host-backed
+     startup audio. Audio websocket delivery now wakes on new chunks and uses
+     TCP_NODELAY to avoid short-click PCM frames grouping into delayed bursts.
+     Host-backed
      mapped serial open now does only one immediate host COM probe before
      falling back to the virtual serial device, so missing host COM devices no
      longer add multi-retry startup delay.

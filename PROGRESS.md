@@ -127,7 +127,10 @@ Current emulator difference:
   remote runs unless `-NoRemoteAudio` is passed. Remote PCM is now queued only
   while at least one audio websocket client is connected; the queue is cleared
   when the first client connects and again when the last client disconnects, so
-  late clients do not hear delayed startup audio. Current source anchors:
+  late clients do not hear delayed startup audio. Audio websocket delivery is
+  also event-driven instead of sleep-poll-only, and the audio websocket socket
+  disables Nagle so short click sounds are not coalesced into delayed TCP
+  bursts. Current source anchors:
   `/mnt/d/GitHub/WinCE_Emulator_v2/tools/autodrive_inavi.ps1:20` and
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/remote_server.cpp:759`. The
   2026-05-31 Release builds passed with the existing Boost Beast warning from

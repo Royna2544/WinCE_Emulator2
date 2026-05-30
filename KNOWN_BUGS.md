@@ -151,6 +151,9 @@ Symptom:
   `/api/v1/audio/ws` produced no useful audio when remote audio was disabled.
 - Keeping a bounded startup PCM queue without a connected websocket client
   would be wrong because a late client could hear stale delayed audio.
+- Short live click sounds could arrive over the audio websocket grouped in
+  small bursts because the audio websocket loop slept between polls and tiny
+  frames could be coalesced by TCP.
 
 Evidence:
 
@@ -164,7 +167,9 @@ Status:
   default when `-RemoteServer` is used, with `-NoRemoteAudio` available for
   explicit opt-out. Remote PCM is only queued while at least one audio
   websocket client is connected, and stale queued audio is dropped on first
-  connect and last disconnect.
+  connect and last disconnect. The audio websocket now wakes when new PCM is
+  published and sets `TCP_NODELAY` on the socket so short sounds are delivered
+  without waiting for poll ticks or TCP coalescing.
 
 ## Resolved: Missing Host Serial Port Added Startup Delay
 

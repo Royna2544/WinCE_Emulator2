@@ -750,10 +750,12 @@ struct RemoteServerHandle {
     }
 
     void handleAudioWebSocket(tcp::socket socket, const http::request<http::string_body>& req) {
-        websocket::stream<tcp::socket> ws(std::move(socket));
         beast::error_code ec;
+        socket.set_option(tcp::no_delay(true), ec);
+        websocket::stream<tcp::socket> ws(std::move(socket));
         ws.accept(req, ec);
         if (ec) return;
+        ws.next_layer().set_option(tcp::no_delay(true), ec);
         struct AudioClientRegistration {
             SyntheticDllRuntime& runtime;
             explicit AudioClientRegistration(SyntheticDllRuntime& owner) : runtime(owner) {
@@ -766,6 +768,7 @@ struct RemoteServerHandle {
         ws.binary(true);
         const int chunkMs = queryInt(req, "chunkMs", 20, 5, 250);
         while (!stopping.load()) {
+            runtime.waitForRemoteAudioChunks(static_cast<uint32_t>(chunkMs));
             const size_t available = ws.next_layer().available(ec);
             if (ec) return;
             if (available) {
@@ -998,6 +1001,7 @@ void SyntheticDllRuntime::publishRemoteAudioChunk(const std::vector<uint8_t>& pc
         remoteAudioChunks_.clear();
         return;
     }
+    const bool wasEmpty = remoteAudioChunks_.empty();
     for (size_t offset = 0; offset < payload.size(); offset += chunkBytes) {
         const size_t count = std::min(chunkBytes, payload.size() - offset);
         RemoteAudioChunk chunk;
@@ -1011,6 +1015,7 @@ void SyntheticDllRuntime::publishRemoteAudioChunk(const std::vector<uint8_t>& pc
     }
     constexpr size_t kMaxAudioChunks = 600;
     while (remoteAudioChunks_.size() > kMaxAudioChunks) remoteAudioChunks_.pop_front();
+    if (wasEmpty && !remoteAudioChunks_.empty()) remoteAudioCv_.notify_all();
 }
 
 void SyntheticDllRuntime::registerRemoteAudioClient() {
@@ -1023,17 +1028,31 @@ void SyntheticDllRuntime::registerRemoteAudioClient() {
 }
 
 void SyntheticDllRuntime::unregisterRemoteAudioClient() {
-    std::lock_guard<std::mutex> lock(remoteMutex_);
-    if (remoteAudioClientCount_ > 0) --remoteAudioClientCount_;
-    if (remoteAudioClientCount_ == 0) {
-        remoteAudioChunks_.clear();
-        remoteAudioNextPtsMs_ = 0;
+    {
+        std::lock_guard<std::mutex> lock(remoteMutex_);
+        if (remoteAudioClientCount_ > 0) --remoteAudioClientCount_;
+        if (remoteAudioClientCount_ == 0) {
+            remoteAudioChunks_.clear();
+            remoteAudioNextPtsMs_ = 0;
+        }
     }
+    remoteAudioCv_.notify_all();
 }
 
 void SyntheticDllRuntime::clearRemoteAudioChunks() {
     std::lock_guard<std::mutex> lock(remoteMutex_);
     remoteAudioChunks_.clear();
+}
+
+bool SyntheticDllRuntime::waitForRemoteAudioChunks(uint32_t timeoutMs) {
+    std::unique_lock<std::mutex> lock(remoteMutex_);
+    if (!remoteAudioChunks_.empty() || remoteAudioClientCount_ == 0) return !remoteAudioChunks_.empty();
+    remoteAudioCv_.wait_for(lock,
+                            std::chrono::milliseconds(std::max<uint32_t>(1, timeoutMs)),
+                            [&] {
+                                return !remoteAudioChunks_.empty() || remoteAudioClientCount_ == 0;
+                            });
+    return !remoteAudioChunks_.empty();
 }
 
 std::vector<SyntheticDllRuntime::RemoteAudioChunk> SyntheticDllRuntime::takeRemoteAudioChunks(size_t maxChunks) {
@@ -1123,6 +1142,7 @@ void SyntheticDllRuntime::publishRemoteAudioChunk(const std::vector<uint8_t>&,
 void SyntheticDllRuntime::registerRemoteAudioClient() {}
 void SyntheticDllRuntime::unregisterRemoteAudioClient() {}
 void SyntheticDllRuntime::clearRemoteAudioChunks() {}
+bool SyntheticDllRuntime::waitForRemoteAudioChunks(uint32_t) { return false; }
 std::vector<SyntheticDllRuntime::RemoteAudioChunk> SyntheticDllRuntime::takeRemoteAudioChunks(size_t) { return {}; }
 std::vector<uint32_t> SyntheticDllRuntime::copyRemoteFramebuffer(int& width, int& height) const {
     width = 0;

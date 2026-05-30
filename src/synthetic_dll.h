@@ -12,6 +12,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <deque>
 #include <functional>
@@ -812,6 +813,7 @@ private:
     RemoteServerConfig remoteConfig_;
     std::unique_ptr<RemoteServerHandle, RemoteServerHandleDeleter> remoteServer_;
     mutable std::mutex remoteMutex_;
+    mutable std::condition_variable remoteAudioCv_;
     std::deque<RemoteTouchEvent> remoteTouchEvents_;
     std::deque<RemoteKeyEvent> remoteKeyEvents_;
     std::deque<uint8_t> remoteSerialBytes_;
@@ -1279,6 +1281,7 @@ private:
     void registerRemoteAudioClient();
     void unregisterRemoteAudioClient();
     void clearRemoteAudioChunks();
+    bool waitForRemoteAudioChunks(uint32_t timeoutMs);
     std::vector<RemoteAudioChunk> takeRemoteAudioChunks(size_t maxChunks);
     std::vector<uint32_t> copyRemoteFramebuffer(int& width, int& height) const;
     nlohmann::json remoteStatusJson() const;
