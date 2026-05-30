@@ -11,6 +11,9 @@ coredll export -> CE API-set/ordinal boundary -> virtual CE kernel/GWE/MGDI serv
 
 Keep this checklist generic and CE-shaped. Do not add app-specific behavior,
 file-name shortcuts, route-screen shortcuts, or coordinate-specific fixes.
+Prefer named constants, enums, or narrow `constexpr` values over raw special
+numbers when touching CE ordinals, message IDs, flags, queue priorities, wait
+results, or timing thresholds.
 
 ## Phase 0: Documentation Anchor
 
@@ -165,3 +168,42 @@ file-name shortcuts, route-screen shortcuts, or coordinate-specific fixes.
 - [ ] Refresh `PROGRESS.md`, `TODO.md`, and `KNOWN_BUGS.md` after each
   completed behavior phase, keeping CE source references beside behavior
   changes.
+
+## Cross-Cutting: Audio Wait Fairness
+
+- [ ] Preserve CE's asynchronous wave-output behavior while fixing wait
+  fairness. CE `WODM_WRITE` queues a prepared `WAVEHDR` and returns without
+  playing the whole buffer inline:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COMM/BLUETOOTH/AV/A2DP/wavemain.cpp:396`
+  and
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COMM/BLUETOOTH/AV/A2DP/strmctxt.cpp:130`.
+- [ ] Model audio completion as an asynchronous virtual-kernel/device event,
+  not as a reason to stall global guest progress. CE driver output work is
+  performed by separate rendering/output threads and completion marks
+  `WHDR_DONE`, clears `WHDR_INQUEUE`, and reports `WOM_DONE`:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COMM/BLUETOOTH/AV/A2DP/hwctxt.cpp:1198`,
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COMM/BLUETOOTH/AV/A2DP/hwctxt.cpp:1575`,
+  and
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COMM/BLUETOOTH/AV/A2DP/strmctxt.h:93`.
+- [ ] Audit the current host-audio shim and wait loop before changing
+  behavior. Current `waveOutWrite` already returns immediately for the observed
+  11.2s buffer, but `WaitForSingleObject` on the audio event blocks inside the
+  coredll handler, which can serialize initialization that CE would let other
+  guest threads/GWE work continue around. Current source anchors:
+  `src/coredll_host_audio.cpp:539`,
+  `src/coredll_named_dispatch.cpp:1849`, and
+  `src/coredll_thread_runtime.cpp:252`.
+- [ ] Do not fake success by completing audio immediately or skipping playback.
+  The target direction is scheduler-aware guest waiting: the waiting guest
+  thread blocks, while the virtual CE kernel/GWE scheduler continues runnable
+  guest work until the audio completion event becomes signaled.
+
+## Cross-Cutting: Named CE Constants
+
+- [ ] Replace touched raw special numbers with existing named constants,
+  enums, or local `constexpr` values. Keep source references beside behavior
+  migrations so later work can tell CE-defined values apart from emulator-local
+  thresholds.
+- [ ] Prioritize naming constants in wait/scheduler, GWE message queue,
+  encoded-kernel-call, audio callback, and MGDI clipping code as those areas
+  are migrated.
