@@ -1295,6 +1295,12 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
         if (wasVisible) eraseGuestWindowArea(hwnd, it->second);
         it->second.visible = false;
         it->second.destroyed = true;
+        it->second.paintBoundsValid = false;
+        it->second.backingValid = false;
+        it->second.backingPixels.clear();
+        ceGwe_.unregisterWindow(hwnd);
+        ceMgdi_.destroyWindowBitmap(hwnd);
+        publishGuestWindowState(hwnd);
         destroyHostWindow(it->second);
         if (wasVisible && parent) {
             spdlog::info("DestroyWindow invalidating parent=0x{:08x} after child=0x{:08x}", parent, hwnd);

@@ -301,6 +301,26 @@ uint32_t SyntheticDllRuntime::handleMapViewOfFile(uint32_t mappingHandle, uint32
         return 0;
     }
     const uint32_t viewSize = uint32_t(viewSize64);
+    auto sameMappingObject = [&](uint32_t existingHandle) {
+        if (existingHandle == mappingHandle) return true;
+        auto existing = fileMappings_.find(existingHandle);
+        if (existing == fileMappings_.end()) return false;
+        const GuestFileMapping& lhs = existing->second;
+        const GuestFileMapping& rhs = mapping->second;
+        return lhs.namedShared && rhs.namedShared &&
+               !lhs.name.empty() && lhs.name == rhs.name &&
+               lhs.backingPath == rhs.backingPath;
+    };
+    for (auto& [base, view] : mappedViews_) {
+        if (view.offset == offset && view.size == viewSize && sameMappingObject(view.mappingHandle)) {
+            view.refCount = std::max<uint32_t>(view.refCount, 1) + 1;
+            syncNamedMappedView(base, view, false);
+            lastError_ = 0;
+            spdlog::info("MapViewOfFile reused existing view mapping=0x{:08x} name=\"{}\" offset={} bytes={} -> base=0x{:08x} viewSize={} refs={}",
+                         mappingHandle, mapping->second.name, offset, bytesToMap, base, viewSize, view.refCount);
+            return base;
+        }
+    }
     const uint32_t base = allocate(viewSize, true);
     if (!base) {
         spdlog::info("MapViewOfFile failed guest allocation mapping=0x{:08x} name=\"{}\" viewSize={}",
@@ -358,8 +378,16 @@ uint32_t SyntheticDllRuntime::handleUnmapViewOfFile(uint32_t baseAddress) {
     const std::string name = mapping == fileMappings_.end() ? std::string{} : mapping->second.name;
     const uint32_t mappingHandle = view->second.mappingHandle;
     const bool synced = syncNamedMappedView(baseAddress, view->second, true);
+    if (view->second.refCount > 1) {
+        --view->second.refCount;
+        spdlog::info("UnmapViewOfFile decremented shared view base=0x{:08x} mapping=0x{:08x} name=\"{}\" size={} refs={} synced={}",
+                     baseAddress, mappingHandle, name, view->second.size, view->second.refCount, synced);
+        lastError_ = 0;
+        return 1;
+    }
     spdlog::info("UnmapViewOfFile base=0x{:08x} mapping=0x{:08x} name=\"{}\" size={} synced={}",
                  baseAddress, mappingHandle, name, view->second.size, synced);
+    releaseAllocation(baseAddress);
     mappedViews_.erase(view);
     const bool mappingHandleOpen = ceKernel_.handles().find(mappingHandle) != ceKernel_.handles().end();
     const bool hasMappedView = std::any_of(mappedViews_.begin(), mappedViews_.end(),

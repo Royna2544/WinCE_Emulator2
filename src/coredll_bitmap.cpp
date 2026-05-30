@@ -31,6 +31,13 @@
 #include <spdlog/spdlog.h>
 
 namespace {
+constexpr uint32_t kCosmeticPenWidth = 1;
+constexpr uint32_t kMaxRasterPenWidth = 256;
+
+uint32_t effectivePenWidth(uint32_t width) {
+    return std::clamp(width ? width : kCosmeticPenWidth, kCosmeticPenWidth, kMaxRasterPenWidth);
+}
+
 bool supportedSourceRasterOp(uint32_t rop) {
     switch (rop) {
     case 0x00000042u: // BLACKNESS
@@ -576,9 +583,13 @@ void SyntheticDllRuntime::drawFramebufferLine(const GuestDc& dc,
                                               int32_t y0,
                                               int32_t x1,
                                               int32_t y1,
-                                              uint32_t pixel) {
+                                              uint32_t pixel,
+                                              uint32_t width) {
     if (!framebuffer_ || pixel == 0 || framebufferWidth_ <= 0 || framebufferHeight_ <= 0) return;
     captureGuestWindowBacking(dc.hwnd);
+    width = effectivePenWidth(width);
+    const int32_t strokeBefore = int32_t((width - 1) / 2);
+    const int32_t strokeAfter = int32_t(width / 2);
     int32_t originX = 0;
     int32_t originY = 0;
     if (dc.hwnd) std::tie(originX, originY) = guestWindowOrigin(dc.hwnd);
@@ -588,19 +599,24 @@ void SyntheticDllRuntime::drawFramebufferLine(const GuestDc& dc,
     y1 += originY;
     const auto clip = framebufferClipForDc(dc);
     noteGuestWindowPaint(dc.hwnd,
-                         std::clamp<int32_t>(std::min(x0, x1), 0, framebufferWidth_),
-                         std::clamp<int32_t>(std::min(y0, y1), 0, framebufferHeight_),
-                         std::clamp<int32_t>(std::max(x0, x1) + 1, 0, framebufferWidth_),
-                         std::clamp<int32_t>(std::max(y0, y1) + 1, 0, framebufferHeight_));
+                         std::clamp<int32_t>(std::min(x0, x1) - strokeBefore, 0, framebufferWidth_),
+                         std::clamp<int32_t>(std::min(y0, y1) - strokeBefore, 0, framebufferHeight_),
+                         std::clamp<int32_t>(std::max(x0, x1) + strokeAfter + 1, 0, framebufferWidth_),
+                         std::clamp<int32_t>(std::max(y0, y1) + strokeAfter + 1, 0, framebufferHeight_));
     const int32_t dx = std::abs(x1 - x0);
     const int32_t sx = x0 < x1 ? 1 : -1;
     const int32_t dy = -std::abs(y1 - y0);
     const int32_t sy = y0 < y1 ? 1 : -1;
     int32_t err = dx + dy;
     for (;;) {
-        if (x0 >= 0 && x0 < framebufferWidth_ && y0 >= 0 && y0 < framebufferHeight_ &&
-            (!clip || CeMgdi::rectContainsPoint(*clip, x0, y0))) {
-            writeFramebufferTargetPixel(dc.hwnd, x0, y0, pixel);
+        for (int32_t py = y0 - strokeBefore; py <= y0 + strokeAfter; ++py) {
+            if (py < 0 || py >= framebufferHeight_) continue;
+            for (int32_t px = x0 - strokeBefore; px <= x0 + strokeAfter; ++px) {
+                if (px >= 0 && px < framebufferWidth_ &&
+                    (!clip || CeMgdi::rectContainsPoint(*clip, px, py))) {
+                    writeFramebufferTargetPixel(dc.hwnd, px, py, pixel);
+                }
+            }
         }
         if (x0 == x1 && y0 == y1) break;
         const int32_t e2 = 2 * err;
@@ -645,9 +661,13 @@ bool SyntheticDllRuntime::drawBitmapLine(const GuestBitmap& bitmap,
                                          int32_t y0,
                                          int32_t x1,
                                          int32_t y1,
-                                         uint32_t pixel) {
+                                         uint32_t pixel,
+                                         uint32_t width) {
     const int32_t height = std::abs(bitmap.heightRaw);
     if (!bitmap.bits || bitmap.width <= 0 || height <= 0 || bitmap.stride == 0 || pixel == 0) return false;
+    width = effectivePenWidth(width);
+    const int32_t strokeBefore = int32_t((width - 1) / 2);
+    const int32_t strokeAfter = int32_t(width / 2);
     const uint64_t byteCount = uint64_t(bitmap.stride) * uint64_t(height);
     if (!byteCount || byteCount > 0x2000000ull) return false;
     std::vector<uint8_t> raw(static_cast<size_t>(byteCount));
@@ -658,8 +678,13 @@ bool SyntheticDllRuntime::drawBitmapLine(const GuestBitmap& bitmap,
     const int32_t sy = y0 < y1 ? 1 : -1;
     int32_t err = dx + dy;
     for (;;) {
-        if (x0 >= 0 && x0 < bitmap.width && y0 >= 0 && y0 < height) {
-            writeBitmapPixel(bitmap, raw, height, x0, y0, pixel);
+        for (int32_t py = y0 - strokeBefore; py <= y0 + strokeAfter; ++py) {
+            if (py < 0 || py >= height) continue;
+            for (int32_t px = x0 - strokeBefore; px <= x0 + strokeAfter; ++px) {
+                if (px >= 0 && px < bitmap.width) {
+                    writeBitmapPixel(bitmap, raw, height, px, py, pixel);
+                }
+            }
         }
         if (x0 == x1 && y0 == y1) break;
         const int32_t e2 = 2 * err;
@@ -696,14 +721,15 @@ bool SyntheticDllRuntime::drawDcLine(const GuestDc& dc,
                                      int32_t y0,
                                      int32_t x1,
                                      int32_t y1,
-                                     uint32_t pixel) {
+                                     uint32_t pixel,
+                                     uint32_t width) {
     const uint32_t selectedBitmap = ceMgdi_.selectedBitmapForDc(dc.hdc, dc.selectedBitmap);
     auto bitmap = bitmaps_.find(selectedBitmap);
     if (bitmap != bitmaps_.end()) {
         syncBitmapPaletteFromMgdi(selectedBitmap, bitmap->second);
-        return drawBitmapLine(bitmap->second, x0, y0, x1, y1, pixel);
+        return drawBitmapLine(bitmap->second, x0, y0, x1, y1, pixel, width);
     }
-    drawFramebufferLine(dc, x0, y0, x1, y1, pixel);
+    drawFramebufferLine(dc, x0, y0, x1, y1, pixel, width);
     return true;
 }
 

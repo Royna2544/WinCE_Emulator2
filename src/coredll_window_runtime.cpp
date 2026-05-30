@@ -1418,7 +1418,13 @@ void SyntheticDllRuntime::eraseGuestWindowArea(uint32_t hwnd, const GuestWindow&
         return;
     }
     auto mutableWindow = windows_.find(hwnd);
-    if (mutableWindow != windows_.end() && restoreGuestWindowBacking(hwnd, mutableWindow->second)) {
+    const bool childWindow = (window.style & kWindowStyleChild) != 0;
+    if (mutableWindow != windows_.end() && childWindow) {
+        mutableWindow->second.backingValid = false;
+        mutableWindow->second.backingPixels.clear();
+    }
+    if (mutableWindow != windows_.end() && !childWindow &&
+        restoreGuestWindowBacking(hwnd, mutableWindow->second)) {
         return;
     }
     if (isOwnedPopupWindow(hwnd)) {

@@ -604,10 +604,11 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(uint16_t ordinal,
             }
             if (hasPen) {
                 const uint32_t pixel = colorRefToPixel(pen->colorRef);
+                const uint32_t penWidth = pen->width;
                 for (size_t index = 0; index < points.size(); ++index) {
                     const auto& from = points[index];
                     const auto& to = points[(index + 1) % points.size()];
-                    drawDcLine(*dc, from.first, from.second, to.first, to.second, pixel);
+                    drawDcLine(*dc, from.first, from.second, to.first, to.second, pixel, penWidth);
                 }
             }
             if (!points.empty()) {
@@ -630,13 +631,14 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(uint16_t ordinal,
             ret = 0;
         } else {
             const uint32_t pixel = colorRefToPixel(pen->colorRef);
+            const uint32_t penWidth = pen->width;
             int32_t prevX = int32_t(readU32(a1));
             int32_t prevY = int32_t(readU32(a1 + 4));
             for (uint32_t index = 1; index < a2 && index < 0x10000; ++index) {
                 const uint32_t point = a1 + index * 8;
                 const int32_t x = int32_t(readU32(point));
                 const int32_t y = int32_t(readU32(point + 4));
-                drawDcLine(*dc, prevX, prevY, x, y, pixel);
+                drawDcLine(*dc, prevX, prevY, x, y, pixel, penWidth);
                 prevX = x;
                 prevY = y;
             }
@@ -862,6 +864,28 @@ void SyntheticDllRuntime::publishGuestWindowState(uint32_t hwnd) {
     }
 
     const GuestWindow& window = windowIt->second;
+    auto writeRegistry = [&]() {
+        std::error_code ignored;
+        std::filesystem::create_directories(registryPath.parent_path(), ignored);
+        const std::filesystem::path tempPath = registryPath.string() + ".tmp." + std::to_string(processId);
+        {
+            std::ofstream output(tempPath, std::ios::trunc);
+            if (!output.good()) {
+                return;
+            }
+            output << registry.dump(2);
+        }
+        std::filesystem::rename(tempPath, registryPath, ignored);
+        if (ignored) {
+            std::filesystem::copy_file(tempPath, registryPath,
+                                       std::filesystem::copy_options::overwrite_existing, ignored);
+            std::filesystem::remove(tempPath, ignored);
+        }
+    };
+    if (window.destroyed) {
+        writeRegistry();
+        return;
+    }
     windowsJson.push_back({
         {"processId", processId},
         {"hwnd", hwnd},
@@ -878,23 +902,7 @@ void SyntheticDllRuntime::publishGuestWindowState(uint32_t hwnd) {
         {"height", window.height},
         {"tick", window.zOrder},
     });
-
-    std::error_code ignored;
-    std::filesystem::create_directories(registryPath.parent_path(), ignored);
-    const std::filesystem::path tempPath = registryPath.string() + ".tmp." + std::to_string(processId);
-    {
-        std::ofstream output(tempPath, std::ios::trunc);
-        if (!output.good()) {
-            return;
-        }
-        output << registry.dump(2);
-    }
-    std::filesystem::rename(tempPath, registryPath, ignored);
-    if (ignored) {
-        std::filesystem::copy_file(tempPath, registryPath,
-                                   std::filesystem::copy_options::overwrite_existing, ignored);
-        std::filesystem::remove(tempPath, ignored);
-    }
+    writeRegistry();
 }
 
 std::optional<uint32_t> SyntheticDllRuntime::findExternalGuestWindow(const std::string& className,
@@ -2821,10 +2829,11 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             }
             if (pen && pen->style != 5 && pen->colorRef != 0xffffffffu) {
                 const uint32_t pixel = colorRefToPixel(pen->colorRef);
+                const uint32_t penWidth = pen->width;
                 for (size_t index = 0; index < points.size(); ++index) {
                     const auto& from = points[index];
                     const auto& to = points[(index + 1) % points.size()];
-                    drawDcLine(*dc, from.first, from.second, to.first, to.second, pixel);
+                    drawDcLine(*dc, from.first, from.second, to.first, to.second, pixel, penWidth);
                 }
             }
             lastError_ = 0;
@@ -2899,10 +2908,11 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             }
             if (pen && pen->style != 5 && pen->colorRef != 0xffffffffu) {
                 const uint32_t pixel = colorRefToPixel(pen->colorRef);
-                drawDcLine(*dc, left, top, right - 1, top, pixel);
-                drawDcLine(*dc, left, bottom - 1, right - 1, bottom - 1, pixel);
-                drawDcLine(*dc, left, top, left, bottom - 1, pixel);
-                drawDcLine(*dc, right - 1, top, right - 1, bottom - 1, pixel);
+                const uint32_t penWidth = pen->width;
+                drawDcLine(*dc, left, top, right - 1, top, pixel, penWidth);
+                drawDcLine(*dc, left, bottom - 1, right - 1, bottom - 1, pixel, penWidth);
+                drawDcLine(*dc, left, top, left, bottom - 1, pixel, penWidth);
+                drawDcLine(*dc, right - 1, top, right - 1, bottom - 1, pixel, penWidth);
             }
             lastError_ = 0;
             ret = 1;
@@ -2941,7 +2951,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             if (pen->style != 5 && pen->colorRef != 0xffffffffu) {
                 const auto currentPos = ceMgdi_.currentPositionForDc(a0, dc->x, dc->y);
                 drawDcLine(*dc, currentPos.first, currentPos.second, int32_t(a1), int32_t(a2),
-                           colorRefToPixel(pen->colorRef));
+                           colorRefToPixel(pen->colorRef), pen->width);
             }
             dc->x = int32_t(a1);
             dc->y = int32_t(a2);

@@ -815,3 +815,59 @@ Confirmed behavior difference:
   the needed pixels, but clipping and visible-region ownership are not yet
   first-class, so correctness depends on ad hoc checks around blits, backing
   pixels, z-order, and popup state.
+
+## Latest Behavior Fixes: 2026-05-30
+
+- Destroyed guest windows are no longer left as visible zombie entries in the
+  cross-process guest-window registry. The synchronous `DestroyWindow` path now
+  unregisters the GWE window state, tears down the MGDI window-bitmap shadow,
+  clears saved backing, and republishes the removal after `WM_DESTROY` /
+  `WM_NCDESTROY` completion. Child-window destruction now avoids restoring
+  saved backing pixels; parent invalidation remains the repaint path. This
+  follows CE's model where destroyed windows stop participating in visible and
+  update regions rather than remaining as drawable/z-ordered windows. CE
+  references:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/window.hpp:1038`
+  and
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/window.hpp:1352`.
+  MFC reference:
+  `C:\Program Files (x86)\Microsoft Visual Studio 8\VC\ce\atlmfc\src\mfc\wincore.cpp:1222`.
+  Current source references:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp:1295`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_named_dispatch.cpp:866`, and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp:1415`.
+- MGDI line drawing now uses the selected pen width for `Polyline`, `LineTo`,
+  `Polygon`, `Ellipse`, and `Rectangle` outlines. Width `0` remains a cosmetic
+  one-pixel pen and wider pens are clamped through named raster constants. This
+  addresses the route/polyline symptom where the app selected a wide pen but
+  the emulator always rasterized one-pixel Bresenham strokes. CE references:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/MGDI/INC/dc.hpp:203`
+  and
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/MGDI/INC/gdiobj.h:481`.
+  MFC references:
+  `C:\Program Files (x86)\Microsoft Visual Studio 8\VC\ce\atlmfc\src\mfc\wingdi.cpp:661`,
+  `C:\Program Files (x86)\Microsoft Visual Studio 8\VC\ce\atlmfc\src\mfc\wingdi.cpp:841`, and
+  `C:\Program Files (x86)\Microsoft Visual Studio 8\VC\ce\atlmfc\src\mfc\wingdi.cpp:1274`.
+  Current source references:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_bitmap.cpp:33`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_bitmap.cpp:581`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_bitmap.cpp:659`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_named_dispatch.cpp:624`, and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_named_dispatch.cpp:2942`.
+- `MapViewOfFile` now reuses and ref-counts exact views for the same named
+  mapping object, and final `UnmapViewOfFile` releases the guest allocation
+  backing the view. This fixes the leak pattern observed before the late
+  `iNavi_sharedMem_traffic_static` heap exhaustion crash. CE references:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/NK/MAPFILE/mapfile.c:948`,
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/NK/MAPFILE/mapfile.c:1111`,
+  and
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/NK/MAPFILE/mapfile.c:1273`.
+  Current source references:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.h:676`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_mapping.cpp:303`, and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_mapping.cpp:370`.
+  The 2026-05-30 Release build passed with the known Boost Beast warning.
+  Bounded Release autodrive wrote `captures/inavi_autodrive_20260530_221145`;
+  it captured a valid `816x519` startup frame and the high-signal log scan
+  found no heap-exhaustion, `MapViewOfFile` allocation failure, unsupported
+  coredll ordinal, false zero-PC success, hard-error, or UC_ERR crash lines.
