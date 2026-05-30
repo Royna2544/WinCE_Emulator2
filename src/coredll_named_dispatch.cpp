@@ -3718,7 +3718,10 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             message.wParam = a2;
             message.lParam = a3;
             message.time = uint32_t(++tick_ * 16);
-            ceGwe_.postThreadMessage(message);
+            const uint32_t ownerThread = ceKernel_.activeGuestThread()
+                ? ceKernel_.activeGuestThread()
+                : ceKernel_.mainThreadPseudoHandle();
+            ceGwe_.postThreadMessage(message, ownerThread);
             lastError_ = 0;
             ret = 1;
             if (tracePostMessage) {

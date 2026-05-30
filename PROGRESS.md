@@ -173,6 +173,25 @@ Current emulator difference:
   `captures/inavi_autodrive_20260530_185430`; startup capture completed and
   the high-signal log scan found no new zero-PC fatal, hard-error, unsupported
   coredll ordinal, or deadlock lines.
+- `CeGwe` now assigns internal queue IDs and mirrors messages into
+  owner-thread lanes for posted, sent, input, timer, and thread messages while
+  preserving the current flat dispatch queue as the behavioral source of
+  truth. This is a scaffold step toward CE `MsgQueue` ownership, not a message
+  ordering change. CE reference:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/cmsgque.h:798`.
+  Current source references:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_gwe.h:16`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_gwe.h:38`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp:2195`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_named_dispatch.cpp:3721`,
+  and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp:1858`.
+  The 2026-05-30 Release build passed with the same Boost Beast warning.
+  Bounded autodrive with the companion enabled wrote
+  `captures/inavi_autodrive_20260530_191908`; startup capture completed, and
+  the high-signal log scan found no new hard-error, unsupported coredll
+  ordinal, or false zero-PC success lines. `DeviceParser.exe` still exited via
+  the decoded CE kernel path.
 
 ## Threading And Message Queues
 

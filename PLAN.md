@@ -98,6 +98,11 @@ results, or timing thresholds.
     register created/destroyed windows without changing delivery behavior.
     Current source anchors: `src/ce_gwe.h`, `src/coredll_window_runtime.cpp`,
     `src/coredll_named_dispatch.cpp`.
+  - [x] Add message IDs and mirrored owner-thread lanes for posted, sent,
+    input, timer, and thread messages while keeping the existing flat queue as
+    the dispatch source. Current source anchors: `src/ce_gwe.h`,
+    `src/synthetic_dll.cpp`, `src/coredll_named_dispatch.cpp`, and
+    `src/coredll_window_runtime.cpp`.
 - [ ] Route `PostMessageW`, thread messages, input messages, timers,
   `GetMessageW`, `PeekMessageW`, `DispatchMessageW`, and
   `MsgWaitForMultipleObjectsEx` through `CeGwe`.

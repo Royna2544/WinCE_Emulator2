@@ -1855,7 +1855,9 @@ void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t
             compactQueuedPointerMotion();
             return;
         }
-        ceGwe_.postAfterLeadingMatches(input, isInputPriority);
+        GuestMessage queuedInput = input;
+        queuedInput.queueKind = CeGwe::MessageQueueKind::Input;
+        ceGwe_.postAfterLeadingMatches(queuedInput, isInputPriority);
         compactQueuedPointerMotion();
     };
     if (message == 0x0201) {

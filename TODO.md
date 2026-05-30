@@ -22,6 +22,10 @@ Active refactor checklist: `PLAN.md`.
      `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_thread_runtime.cpp:530`.
    - Goal: route posted, input, timer, and sent messages through per-thread
      queues instead of treating all guest messages as one mostly global deque.
+   - Current status: `CeGwe` now has owner-thread lane mirrors for posted,
+     sent, input, timer, and thread messages, but `GetMessageW`/`PeekMessageW`
+     still consume the flat queue as dispatch truth. Next step is to make
+     selection owner-thread-aware without changing CE-visible order.
 
 2. Model cross-thread `SendMessageW` as a queue transaction.
    - CE reference:

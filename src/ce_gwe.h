@@ -10,6 +10,17 @@
 
 class CeGwe {
 public:
+    static constexpr uint32_t kNoOwnerThread = 0;
+    static constexpr uint64_t kFirstMessageId = 1;
+
+    enum class MessageQueueKind {
+        Posted,
+        Sent,
+        Input,
+        Timer,
+        Thread,
+    };
+
     struct GuestMessage {
         uint32_t hwnd{};
         uint32_t message{};
@@ -20,6 +31,8 @@ public:
         uint32_t y{};
         uint32_t synchronousSender{};
         bool crossProcess{};
+        uint64_t queueId{};
+        MessageQueueKind queueKind{MessageQueueKind::Posted};
     };
 
     struct ThreadQueue {
@@ -28,6 +41,7 @@ public:
         std::deque<GuestMessage> sent;
         std::deque<GuestMessage> input;
         std::deque<GuestMessage> timers;
+        std::deque<GuestMessage> thread;
     };
 
     static constexpr std::string_view name() noexcept { return "CE GWE"; }
@@ -54,13 +68,15 @@ public:
         return it == windowOwners_.end() ? 0 : it->second;
     }
     const std::map<uint32_t, ThreadQueue>& threadQueues() const noexcept { return threadQueues_; }
-    void postMessage(const GuestMessage& message) { messages_.push_back(message); }
-    void postMessage(GuestMessage&& message) { messages_.push_back(message); }
-    void postPostedMessage(const GuestMessage& message) { postMessage(message); }
-    void postInputMessage(const GuestMessage& message) { postMessage(message); }
-    void postThreadMessage(const GuestMessage& message) { postMessage(message); }
-    void postTimerMessage(const GuestMessage& message) { postMessage(message); }
-    void postFront(const GuestMessage& message) { messages_.push_front(message); }
+    void postMessage(const GuestMessage& message) { postBack(message, MessageQueueKind::Posted); }
+    void postMessage(GuestMessage&& message) { postBack(message, MessageQueueKind::Posted); }
+    void postPostedMessage(const GuestMessage& message) { postBack(message, MessageQueueKind::Posted); }
+    void postInputMessage(const GuestMessage& message) { postBack(message, MessageQueueKind::Input); }
+    void postThreadMessage(const GuestMessage& message, uint32_t ownerThread = kNoOwnerThread) {
+        postBack(message, MessageQueueKind::Thread, ownerThread);
+    }
+    void postTimerMessage(const GuestMessage& message) { postBack(message, MessageQueueKind::Timer); }
+    void postFront(const GuestMessage& message) { postAtFront(message, message.queueKind); }
 
     template <typename Predicate>
     bool anyMessage(Predicate predicate) const {
@@ -72,20 +88,35 @@ public:
 
     template <typename Predicate>
     void postAfterLeadingMatches(const GuestMessage& message, Predicate predicate) {
+        GuestMessage queued = prepareForQueue(message, message.queueKind);
         auto it = messages_.begin();
         while (it != messages_.end() && predicate(*it)) {
             ++it;
         }
-        messages_.insert(it, message);
+        addToOwnerQueue(queued);
+        messages_.insert(it, queued);
     }
 
     template <typename Predicate>
     void postBeforeFirstMatch(const GuestMessage& message, Predicate predicate) {
+        GuestMessage queued = prepareForQueue(message, message.queueKind);
         auto it = messages_.begin();
         while (it != messages_.end() && !predicate(*it)) {
             ++it;
         }
-        messages_.insert(it, message);
+        addToOwnerQueue(queued);
+        messages_.insert(it, queued);
+    }
+
+    template <typename Predicate>
+    void postSentBeforeFirstMatch(const GuestMessage& message, Predicate predicate) {
+        GuestMessage queued = prepareForQueue(message, MessageQueueKind::Sent);
+        auto it = messages_.begin();
+        while (it != messages_.end() && !predicate(*it)) {
+            ++it;
+        }
+        addToOwnerQueue(queued);
+        messages_.insert(it, queued);
     }
 
     template <typename Predicate>
@@ -93,6 +124,7 @@ public:
         const size_t oldSize = messages_.size();
         for (auto it = messages_.begin(); it != messages_.end();) {
             if (predicate(*it)) {
+                removeFromOwnerQueue(*it);
                 it = messages_.erase(it);
             } else {
                 ++it;
@@ -107,6 +139,7 @@ public:
         for (auto it = messages_.begin(); it != messages_.end();) {
             if (predicate(*it)) {
                 selected.push_back(*it);
+                removeFromOwnerQueue(*it);
                 it = messages_.erase(it);
             } else {
                 ++it;
@@ -121,6 +154,7 @@ public:
         for (auto it = messages_.rbegin(); it != messages_.rend();) {
             if (predicate(*it)) {
                 auto eraseIt = std::next(it).base();
+                removeFromOwnerQueue(*eraseIt);
                 it = std::make_reverse_iterator(messages_.erase(eraseIt));
                 ++erased;
             } else {
@@ -135,7 +169,10 @@ public:
         for (auto it = messages_.begin(); it != messages_.end(); ++it) {
             if (!predicate(*it)) continue;
             GuestMessage message = *it;
-            if (remove) messages_.erase(it);
+            if (remove) {
+                removeFromOwnerQueue(message);
+                messages_.erase(it);
+            }
             return message;
         }
         return std::nullopt;
@@ -151,7 +188,81 @@ public:
     }
 
 private:
+    std::deque<GuestMessage>& queueFor(ThreadQueue& queue, MessageQueueKind kind) {
+        switch (kind) {
+        case MessageQueueKind::Sent:
+            return queue.sent;
+        case MessageQueueKind::Input:
+            return queue.input;
+        case MessageQueueKind::Timer:
+            return queue.timers;
+        case MessageQueueKind::Thread:
+            return queue.thread;
+        case MessageQueueKind::Posted:
+        default:
+            return queue.posted;
+        }
+    }
+
+    GuestMessage prepareForQueue(const GuestMessage& message,
+                                 MessageQueueKind kind,
+                                 uint32_t ownerThread = kNoOwnerThread) {
+        GuestMessage queued = message;
+        if (!queued.queueId) {
+            queued.queueId = nextMessageId_++;
+        }
+        queued.queueKind = kind;
+        if (ownerThread) {
+            messageOwners_[queued.queueId] = ownerThread;
+        } else if (queued.hwnd) {
+            const uint32_t windowOwner = ownerForWindow(queued.hwnd);
+            if (windowOwner) {
+                messageOwners_[queued.queueId] = windowOwner;
+            }
+        }
+        return queued;
+    }
+
+    void postBack(const GuestMessage& message,
+                  MessageQueueKind kind,
+                  uint32_t ownerThread = kNoOwnerThread) {
+        GuestMessage queued = prepareForQueue(message, kind, ownerThread);
+        addToOwnerQueue(queued);
+        messages_.push_back(queued);
+    }
+
+    void postAtFront(const GuestMessage& message, MessageQueueKind kind) {
+        GuestMessage queued = prepareForQueue(message, kind);
+        addToOwnerQueue(queued);
+        messages_.push_front(queued);
+    }
+
+    void addToOwnerQueue(const GuestMessage& message) {
+        const auto owner = messageOwners_.find(message.queueId);
+        if (owner == messageOwners_.end() || !owner->second) return;
+        ensureThreadQueue(owner->second);
+        queueFor(threadQueues_[owner->second], message.queueKind).push_back(message);
+    }
+
+    void removeFromOwnerQueue(const GuestMessage& message) {
+        const auto owner = messageOwners_.find(message.queueId);
+        if (owner == messageOwners_.end()) return;
+        auto queue = threadQueues_.find(owner->second);
+        if (queue != threadQueues_.end()) {
+            auto& lane = queueFor(queue->second, message.queueKind);
+            for (auto it = lane.begin(); it != lane.end(); ++it) {
+                if (it->queueId == message.queueId) {
+                    lane.erase(it);
+                    break;
+                }
+            }
+        }
+        messageOwners_.erase(owner);
+    }
+
     std::deque<GuestMessage> messages_;
     std::map<uint32_t, ThreadQueue> threadQueues_;
     std::map<uint32_t, uint32_t> windowOwners_;
+    std::map<uint64_t, uint32_t> messageOwners_;
+    uint64_t nextMessageId_{kFirstMessageId};
 };
