@@ -2163,7 +2163,7 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
         lastSchedulerDiagAt = now;
         std::ostringstream threads;
         bool first = true;
-        for (const auto& [handle, thread] : guestThreads_) {
+        for (const auto& [handle, thread] : ceKernel_.threads()) {
             if (!first) threads << "; ";
             first = false;
             const auto pcIt = thread.context.registers.find(UC_MIPS_REG_PC);

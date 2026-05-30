@@ -41,8 +41,8 @@ bool SyntheticDllRuntime::handleCreateThread(SyntheticExportCode code, const Gue
     const uint32_t threadIdPtr = stackArg(5);
     ret = createGuestThread(startAddress, parameter, flags);
     if (threadIdPtr) {
-        auto thread = guestThreads_.find(ret);
-        writeU32(threadIdPtr, thread == guestThreads_.end() ? ret : thread->second.threadId);
+        auto thread = ceKernel_.threads().find(ret);
+        writeU32(threadIdPtr, thread == ceKernel_.threads().end() ? ret : thread->second.threadId);
     }
     spdlog::info("CreateThread guestHandle=0x{:08x} start=0x{:08x} param=0x{:08x} flags=0x{:08x} idPtr=0x{:08x}",
                  ret, startAddress, parameter, flags, threadIdPtr);

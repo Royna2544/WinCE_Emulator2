@@ -80,8 +80,8 @@ void SyntheticDllRuntime::restoreGuestCpuContext(const GuestCpuContext& context)
 
 const SyntheticDllRuntime::GuestThreadState* SyntheticDllRuntime::activeGuestThreadState() const {
     if (!activeGuestThread_) return nullptr;
-    auto it = guestThreads_.find(activeGuestThread_);
-    return it == guestThreads_.end() ? nullptr : &it->second;
+    auto it = ceKernel_.threads().find(activeGuestThread_);
+    return it == ceKernel_.threads().end() ? nullptr : &it->second;
 }
 
 std::string SyntheticDllRuntime::currentProcessModulePath() const {
@@ -138,7 +138,7 @@ uint32_t SyntheticDllRuntime::createGuestThread(uint32_t startAddress, uint32_t 
         thread.modulePath = mainModulePath_;
     }
     thread.context = initialGuestThreadContext(startAddress, parameter, stackTop);
-    guestThreads_[guestHandle] = std::move(thread);
+    ceKernel_.threads()[guestHandle] = std::move(thread);
     lastError_ = 0;
     return guestHandle;
 }
@@ -211,7 +211,7 @@ bool SyntheticDllRuntime::startGuestProcessImage(const std::string& guestApplica
     thread.context.registers[UC_MIPS_REG_T9] = entryPoint;
 
     threadId = thread.threadId;
-    guestThreads_[threadHandle] = std::move(thread);
+    ceKernel_.threads()[threadHandle] = std::move(thread);
     lastError_ = 0;
     spdlog::info("CreateProcessW guest image scheduled app=\"{}\" host=\"{}\" base=0x{:08x} entry=0x{:08x} process=0x{:08x}/{} thread=0x{:08x}/{} cmd=\"{}\"",
                  guestApplication, pathToUtf8(hostApplication), moduleBase, entryPoint,
@@ -225,8 +225,8 @@ uint32_t SyntheticDllRuntime::resumeGuestThread(uint32_t guestHandle) {
         lastError_ = 6;
         return 0xffffffffu;
     }
-    auto thread = guestThreads_.find(guestHandle);
-    if (thread == guestThreads_.end()) {
+    auto thread = ceKernel_.threads().find(guestHandle);
+    if (thread == ceKernel_.threads().end()) {
         lastError_ = 0;
         return 1;
     }
@@ -244,7 +244,7 @@ uint32_t SyntheticDllRuntime::resumeGuestThread(uint32_t guestHandle) {
 }
 
 void SyntheticDllRuntime::wakeGuestThreadsWaitingForMessage() {
-    for (auto& [threadHandle, thread] : guestThreads_) {
+    for (auto& [threadHandle, thread] : ceKernel_.threads()) {
         if (thread.state != GuestThreadRunState::WaitingForMessage) continue;
         thread.state = GuestThreadRunState::Runnable;
         spdlog::info("guest thread message wait satisfied handle=0x{:08x}", threadHandle);
@@ -257,7 +257,7 @@ void SyntheticDllRuntime::refreshSignaledGuestWaits() {
     constexpr DWORD kWaitObject0 = WAIT_OBJECT_0;
     constexpr DWORD kWaitTimeout = WAIT_TIMEOUT;
     const uint64_t now = hostTickMilliseconds();
-    for (auto& [threadHandle, thread] : guestThreads_) {
+    for (auto& [threadHandle, thread] : ceKernel_.threads()) {
         if (thread.state != GuestThreadRunState::Waiting) continue;
         if (thread.sleepUntilMs) {
             if (now < thread.sleepUntilMs) continue;
@@ -298,8 +298,8 @@ void SyntheticDllRuntime::refreshSignaledGuestWaits() {
                 wait = ::WaitForSingleObject(reinterpret_cast<HANDLE>(handle->hostValue), 0);
                 ready = wait == kWaitObject0;
             } else if (handle->kind == GuestHandle::Kind::GuestThread) {
-                auto waitedThread = guestThreads_.find(handles[i]);
-                ready = waitedThread == guestThreads_.end() ||
+                auto waitedThread = ceKernel_.threads().find(handles[i]);
+                ready = waitedThread == ceKernel_.threads().end() ||
                         waitedThread->second.state == GuestThreadRunState::Terminated;
             } else {
                 ready = true;
@@ -343,7 +343,7 @@ void SyntheticDllRuntime::refreshSignaledGuestWaits() {
 
 bool SyntheticDllRuntime::hasRunnableGuestThread() {
     refreshSignaledGuestWaits();
-    for (const auto& [handle, thread] : guestThreads_) {
+    for (const auto& [handle, thread] : ceKernel_.threads()) {
         (void)handle;
         if (thread.state == GuestThreadRunState::Runnable) return true;
     }
@@ -413,8 +413,8 @@ bool SyntheticDllRuntime::switchToRunnableGuestThread(const char* reason,
     refreshSignaledGuestWaits();
     auto switchTo = [&](uint32_t handle, GuestThreadState& thread) {
         if (activeGuestThread_) {
-            auto active = guestThreads_.find(activeGuestThread_);
-            if (active != guestThreads_.end()) {
+            auto active = ceKernel_.threads().find(activeGuestThread_);
+            if (active != ceKernel_.threads().end()) {
                 active->second.context = captureGuestCpuContext();
                 if (returnAddress) active->second.context.registers[UC_MIPS_REG_PC] = returnAddress;
                 if (active->second.state == GuestThreadRunState::Running) {
@@ -471,22 +471,22 @@ bool SyntheticDllRuntime::switchToRunnableGuestThread(const char* reason,
     };
 
     if (preferredHandle) {
-        auto preferred = guestThreads_.find(preferredHandle);
-        if (preferred != guestThreads_.end() &&
+        auto preferred = ceKernel_.threads().find(preferredHandle);
+        if (preferred != ceKernel_.threads().end() &&
             preferred->second.state == GuestThreadRunState::Runnable &&
             preferred->second.context.valid) {
             return switchTo(preferred->first, preferred->second);
         }
     }
 
-    auto first = lastScheduledGuestThread_ ? guestThreads_.upper_bound(lastScheduledGuestThread_)
-                                           : guestThreads_.begin();
-    for (auto it = first; it != guestThreads_.end(); ++it) {
+    auto first = lastScheduledGuestThread_ ? ceKernel_.threads().upper_bound(lastScheduledGuestThread_)
+                                           : ceKernel_.threads().begin();
+    for (auto it = first; it != ceKernel_.threads().end(); ++it) {
         if (it->second.state == GuestThreadRunState::Runnable && it->second.context.valid) {
             return switchTo(it->first, it->second);
         }
     }
-    for (auto it = guestThreads_.begin(); it != first; ++it) {
+    for (auto it = ceKernel_.threads().begin(); it != first; ++it) {
         if (it->second.state == GuestThreadRunState::Runnable && it->second.context.valid) {
             return switchTo(it->first, it->second);
         }
@@ -496,8 +496,8 @@ bool SyntheticDllRuntime::switchToRunnableGuestThread(const char* reason,
 
 bool SyntheticDllRuntime::yieldActiveGuestThread(const char* reason, uint32_t returnAddress) {
     if (!activeGuestThread_) return switchToRunnableGuestThread(reason, returnAddress);
-    auto active = guestThreads_.find(activeGuestThread_);
-    if (active != guestThreads_.end() && active->second.state == GuestThreadRunState::Running) {
+    auto active = ceKernel_.threads().find(activeGuestThread_);
+    if (active != ceKernel_.threads().end() && active->second.state == GuestThreadRunState::Running) {
         active->second.context = captureGuestCpuContext();
         if (returnAddress) active->second.context.registers[UC_MIPS_REG_PC] = returnAddress;
         active->second.state = GuestThreadRunState::Runnable;
@@ -514,8 +514,8 @@ bool SyntheticDllRuntime::yieldActiveGuestThread(const char* reason, uint32_t re
 
 bool SyntheticDllRuntime::finishActiveGuestThread(uint32_t exitCode) {
     if (!activeGuestThread_) return false;
-    auto active = guestThreads_.find(activeGuestThread_);
-    if (active != guestThreads_.end()) {
+    auto active = ceKernel_.threads().find(activeGuestThread_);
+    if (active != ceKernel_.threads().end()) {
         active->second.exitCode = exitCode;
         active->second.state = GuestThreadRunState::Terminated;
         active->second.context = captureGuestCpuContext();
@@ -597,8 +597,8 @@ uint32_t SyntheticDllRuntime::waitForMultipleGuestObjects(uint32_t count,
         } else
 #endif
         if (handle->kind == GuestHandle::Kind::GuestThread) {
-            auto thread = guestThreads_.find(handles[i]);
-            ready = thread == guestThreads_.end() ||
+            auto thread = ceKernel_.threads().find(handles[i]);
+            ready = thread == ceKernel_.threads().end() ||
                     thread->second.state == GuestThreadRunState::Terminated;
         }
         else {

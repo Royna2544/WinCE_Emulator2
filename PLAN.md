@@ -46,6 +46,10 @@ file-name shortcuts, route-screen shortcuts, or coordinate-specific fixes.
   clean adapter exists.
   Current source anchors: `src/synthetic_dll.h`,
   `src/coredll_thread_runtime.cpp`.
+  - [x] Move `GuestThreadState`, `GuestCpuContext`, `GuestThreadRunState`, and
+    `guestThreads_` storage behind `CeKernel`.
+  - [ ] Move active-thread, parked main-thread context, scheduler cursor, and
+    thread/process ID counters behind `CeKernel`.
 - [ ] Move wait/sleep bookkeeping and readiness checks behind `CeKernel`.
   Current source anchors: `refreshSignaledGuestWaits`,
   `switchToRunnableGuestThread`, `cooperateGuestThreadsAfterCall`.

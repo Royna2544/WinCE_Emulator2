@@ -1874,8 +1874,8 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
         } else
 #endif
         if (handle && handle->kind == GuestHandle::Kind::GuestThread) {
-            auto thread = guestThreads_.find(a0);
-            if (thread == guestThreads_.end() || thread->second.state == GuestThreadRunState::Terminated) {
+            auto thread = ceKernel_.threads().find(a0);
+            if (thread == ceKernel_.threads().end() || thread->second.state == GuestThreadRunState::Terminated) {
                 ret = 0;
             } else {
                 ret = a1 == 0 ? 0x00000102u : 0x00000102u; // WAIT_TIMEOUT until cooperative scheduling runs it.
@@ -1883,7 +1883,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             lastError_ = 0;
         } else if (handle && handle->kind == GuestHandle::Kind::GuestProcess && !handle->hostValue) {
             bool processStillRunning = false;
-            for (const auto& [threadHandle, thread] : guestThreads_) {
+            for (const auto& [threadHandle, thread] : ceKernel_.threads()) {
                 (void)threadHandle;
                 if (thread.processHandle == a0 && thread.state != GuestThreadRunState::Terminated) {
                     processStillRunning = true;

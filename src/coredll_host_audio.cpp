@@ -152,7 +152,7 @@ void SyntheticDllRuntime::refreshCompletedHostWaveBuffers() {
         writeU32(headerAddress + 16, uint32_t(header->dwFlags));
 
         if (context->guestEvent) {
-            for (auto& [threadHandle, thread] : guestThreads_) {
+            for (auto& [threadHandle, thread] : ceKernel_.threads()) {
                 (void)threadHandle;
                 if (thread.state == GuestThreadRunState::Waiting && thread.waitHandle == context->guestEvent) {
                     thread.state = GuestThreadRunState::Runnable;

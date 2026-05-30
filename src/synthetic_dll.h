@@ -735,40 +735,9 @@ private:
         bool releaseHostPresentAfterPaint{};
         std::string sourceName;
     };
-    struct GuestCpuContext {
-        std::map<int, uint32_t> registers;
-        bool valid{};
-    };
-    enum class GuestThreadRunState {
-        Suspended,
-        Runnable,
-        Running,
-        Waiting,
-        WaitingForMessage,
-        WaitingForSendMessage,
-        Terminated,
-    };
-    struct GuestThreadState {
-        uint32_t handle{};
-        uint32_t threadId{};
-        uint32_t startAddress{};
-        uint32_t parameter{};
-        uint32_t stackBase{};
-        uint32_t stackSize{};
-        uint32_t tlsBase{};
-        uint32_t suspendCount{};
-        uint32_t exitCode{};
-        uint32_t processHandle{};
-        uint32_t processId{};
-        uint32_t moduleBase{};
-        std::string modulePath;
-        uint32_t waitHandle{};
-        uint64_t sleepUntilMs{};
-        std::vector<uint32_t> waitHandles;
-        bool waitAll{};
-        GuestThreadRunState state{GuestThreadRunState::Suspended};
-        GuestCpuContext context;
-    };
+    using GuestCpuContext = CeKernel::GuestCpuContext;
+    using GuestThreadRunState = CeKernel::GuestThreadRunState;
+    using GuestThreadState = CeKernel::GuestThreadState;
 
     uc_engine* uc_{};
     uint32_t nextModuleBase_ = 0x70000000;
@@ -824,7 +793,6 @@ private:
     std::map<uint32_t, uint32_t> tlsValues_;
     std::map<uint32_t, uint32_t> criticalSectionDepth_;
     std::map<uint32_t, uint32_t> syntheticHandleValues_;
-    std::map<uint32_t, GuestThreadState> guestThreads_;
     GuestCpuContext mainThreadContext_;
     uint32_t activeGuestThread_{};
     uint32_t lastScheduledGuestThread_{};

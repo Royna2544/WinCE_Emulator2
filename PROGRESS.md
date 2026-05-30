@@ -42,6 +42,12 @@ Current emulator difference:
   migration phases move those owners into their CE-shaped subsystems. The
   2026-05-30 Release build passed after this migration with the same Boost
   Beast warning from `remote_server.cpp`.
+- `GuestCpuContext`, `GuestThreadRunState`, `GuestThreadState`, and guest
+  thread-record storage now live behind `CeKernel`. Active-thread scheduling
+  state, parked main-thread context, and thread/process ID counters are still
+  owned by `SyntheticDllRuntime` pending the next kernel migration step. The
+  2026-05-30 Release build passed after this storage move with the same Boost
+  Beast warning from `remote_server.cpp`.
 
 ## Threading And Message Queues
 

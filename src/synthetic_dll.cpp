@@ -659,12 +659,12 @@ uint32_t SyntheticDllRuntime::closeGuestHandle(uint32_t guestHandle) {
         bitmaps_.erase(guestHandle);
         if (it->second.filePointer) releaseAllocation(it->second.filePointer);
     } else if (it->second.kind == GuestHandle::Kind::GuestThread) {
-        auto thread = guestThreads_.find(guestHandle);
-        if (thread != guestThreads_.end()) {
+        auto thread = ceKernel_.threads().find(guestHandle);
+        if (thread != ceKernel_.threads().end()) {
             if (thread->second.state == GuestThreadRunState::Terminated) {
                 releaseAllocation(thread->second.stackBase);
                 releaseAllocation(thread->second.tlsBase);
-                guestThreads_.erase(thread);
+                ceKernel_.threads().erase(thread);
                 if (lastScheduledGuestThread_ == guestHandle) lastScheduledGuestThread_ = 0;
             } else {
                 spdlog::info("CloseHandle released live guest thread handle=0x{:08x} state={} without terminating scheduler thread",
@@ -1579,8 +1579,8 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
             releaseHostErasePresentDeferral(pending.hwnd);
         }
         if (pending.synchronousSender) {
-            auto sender = guestThreads_.find(pending.synchronousSender);
-            if (sender != guestThreads_.end() &&
+            auto sender = ceKernel_.threads().find(pending.synchronousSender);
+            if (sender != ceKernel_.threads().end() &&
                 sender->second.state == GuestThreadRunState::WaitingForSendMessage) {
                 const uint32_t senderPc = sender->second.context.registers.count(UC_MIPS_REG_PC)
                     ? sender->second.context.registers[UC_MIPS_REG_PC]
@@ -1811,8 +1811,8 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
         }
         case 0x01F0: {
             if (activeGuestThread_) {
-                auto active = guestThreads_.find(activeGuestThread_);
-                if (active != guestThreads_.end()) {
+                auto active = ceKernel_.threads().find(activeGuestThread_);
+                if (active != ceKernel_.threads().end()) {
                     active->second.context = captureGuestCpuContext();
                     active->second.context.registers[UC_MIPS_REG_PC] = ra;
                     active->second.context.registers[UC_MIPS_REG_V0] = 0;
@@ -1867,8 +1867,8 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                         pumpHostMessages();
                         return;
                     }
-                    auto active = guestThreads_.find(activeGuestThread_);
-                    if (active != guestThreads_.end()) {
+                    auto active = ceKernel_.threads().find(activeGuestThread_);
+                    if (active != ceKernel_.threads().end()) {
                         active->second.context = captureGuestCpuContext();
                         active->second.context.registers[UC_MIPS_REG_PC] = ra;
                         active->second.context.registers[UC_MIPS_REG_V0] = 0;
@@ -1955,9 +1955,9 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
 #endif
                 if (handle->kind == GuestHandle::Kind::GuestThread) {
                     preferredThread = a0;
-                    auto thread = guestThreads_.find(a0);
+                    auto thread = ceKernel_.threads().find(a0);
                     lastError_ = 0;
-                    waitResult = (thread == guestThreads_.end() ||
+                    waitResult = (thread == ceKernel_.threads().end() ||
                                   thread->second.state == GuestThreadRunState::Terminated)
                         ? kWaitObject0
                         : kWaitTimeout;
@@ -1965,7 +1965,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                 }
                 if (handle->kind == GuestHandle::Kind::GuestProcess && !handle->hostValue) {
                     bool processStillRunning = false;
-                    for (const auto& [threadHandle, thread] : guestThreads_) {
+                    for (const auto& [threadHandle, thread] : ceKernel_.threads()) {
                         (void)threadHandle;
                         if (thread.processHandle == a0 && thread.state != GuestThreadRunState::Terminated) {
                             processStillRunning = true;
@@ -1986,8 +1986,8 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                 pollSingleWait(ret, ignoredPreferredThread);
                 const bool wouldBlock = ret == kWaitTimeout && a1 != 0;
                 if (wouldBlock) {
-                    auto active = guestThreads_.find(activeGuestThread_);
-                    if (active != guestThreads_.end()) {
+                    auto active = ceKernel_.threads().find(activeGuestThread_);
+                    if (active != ceKernel_.threads().end()) {
                         active->second.context = captureGuestCpuContext();
                         active->second.context.registers[UC_MIPS_REG_PC] = ra;
                         active->second.context.registers[UC_MIPS_REG_V0] = 0; // completed wait result after wake
@@ -2112,8 +2112,8 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
         }
         case 0x035D: {
             if (activeGuestThread_ && guestMessages_.empty() && !quitPosted_) {
-                auto active = guestThreads_.find(activeGuestThread_);
-                if (active != guestThreads_.end()) {
+                auto active = ceKernel_.threads().find(activeGuestThread_);
+                if (active != ceKernel_.threads().end()) {
                     active->second.context = captureGuestCpuContext();
                     active->second.context.registers[UC_MIPS_REG_PC] = pc;
                     active->second.state = GuestThreadRunState::WaitingForMessage;
@@ -2220,8 +2220,8 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                 wakeGuestThreadsWaitingForMessage();
                 lastError_ = 0;
                 const uint32_t senderHandle = activeGuestThread_;
-                auto sender = guestThreads_.find(senderHandle);
-                if (sender != guestThreads_.end() &&
+                auto sender = ceKernel_.threads().find(senderHandle);
+                if (sender != ceKernel_.threads().end() &&
                     sender->second.state == GuestThreadRunState::Running) {
                     sender->second.context = captureGuestCpuContext();
                     sender->second.context.registers[UC_MIPS_REG_PC] = ra;
@@ -2246,7 +2246,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                                  senderHandle,
                                  targetWindow->second.ownerThread,
                                  guestMessages_.size(),
-                                 sender != guestThreads_.end());
+                                 sender != ceKernel_.threads().end());
                 } else {
                     spdlog::debug("SendMessageW cross-thread queued hwnd=0x{:08x} msg=0x{:08x} sender=0x{:08x} owner=0x{:08x} queued={} waiting={}",
                                   hwnd,
@@ -2254,7 +2254,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                                   senderHandle,
                                   targetWindow->second.ownerThread,
                                   guestMessages_.size(),
-                                  sender != guestThreads_.end());
+                                  sender != ceKernel_.threads().end());
                 }
                 activeGuestThread_ = 0;
                 if (!restoreMainThreadContextIfRunnable("SendMessageW-cross-thread")) {
