@@ -5,6 +5,43 @@
 
 #include <spdlog/spdlog.h>
 
+#include <cctype>
+#include <string>
+
+namespace {
+
+void applyGuestSerialConfigToDcb(DCB& dcb, uint32_t baud, const std::string& configuredMode) {
+    dcb = {};
+    dcb.DCBlength = sizeof(dcb);
+    dcb.BaudRate = baud ? baud : 9600;
+    dcb.ByteSize = 8;
+    dcb.Parity = NOPARITY;
+    dcb.StopBits = ONESTOPBIT;
+    dcb.fBinary = TRUE;
+
+    std::string mode = configuredMode.empty() ? "8N1" : configuredMode;
+    for (char& ch : mode) ch = char(std::toupper(static_cast<unsigned char>(ch)));
+    if (mode.size() != 3) return;
+    if (mode[0] >= '5' && mode[0] <= '8') dcb.ByteSize = BYTE(mode[0] - '0');
+    switch (mode[1]) {
+    case 'O':
+        dcb.Parity = ODDPARITY;
+        dcb.fParity = TRUE;
+        break;
+    case 'E':
+        dcb.Parity = EVENPARITY;
+        dcb.fParity = TRUE;
+        break;
+    default:
+        dcb.Parity = NOPARITY;
+        dcb.fParity = FALSE;
+        break;
+    }
+    dcb.StopBits = mode[2] == '2' ? TWOSTOPBITS : ONESTOPBIT;
+}
+
+} // namespace
+
 void SyntheticDllRuntime::registerCoredllCommExports(SyntheticModule& module) {
     struct CoreDllComm {
         OrdinalHandlerGroup group() const {
@@ -40,10 +77,22 @@ bool SyntheticDllRuntime::handleGetCommState(SyntheticExportCode code, const Gue
     if (handle->kind == GuestHandle::Kind::GuestSerialDevice) {
         auto debugName = fileHandleDebugNames_.find(args.a0);
         const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
-        lastError_ = 120;
-        ret = 0;
-        spdlog::info("GetCommState guest device handle=0x{:08x} name=\"{}\" has no host serial bridge yet -> 0",
-                     args.a0, debugPath);
+        auto config = guestDeviceConfigsByHandle_.find(args.a0);
+        DCB dcb{};
+        applyGuestSerialConfigToDcb(dcb,
+                                    config == guestDeviceConfigsByHandle_.end() ? defaultSerialBaud_ : config->second.baud,
+                                    config == guestDeviceConfigsByHandle_.end() ? defaultSerialMode_ : config->second.mode);
+        if (args.a1) {
+            uint32_t guestLength = readU32(args.a1);
+            if (!guestLength || guestLength > sizeof(dcb)) guestLength = sizeof(dcb);
+            uc_mem_write(uc_, args.a1, &dcb, guestLength);
+            writeU32(args.a1, guestLength);
+        }
+        lastError_ = 0;
+        ret = 1;
+        spdlog::info("GetCommState guest device handle=0x{:08x} name=\"{}\" -> 1 baud={} byteSize={} parity={} stopBits={}",
+                     args.a0, debugPath, dcb.BaudRate, static_cast<unsigned>(dcb.ByteSize),
+                     static_cast<unsigned>(dcb.Parity), static_cast<unsigned>(dcb.StopBits));
         return true;
     }
     HANDLE host = reinterpret_cast<HANDLE>(handle->hostValue);
@@ -78,8 +127,12 @@ bool SyntheticDllRuntime::handleSetCommState(SyntheticExportCode code, const Gue
         return true;
     }
     if (handle->kind == GuestHandle::Kind::GuestSerialDevice) {
-        lastError_ = 120;
-        ret = 0;
+        lastError_ = args.a1 ? 0 : 87;
+        ret = args.a1 ? 1 : 0;
+        auto debugName = fileHandleDebugNames_.find(args.a0);
+        const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+        spdlog::info("SetCommState guest device handle=0x{:08x} name=\"{}\" -> {} lastError={}",
+                     args.a0, debugPath, ret, lastError_);
         return true;
     }
     HANDLE host = reinterpret_cast<HANDLE>(handle->hostValue);
@@ -110,10 +163,18 @@ bool SyntheticDllRuntime::handleSetCommTimeouts(SyntheticExportCode code, const 
     (void)code;
     auto* handle = lookupGuestHandle(args.a0);
     if (!handle || (handle->kind != GuestHandle::Kind::GuestSerialDevice &&
-                    handle->kind != GuestHandle::Kind::HostSerialDevice) ||
-        handle->kind == GuestHandle::Kind::GuestSerialDevice) {
-        lastError_ = handle ? 120 : 6;
+                    handle->kind != GuestHandle::Kind::HostSerialDevice)) {
+        lastError_ = 6;
         ret = 0;
+        return true;
+    }
+    if (handle->kind == GuestHandle::Kind::GuestSerialDevice) {
+        lastError_ = args.a1 ? 0 : 87;
+        ret = args.a1 ? 1 : 0;
+        auto debugName = fileHandleDebugNames_.find(args.a0);
+        const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+        spdlog::info("SetCommTimeouts guest device handle=0x{:08x} name=\"{}\" -> {} lastError={}",
+                     args.a0, debugPath, ret, lastError_);
         return true;
     }
     COMMTIMEOUTS timeouts{};
@@ -134,10 +195,18 @@ bool SyntheticDllRuntime::handleSetCommMask(SyntheticExportCode code, const Gues
     (void)code;
     auto* handle = lookupGuestHandle(args.a0);
     if (!handle || (handle->kind != GuestHandle::Kind::GuestSerialDevice &&
-                    handle->kind != GuestHandle::Kind::HostSerialDevice) ||
-        handle->kind == GuestHandle::Kind::GuestSerialDevice) {
-        lastError_ = handle ? 120 : 6;
+                    handle->kind != GuestHandle::Kind::HostSerialDevice)) {
+        lastError_ = 6;
         ret = 0;
+        return true;
+    }
+    if (handle->kind == GuestHandle::Kind::GuestSerialDevice) {
+        lastError_ = 0;
+        ret = 1;
+        auto debugName = fileHandleDebugNames_.find(args.a0);
+        const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+        spdlog::info("SetCommMask guest device handle=0x{:08x} name=\"{}\" mask=0x{:08x} -> 1",
+                     args.a0, debugPath, args.a1);
         return true;
     }
     const BOOL ok = SetCommMask(reinterpret_cast<HANDLE>(handle->hostValue), args.a1);
@@ -154,10 +223,18 @@ bool SyntheticDllRuntime::handleSetupComm(SyntheticExportCode code, const GuestC
     (void)code;
     auto* handle = lookupGuestHandle(args.a0);
     if (!handle || (handle->kind != GuestHandle::Kind::GuestSerialDevice &&
-                    handle->kind != GuestHandle::Kind::HostSerialDevice) ||
-        handle->kind == GuestHandle::Kind::GuestSerialDevice) {
-        lastError_ = handle ? 120 : 6;
+                    handle->kind != GuestHandle::Kind::HostSerialDevice)) {
+        lastError_ = 6;
         ret = 0;
+        return true;
+    }
+    if (handle->kind == GuestHandle::Kind::GuestSerialDevice) {
+        lastError_ = 0;
+        ret = 1;
+        auto debugName = fileHandleDebugNames_.find(args.a0);
+        const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+        spdlog::info("SetupComm guest device handle=0x{:08x} name=\"{}\" inQueue={} outQueue={} -> 1",
+                     args.a0, debugPath, args.a1, args.a2);
         return true;
     }
     const BOOL ok = SetupComm(reinterpret_cast<HANDLE>(handle->hostValue), args.a1, args.a2);
@@ -174,10 +251,18 @@ bool SyntheticDllRuntime::handlePurgeComm(SyntheticExportCode code, const GuestC
     (void)code;
     auto* handle = lookupGuestHandle(args.a0);
     if (!handle || (handle->kind != GuestHandle::Kind::GuestSerialDevice &&
-                    handle->kind != GuestHandle::Kind::HostSerialDevice) ||
-        handle->kind == GuestHandle::Kind::GuestSerialDevice) {
-        lastError_ = handle ? 120 : 6;
+                    handle->kind != GuestHandle::Kind::HostSerialDevice)) {
+        lastError_ = 6;
         ret = 0;
+        return true;
+    }
+    if (handle->kind == GuestHandle::Kind::GuestSerialDevice) {
+        lastError_ = 0;
+        ret = 1;
+        auto debugName = fileHandleDebugNames_.find(args.a0);
+        const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+        spdlog::info("PurgeComm guest device handle=0x{:08x} name=\"{}\" flags=0x{:08x} -> 1",
+                     args.a0, debugPath, args.a1);
         return true;
     }
     const BOOL ok = PurgeComm(reinterpret_cast<HANDLE>(handle->hostValue), args.a1);
@@ -194,10 +279,23 @@ bool SyntheticDllRuntime::handleClearCommError(SyntheticExportCode code, const G
     (void)code;
     auto* handle = lookupGuestHandle(args.a0);
     if (!handle || (handle->kind != GuestHandle::Kind::GuestSerialDevice &&
-                    handle->kind != GuestHandle::Kind::HostSerialDevice) ||
-        handle->kind == GuestHandle::Kind::GuestSerialDevice) {
-        lastError_ = handle ? 120 : 6;
+                    handle->kind != GuestHandle::Kind::HostSerialDevice)) {
+        lastError_ = 6;
         ret = 0;
+        return true;
+    }
+    if (handle->kind == GuestHandle::Kind::GuestSerialDevice) {
+        const DWORD errors = 0;
+        COMSTAT stat{};
+        stat.cbInQue = static_cast<DWORD>(std::min<size_t>(remoteSerialByteCount(), 0xffffffffu));
+        if (args.a1) writeU32(args.a1, errors);
+        if (args.a2) uc_mem_write(uc_, args.a2, &stat, sizeof(stat));
+        lastError_ = 0;
+        ret = 1;
+        auto debugName = fileHandleDebugNames_.find(args.a0);
+        const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+        spdlog::info("ClearCommError guest device handle=0x{:08x} name=\"{}\" -> 1 errors=0x{:08x} cbInQue={} cbOutQue={}",
+                     args.a0, debugPath, errors, stat.cbInQue, stat.cbOutQue);
         return true;
     }
     DWORD errors = 0;

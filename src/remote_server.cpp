@@ -942,6 +942,11 @@ size_t SyntheticDllRuntime::readRemoteSerialBytes(uint8_t* dst, size_t maxBytes)
     return count;
 }
 
+size_t SyntheticDllRuntime::remoteSerialByteCount() const {
+    std::lock_guard<std::mutex> lock(remoteMutex_);
+    return remoteSerialBytes_.size();
+}
+
 void SyntheticDllRuntime::publishRemoteAudioChunk(const std::vector<uint8_t>& pcm,
                                                   uint16_t sourceFormatTag,
                                                   uint32_t sourceSampleRate,

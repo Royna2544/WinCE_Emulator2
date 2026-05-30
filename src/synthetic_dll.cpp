@@ -571,6 +571,20 @@ void SyntheticDllRuntime::hookBasicBlock(uc_engine* uc, uint64_t address, uint32
     hostQueuePending = HIWORD(GetQueueStatus(QS_ALLINPUT)) != 0;
 #endif
     if (!hostQueuePending && std::chrono::steady_clock::now() < runtime->interactiveSliceDeadline_) return;
+    if (!runtime->pendingMessageTransfers_.empty()) {
+        if (!runtime->interactiveSliceStopRequested_) {
+            uint32_t pc = 0;
+            uint32_t ra = 0;
+            uc_reg_read(uc, UC_MIPS_REG_PC, &pc);
+            uc_reg_read(uc, UC_MIPS_REG_RA, &ra);
+            spdlog::debug("guest slice watchdog deferred during message transfer reason={} activeThread=0x{:08x} "
+                          "budget={} block=0x{:08x} pc=0x{:08x} ra=0x{:08x} pendingTransfers={} queued={}",
+                          runtime->interactiveSliceReason_, runtime->activeGuestThread_,
+                          runtime->interactiveSliceInstructionBudget_, uint32_t(address), pc, ra,
+                          runtime->pendingMessageTransfers_.size(), runtime->guestMessages_.size());
+        }
+        return;
+    }
 
     if (!runtime->interactiveSliceStopRequested_) {
         uint32_t pc = 0;
@@ -771,9 +785,23 @@ uint32_t SyntheticDllRuntime::openGuestSerialDevice(const std::string& guestPath
         }
         spdlog::warn("CreateFileW guest device=\"{}\" host=\"{}\" unavailable lastError={} ra=0x{:08x}; using stub guest device{}",
                      guestPath, displayName, openError, ra, note);
+        const uint32_t guest = makeGuestHandle({GuestHandle::Kind::GuestSerialDevice, 0, 0});
+        fileHandleDebugNames_[guest] = guestPath + " -> " + displayName + " disconnected" + note;
+        guestDeviceConfigsByHandle_[guest] = config;
+        lastError_ = 0;
+        spdlog::info("CreateFileW guest device=\"{}\" guestHandle=0x{:08x} disconnected serial-fallback access=0x{:08x} share=0x{:08x} ra=0x{:08x}",
+                     guestPath, guest, access, share, ra);
+        return guest;
 #else
         spdlog::warn("CreateFileW guest device=\"{}\" backend=win32_com unavailable on this host ra=0x{:08x}; using stub guest device{}",
                      guestPath, ra, note);
+        const uint32_t guest = makeGuestHandle({GuestHandle::Kind::GuestSerialDevice, 0, 0});
+        fileHandleDebugNames_[guest] = guestPath + " -> disconnected" + note;
+        guestDeviceConfigsByHandle_[guest] = config;
+        lastError_ = 0;
+        spdlog::info("CreateFileW guest device=\"{}\" guestHandle=0x{:08x} disconnected serial-fallback access=0x{:08x} share=0x{:08x} ra=0x{:08x}",
+                     guestPath, guest, access, share, ra);
+        return guest;
 #endif
     }
     const uint32_t guest = makeGuestHandle({GuestHandle::Kind::GuestSerialDevice, 0, 0});
@@ -1507,8 +1535,19 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
 
     if (isCoredll && pc == messageTransferContinuationStub_) {
         if (pendingMessageTransfers_.empty()) {
-            spdlog::warn("message transfer continuation reached with no pending message");
-            setReg(UC_MIPS_REG_PC, ra);
+            spdlog::error("message transfer continuation reached with no pending message pc=0x{:08x} ra=0x{:08x} "
+                          "v0=0x{:08x} queued={} activeThread=0x{:08x}",
+                          pc, ra, reg(UC_MIPS_REG_V0), guestMessages_.size(), activeGuestThread_);
+            if (ra && ra != messageTransferContinuationStub_ && isGuestRangeReadable(ra, 4)) {
+                setReg(UC_MIPS_REG_PC, ra);
+            } else if (restoreMainThreadContextIfRunnable("empty-message-transfer-continuation")) {
+                return;
+            } else if (switchToRunnableGuestThread("empty-message-transfer-continuation")) {
+                return;
+            } else {
+                setReg(UC_MIPS_REG_PC, 0);
+                uc_emu_stop(uc_);
+            }
             return;
         }
         PendingMessageTransfer pending = pendingMessageTransfers_.back();
@@ -1563,8 +1602,57 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
         if (pending.releaseHostPresentAfterPaint) {
             presentHostWindows(true);
         }
-        setReg(UC_MIPS_REG_RA, pending.originalRa);
-        setReg(UC_MIPS_REG_PC, pending.originalRa);
+        auto readableReturn = [&](uint32_t address) {
+            return address && address != messageTransferContinuationStub_ && isGuestRangeReadable(address, 4);
+        };
+        uint32_t returnRa = pending.originalRa;
+        if (returnRa == messageTransferContinuationStub_ && pendingMessageTransfers_.empty()) {
+            if (readableReturn(pending.outerReturnRa)) {
+                spdlog::warn("{} collapsed orphaned message-transfer continuation hwnd=0x{:08x} msg=0x{:08x} "
+                             "result=0x{:08x} return=0x{:08x}",
+                             pending.sourceName, pending.hwnd, pending.message, wndProcResult, pending.outerReturnRa);
+                returnRa = pending.outerReturnRa;
+            } else {
+                spdlog::error("{} cannot resolve orphaned message-transfer continuation hwnd=0x{:08x} msg=0x{:08x} "
+                              "result=0x{:08x} queued={} activeThread=0x{:08x}",
+                              pending.sourceName, pending.hwnd, pending.message, wndProcResult,
+                              guestMessages_.size(), activeGuestThread_);
+                setReg(UC_MIPS_REG_PC, 0);
+                uc_emu_stop(uc_);
+                return;
+            }
+        }
+        if (returnRa != messageTransferContinuationStub_ && !readableReturn(returnRa)) {
+            if (readableReturn(pending.outerReturnRa)) {
+                spdlog::warn("{} replaced unreadable message-transfer return hwnd=0x{:08x} msg=0x{:08x} "
+                             "result=0x{:08x} return=0x{:08x} outer=0x{:08x}",
+                             pending.sourceName, pending.hwnd, pending.message, wndProcResult,
+                             returnRa, pending.outerReturnRa);
+                returnRa = pending.outerReturnRa;
+            } else if (restoreMainThreadContextIfRunnable("invalid-message-transfer-return")) {
+                spdlog::warn("{} restored parked main context after unreadable message-transfer return hwnd=0x{:08x} "
+                             "msg=0x{:08x} result=0x{:08x} return=0x{:08x} outer=0x{:08x}",
+                             pending.sourceName, pending.hwnd, pending.message, wndProcResult,
+                             returnRa, pending.outerReturnRa);
+                return;
+            } else if (switchToRunnableGuestThread("invalid-message-transfer-return")) {
+                spdlog::warn("{} switched to runnable thread after unreadable message-transfer return hwnd=0x{:08x} "
+                             "msg=0x{:08x} result=0x{:08x} return=0x{:08x} outer=0x{:08x}",
+                             pending.sourceName, pending.hwnd, pending.message, wndProcResult,
+                             returnRa, pending.outerReturnRa);
+                return;
+            } else {
+                spdlog::error("{} cannot resolve unreadable message-transfer return hwnd=0x{:08x} msg=0x{:08x} "
+                              "result=0x{:08x} return=0x{:08x} outer=0x{:08x} queued={} activeThread=0x{:08x}",
+                              pending.sourceName, pending.hwnd, pending.message, wndProcResult,
+                              returnRa, pending.outerReturnRa, guestMessages_.size(), activeGuestThread_);
+                setReg(UC_MIPS_REG_PC, 0);
+                uc_emu_stop(uc_);
+                return;
+            }
+        }
+        setReg(UC_MIPS_REG_RA, returnRa);
+        setReg(UC_MIPS_REG_PC, returnRa);
         return;
     }
 
@@ -1715,10 +1803,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                                   activeGuestThread_, a0, ra, savedRa, savedSp);
                 }
                 activeGuestThread_ = 0;
-                if (mainThreadContext_.valid) {
-                    updateCurrentThreadKData(mainThreadPseudoHandle_, mainThreadTls_);
-                    restoreGuestCpuContext(mainThreadContext_);
-                } else {
+                if (!restoreMainThreadContextIfRunnable(name.c_str())) {
                     switchToRunnableGuestThread(name.c_str());
                 }
                 pumpHostMessages();
@@ -1762,10 +1847,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                                      activeGuestThread_, a0, a2 != 0, a3, ra);
                     }
                     activeGuestThread_ = 0;
-                    if (mainThreadContext_.valid) {
-                        updateCurrentThreadKData(mainThreadPseudoHandle_, mainThreadTls_);
-                        restoreGuestCpuContext(mainThreadContext_);
-                    } else {
+                    if (!restoreMainThreadContextIfRunnable(name.c_str())) {
                         switchToRunnableGuestThread(name.c_str());
                     }
                     pumpHostMessages();
@@ -1884,10 +1966,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                                      activeGuestThread_, a0, ra);
                     }
                     activeGuestThread_ = 0;
-                    if (mainThreadContext_.valid) {
-                        updateCurrentThreadKData(mainThreadPseudoHandle_, mainThreadTls_);
-                        restoreGuestCpuContext(mainThreadContext_);
-                    } else {
+                    if (!restoreMainThreadContextIfRunnable(name.c_str())) {
                         switchToRunnableGuestThread(name.c_str());
                     }
                     pumpHostMessages();
@@ -2009,10 +2088,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                                  activeGuestThread_, ra, a0);
                 }
                 activeGuestThread_ = 0;
-                if (mainThreadContext_.valid) {
-                    updateCurrentThreadKData(mainThreadPseudoHandle_, mainThreadTls_);
-                    restoreGuestCpuContext(mainThreadContext_);
-                } else {
+                if (!restoreMainThreadContextIfRunnable(name.c_str())) {
                     switchToRunnableGuestThread(name.c_str());
                 }
                 pumpHostMessages();
@@ -2148,21 +2224,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                                   sender != guestThreads_.end());
                 }
                 activeGuestThread_ = 0;
-                if (mainThreadContext_.valid) {
-                    const uint32_t mainPc = mainThreadContext_.registers.count(UC_MIPS_REG_PC)
-                        ? mainThreadContext_.registers[UC_MIPS_REG_PC]
-                        : 0;
-                    const uint32_t mainRa = mainThreadContext_.registers.count(UC_MIPS_REG_RA)
-                        ? mainThreadContext_.registers[UC_MIPS_REG_RA]
-                        : 0;
-                    const uint32_t mainSp = mainThreadContext_.registers.count(UC_MIPS_REG_SP)
-                        ? mainThreadContext_.registers[UC_MIPS_REG_SP]
-                        : 0;
-                    spdlog::debug("SendMessageW cross-thread restoring main context pc=0x{:08x} ra=0x{:08x} sp=0x{:08x}",
-                                  mainPc, mainRa, mainSp);
-                    updateCurrentThreadKData(mainThreadPseudoHandle_, mainThreadTls_);
-                    restoreGuestCpuContext(mainThreadContext_);
-                } else {
+                if (!restoreMainThreadContextIfRunnable("SendMessageW-cross-thread")) {
                     switchToRunnableGuestThread("SendMessageW-cross-thread");
                 }
                 pumpHostMessages();
@@ -2239,10 +2301,24 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
             setReg(UC_MIPS_REG_A2, wParam);
             setReg(UC_MIPS_REG_A3, lParam);
             if (messageTransferContinuationStub_) {
+                auto readableReturn = [&](uint32_t address) {
+                    return address && address != messageTransferContinuationStub_ && isGuestRangeReadable(address, 4);
+                };
+                const uint32_t parkedMainPc = guestContextReg(mainThreadContext_, UC_MIPS_REG_PC);
+                const uint32_t outerReturnRa =
+                    (ra == messageTransferContinuationStub_ && !pendingMessageTransfers_.empty())
+                        ? pendingMessageTransfers_.back().outerReturnRa
+                        : (readableReturn(ra) ? ra : parkedMainPc);
+                if (ra != messageTransferContinuationStub_ && !readableReturn(ra)) {
+                    spdlog::warn("{} transfer captured unreadable return hwnd=0x{:08x} msg=0x{:08x} "
+                                 "ra=0x{:08x} outer=0x{:08x} parkedMain=0x{:08x} pendingTransfers={}",
+                                 name, hwnd, msg, ra, outerReturnRa, parkedMainPc, pendingMessageTransfers_.size());
+                }
                 pendingMessageTransfers_.push_back(PendingMessageTransfer{
                     hwnd,
                     msg,
                     ra,
+                    outerReturnRa,
                     synchronousSender,
                     releaseHostPresentAfterPaint,
                     name,

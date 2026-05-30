@@ -761,6 +761,7 @@ private:
         uint32_t hwnd{};
         uint32_t message{};
         uint32_t originalRa{};
+        uint32_t outerReturnRa{};
         uint32_t synchronousSender{};
         bool releaseHostPresentAfterPaint{};
         std::string sourceName;
@@ -815,6 +816,11 @@ private:
     uint32_t focusedWindow_ = 0;
     uint32_t capturedWindow_ = 0;
     uint32_t hostPointerCaptureWindow_ = 0;
+    int32_t hostPointerDownX_ = 0;
+    int32_t hostPointerDownY_ = 0;
+    int32_t hostPointerLastMoveX_ = 0;
+    int32_t hostPointerLastMoveY_ = 0;
+    bool hostPointerDragActive_ = false;
     uint32_t pendingSyntheticChildButtonUpWindow_ = 0;
     uint32_t strtokNext_ = 0;
     uint32_t comProxyVtable_ = 0;
@@ -1334,6 +1340,7 @@ private:
     void updateRemoteImuState(const nlohmann::json& state);
     void injectRemoteSerialBytes(const std::string& bytes);
     size_t readRemoteSerialBytes(uint8_t* dst, size_t maxBytes);
+    size_t remoteSerialByteCount() const;
     void publishRemoteAudioChunk(const std::vector<uint8_t>& pcm,
                                  uint16_t sourceFormatTag,
                                  uint32_t sourceSampleRate,
@@ -1349,6 +1356,9 @@ private:
     GuestCpuContext captureGuestCpuContext() const;
     GuestCpuContext initialGuestThreadContext(uint32_t startAddress, uint32_t parameter, uint32_t stackTop) const;
     void restoreGuestCpuContext(const GuestCpuContext& context) const;
+    uint32_t guestContextReg(const GuestCpuContext& context, int regId) const;
+    bool isGuestContextPcReadable(const GuestCpuContext& context) const;
+    bool restoreMainThreadContextIfRunnable(const char* reason);
     uint32_t createGuestThread(uint32_t startAddress, uint32_t parameter, uint32_t flags);
     uint32_t resumeGuestThread(uint32_t guestHandle);
     void wakeGuestThreadsWaitingForMessage();

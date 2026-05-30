@@ -1771,6 +1771,36 @@ void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t
                      hwnd, hostX, hostY, guestMessages_.size());
         return;
     }
+    if (message == 0x0200) {
+        if (hasQueuedPointer || !pendingMessageTransfers_.empty()) {
+            spdlog::debug("discarded host mouse move while pointer dispatch is in flight hwnd=0x{:08x} point={},{} queued={} transfers={}",
+                          hwnd, hostX, hostY, guestMessages_.size(), pendingMessageTransfers_.size());
+            return;
+        }
+        if (hostPointerCaptureWindow_) {
+            constexpr int32_t kTapJitterSlopPixels = 10;
+            constexpr int32_t kDragMoveStepPixels = 4;
+            const int32_t downDx = std::abs(hostX - hostPointerDownX_);
+            const int32_t downDy = std::abs(hostY - hostPointerDownY_);
+            if (!hostPointerDragActive_) {
+                if (std::max(downDx, downDy) < kTapJitterSlopPixels) {
+                    spdlog::debug("discarded host mouse tap-jitter move hwnd=0x{:08x} point={},{} down={},{}",
+                                  hwnd, hostX, hostY, hostPointerDownX_, hostPointerDownY_);
+                    return;
+                }
+                hostPointerDragActive_ = true;
+            }
+            const int32_t stepDx = std::abs(hostX - hostPointerLastMoveX_);
+            const int32_t stepDy = std::abs(hostY - hostPointerLastMoveY_);
+            if (std::max(stepDx, stepDy) < kDragMoveStepPixels) {
+                spdlog::debug("discarded host mouse sub-step drag move hwnd=0x{:08x} point={},{} last={},{}",
+                              hwnd, hostX, hostY, hostPointerLastMoveX_, hostPointerLastMoveY_);
+                return;
+            }
+            hostPointerLastMoveX_ = hostX;
+            hostPointerLastMoveY_ = hostY;
+        }
+    }
     if (message == 0x0200 && !hostPointerCaptureWindow_ && !hasQueuedPointer) {
         return;
     }
@@ -1855,6 +1885,11 @@ void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t
     };
     if (message == 0x0201) {
         hostPointerCaptureWindow_ = hwnd;
+        hostPointerDownX_ = hostX;
+        hostPointerDownY_ = hostY;
+        hostPointerLastMoveX_ = hostX;
+        hostPointerLastMoveY_ = hostY;
+        hostPointerDragActive_ = false;
         if (focusedWindow_ != hwnd) {
             auto focused = windows_.find(focusedWindow_);
             if (focused != windows_.end() && !focused->second.destroyed) {
@@ -1883,6 +1918,7 @@ void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t
             }
         }
         hostPointerCaptureWindow_ = 0;
+        hostPointerDragActive_ = false;
     }
     GuestMessage guest{};
     guest.hwnd = hwnd;
@@ -1968,6 +2004,18 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
         uint32_t ra = 0;
         uc_reg_read(uc_, UC_MIPS_REG_PC, &pc);
         uc_reg_read(uc_, UC_MIPS_REG_RA, &ra);
+        if ((!pc || !isGuestRangeReadable(pc, 4)) && !activeGuestThread_) {
+            if (restoreMainThreadContextIfRunnable(reason)) {
+                uc_reg_read(uc_, UC_MIPS_REG_PC, &pc);
+                uc_reg_read(uc_, UC_MIPS_REG_RA, &ra);
+            }
+        }
+        if (!pc || !isGuestRangeReadable(pc, 4)) {
+            spdlog::error("refusing to start guest slice at invalid pc reason={} pc=0x{:08x} ra=0x{:08x} "
+                          "activeThread=0x{:08x} queued={}",
+                          reason, pc, ra, activeGuestThread_, guestMessages_.size());
+            return false;
+        }
         const uint32_t startPc = pc;
         const auto sliceStart = std::chrono::steady_clock::now();
         // Guest worker threads run cooperatively on the host UI thread.  Keep
@@ -2050,6 +2098,15 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
                              stackWords[0], stackWords[1], stackWords[2], stackWords[3],
                              stackWords[4], stackWords[5], stackWords[6], stackWords[7]);
             }
+            size_t queuedIndex = 0;
+            for (const auto& queued : guestMessages_) {
+                if (queuedIndex >= 8) break;
+                spdlog::warn("interactive crash queued[{}] hwnd=0x{:08x} msg=0x{:08x} wparam=0x{:08x} "
+                             "lparam=0x{:08x} sync=0x{:08x} crossProcess={}",
+                             queuedIndex, queued.hwnd, queued.message, queued.wParam,
+                             queued.lParam, queued.synchronousSender, queued.crossProcess);
+                ++queuedIndex;
+            }
             return false;
         }
         const auto elapsedMs =
@@ -2064,6 +2121,7 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
             yieldActiveGuestThread("timeslice");
         }
         pumpHostMessages();
+        presentHostWindows(false);
         compactQueuedPointerMotion();
         enqueueDueTimers();
         return true;
@@ -2133,7 +2191,8 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
     };
     auto resumeQueuedWorkerBurst = [&]() -> bool {
         if (guestMessages_.empty() || !hasHostWindows() ||
-            hasPendingUserInput() || hasPendingSynchronousMessage()) {
+            hasPendingUserInput() || hasPendingSynchronousMessage() ||
+            !pendingMessageTransfers_.empty()) {
             return true;
         }
         if (guestMessages_.size() < 3) {
@@ -2168,19 +2227,24 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
         }
         if (remotePaused) {
             pumpHostMessages();
+            presentHostWindows(false);
             MsgWaitForMultipleObjects(0, nullptr, FALSE, 50, QS_ALLINPUT);
             continue;
         }
         pollCrossProcessGuestMessages();
         enqueueDueTimers();
+        if (!pendingMessageTransfers_.empty()) {
+            if (!resumeGuestSlice(1000000, "message-transfer")) {
+                return;
+            }
+            continue;
+        }
         if (!resumeQueuedWorkerBurst()) return;
         if (!guestMessages_.empty() && hasHostWindows()) {
             if (activeGuestThread_) {
                 yieldActiveGuestThread("queued-message-preempt");
             }
-            if (!activeGuestThread_ && mainThreadContext_.valid) {
-                updateCurrentThreadKData(mainThreadPseudoHandle_, mainThreadTls_);
-                restoreGuestCpuContext(mainThreadContext_);
+            if (!activeGuestThread_ && restoreMainThreadContextIfRunnable("queued-message")) {
                 spdlog::debug("restored parked main thread for queued messages queued={}", guestMessages_.size());
             }
             compactQueuedPointerMotion();
@@ -2204,6 +2268,7 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
             TranslateMessage(&message);
             DispatchMessageW(&message);
         }
+        presentHostWindows(false);
         if (guestMessages_.empty() && hasHostWindows() && !activeGuestThread_) {
             if (hasRunnableGuestThread()) {
                 switchToRunnableGuestThread("idle-worker");

@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -349,6 +350,35 @@ bool SyntheticDllRuntime::hasRunnableGuestThread() {
     return false;
 }
 
+uint32_t SyntheticDllRuntime::guestContextReg(const GuestCpuContext& context, int regId) const {
+    auto it = context.registers.find(regId);
+    return it == context.registers.end() ? 0 : it->second;
+}
+
+bool SyntheticDllRuntime::isGuestContextPcReadable(const GuestCpuContext& context) const {
+    if (!context.valid) return false;
+    const uint32_t pc = guestContextReg(context, UC_MIPS_REG_PC);
+    return pc && isGuestRangeReadable(pc, 4);
+}
+
+bool SyntheticDllRuntime::restoreMainThreadContextIfRunnable(const char* reason) {
+    if (!mainThreadContext_.valid) return false;
+    const uint32_t pc = guestContextReg(mainThreadContext_, UC_MIPS_REG_PC);
+    const uint32_t ra = guestContextReg(mainThreadContext_, UC_MIPS_REG_RA);
+    const uint32_t sp = guestContextReg(mainThreadContext_, UC_MIPS_REG_SP);
+    if (pc && isGuestRangeReadable(pc, 4)) {
+        updateCurrentThreadKData(mainThreadPseudoHandle_, mainThreadTls_);
+        restoreGuestCpuContext(mainThreadContext_);
+        spdlog::debug("restored parked main thread context reason={} pc=0x{:08x} ra=0x{:08x} sp=0x{:08x}",
+                      reason ? reason : "cooperate", pc, ra, sp);
+        return true;
+    }
+    spdlog::warn("discarded unreadable parked main thread context reason={} pc=0x{:08x} ra=0x{:08x} sp=0x{:08x}",
+                 reason ? reason : "cooperate", pc, ra, sp);
+    mainThreadContext_.valid = false;
+    return false;
+}
+
 bool SyntheticDllRuntime::switchToRunnableGuestThread(const char* reason,
                                                       uint32_t returnAddress,
                                                       uint32_t preferredHandle) {
@@ -364,19 +394,30 @@ bool SyntheticDllRuntime::switchToRunnableGuestThread(const char* reason,
                 }
             }
         } else {
-            mainThreadContext_ = captureGuestCpuContext();
-            if (returnAddress) mainThreadContext_.registers[UC_MIPS_REG_PC] = returnAddress;
-            const uint32_t savedPc = mainThreadContext_.registers.count(UC_MIPS_REG_PC)
-                ? mainThreadContext_.registers[UC_MIPS_REG_PC]
+            auto capturedMain = captureGuestCpuContext();
+            if (returnAddress) capturedMain.registers[UC_MIPS_REG_PC] = returnAddress;
+            const uint32_t capturedPc = capturedMain.registers.count(UC_MIPS_REG_PC)
+                ? capturedMain.registers[UC_MIPS_REG_PC]
                 : 0;
-            const uint32_t savedRa = mainThreadContext_.registers.count(UC_MIPS_REG_RA)
-                ? mainThreadContext_.registers[UC_MIPS_REG_RA]
+            const uint32_t capturedRa = capturedMain.registers.count(UC_MIPS_REG_RA)
+                ? capturedMain.registers[UC_MIPS_REG_RA]
                 : 0;
-            const uint32_t savedSp = mainThreadContext_.registers.count(UC_MIPS_REG_SP)
-                ? mainThreadContext_.registers[UC_MIPS_REG_SP]
+            const uint32_t capturedSp = capturedMain.registers.count(UC_MIPS_REG_SP)
+                ? capturedMain.registers[UC_MIPS_REG_SP]
                 : 0;
-            spdlog::debug("main thread context saved reason={} pc=0x{:08x} ra=0x{:08x} sp=0x{:08x}",
-                          reason ? reason : "cooperate", savedPc, savedRa, savedSp);
+            const bool capturedPcReadable = capturedPc && isGuestRangeReadable(capturedPc, 4);
+            if (capturedPcReadable || !mainThreadContext_.valid) {
+                mainThreadContext_ = std::move(capturedMain);
+                spdlog::debug("main thread context saved reason={} pc=0x{:08x} ra=0x{:08x} sp=0x{:08x}",
+                              reason ? reason : "cooperate", capturedPc, capturedRa, capturedSp);
+            } else {
+                const uint32_t preservedPc = mainThreadContext_.registers.count(UC_MIPS_REG_PC)
+                    ? mainThreadContext_.registers[UC_MIPS_REG_PC]
+                    : 0;
+                spdlog::warn("preserved parked main thread context reason={} currentPc=0x{:08x} currentRa=0x{:08x} "
+                             "currentSp=0x{:08x} parkedPc=0x{:08x}",
+                             reason ? reason : "cooperate", capturedPc, capturedRa, capturedSp, preservedPc);
+            }
         }
         const uint32_t threadPc = thread.context.registers.count(UC_MIPS_REG_PC)
             ? thread.context.registers.at(UC_MIPS_REG_PC)
@@ -439,11 +480,7 @@ bool SyntheticDllRuntime::yieldActiveGuestThread(const char* reason, uint32_t re
                          : 0);
     }
     activeGuestThread_ = 0;
-    if (mainThreadContext_.valid) {
-        updateCurrentThreadKData(mainThreadPseudoHandle_, mainThreadTls_);
-        restoreGuestCpuContext(mainThreadContext_);
-        return true;
-    }
+    if (restoreMainThreadContextIfRunnable(reason)) return true;
     return switchToRunnableGuestThread(reason);
 }
 
@@ -458,11 +495,7 @@ bool SyntheticDllRuntime::finishActiveGuestThread(uint32_t exitCode) {
     }
     if (lastScheduledGuestThread_ == activeGuestThread_) lastScheduledGuestThread_ = 0;
     activeGuestThread_ = 0;
-    if (mainThreadContext_.valid) {
-        updateCurrentThreadKData(mainThreadPseudoHandle_, mainThreadTls_);
-        restoreGuestCpuContext(mainThreadContext_);
-        return true;
-    }
+    if (restoreMainThreadContextIfRunnable("thread exit")) return true;
     return switchToRunnableGuestThread("thread exit");
 }
 
