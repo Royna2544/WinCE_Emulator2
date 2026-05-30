@@ -730,6 +730,7 @@ private:
         uint32_t hwnd{};
         uint32_t wndProc{};
         uint32_t originalRa{};
+        uint32_t originalGp{};
         uint32_t stage{};
         uint32_t parent{};
         bool wasVisible{};
@@ -738,6 +739,7 @@ private:
         uint32_t hwnd{};
         uint32_t wndProc{};
         uint32_t originalRa{};
+        uint32_t originalGp{};
         uint32_t createStruct{};
         uint32_t stage{};
     };
@@ -752,6 +754,7 @@ private:
         uint32_t hwnd{};
         uint32_t wndProc{};
         uint32_t originalRa{};
+        uint32_t originalGp{};
         uint32_t eraseDc{};
         uint32_t stage{};
         bool deferredHostPresent{};
@@ -761,6 +764,7 @@ private:
         uint32_t hwnd{};
         uint32_t message{};
         uint32_t originalRa{};
+        uint32_t originalGp{};
         uint32_t outerReturnRa{};
         uint32_t synchronousSender{};
         bool releaseHostPresentAfterPaint{};
@@ -1358,6 +1362,8 @@ private:
     void restoreGuestCpuContext(const GuestCpuContext& context) const;
     uint32_t guestContextReg(const GuestCpuContext& context, int regId) const;
     bool isGuestContextPcReadable(const GuestCpuContext& context) const;
+    uint32_t normalizeGuestCodeAddress(uint32_t address, const char* why = nullptr) const;
+    uint32_t guestGpForCodeAddress(uint32_t address) const;
     bool restoreMainThreadContextIfRunnable(const char* reason);
     uint32_t createGuestThread(uint32_t startAddress, uint32_t parameter, uint32_t flags);
     uint32_t resumeGuestThread(uint32_t guestHandle);

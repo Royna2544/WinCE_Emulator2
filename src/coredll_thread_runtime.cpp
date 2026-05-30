@@ -361,6 +361,34 @@ bool SyntheticDllRuntime::isGuestContextPcReadable(const GuestCpuContext& contex
     return pc && isGuestRangeReadable(pc, 4);
 }
 
+uint32_t SyntheticDllRuntime::normalizeGuestCodeAddress(uint32_t address, const char* why) const {
+    if (!address) return 0;
+    if (isGuestRangeReadable(address, 4)) return address;
+    const uint32_t slotAddress = address & 0x01ffffffu;
+    if (slotAddress && slotAddress != address && isGuestRangeReadable(slotAddress, 4)) {
+        if (why) {
+            spdlog::warn("{} normalized unreadable code address 0x{:08x} -> 0x{:08x}",
+                         why, address, slotAddress);
+        }
+        return slotAddress;
+    }
+    return address;
+}
+
+uint32_t SyntheticDllRuntime::guestGpForCodeAddress(uint32_t address) const {
+    const uint32_t normalized = normalizeGuestCodeAddress(address);
+    for (const auto& [base, module] : loadedModulesByBase_) {
+        const uint64_t begin = base;
+        const uint64_t end = begin + (module.imageSize ? module.imageSize : 0x1000u);
+        if (normalized >= begin && uint64_t(normalized) < end) {
+            return base + 0x8000u;
+        }
+    }
+    uint32_t gp = 0;
+    uc_reg_read(uc_, UC_MIPS_REG_GP, &gp);
+    return gp;
+}
+
 bool SyntheticDllRuntime::restoreMainThreadContextIfRunnable(const char* reason) {
     if (!mainThreadContext_.valid) return false;
     const uint32_t pc = guestContextReg(mainThreadContext_, UC_MIPS_REG_PC);

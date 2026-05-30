@@ -1220,8 +1220,10 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
             if (mutableEntry.calls <= 128) {
                 spdlog::debug("synthetic {}!{} -> 0x{:08x}", mutableEntry.moduleName, name, ret);
             }
+            const uint32_t returnPc = normalizeGuestCodeAddress(ra, name.c_str());
             setReg(UC_MIPS_REG_V0, ret);
-            setReg(UC_MIPS_REG_PC, ra);
+            setReg(UC_MIPS_REG_GP, guestGpForCodeAddress(returnPc));
+            setReg(UC_MIPS_REG_PC, returnPc);
             if (syncSharedMappings) syncNamedMappedViews();
             pumpHostMessages();
             cooperateGuestThreadsAfterCall(name);
@@ -1233,8 +1235,10 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
         if (mutableEntry.calls <= 128) {
             spdlog::debug("synthetic {}!{} -> 0x{:08x}", mutableEntry.moduleName, name, value);
         }
+        const uint32_t returnPc = normalizeGuestCodeAddress(ra, name.c_str());
         setReg(UC_MIPS_REG_V0, value);
-        setReg(UC_MIPS_REG_PC, ra);
+        setReg(UC_MIPS_REG_GP, guestGpForCodeAddress(returnPc));
+        setReg(UC_MIPS_REG_PC, returnPc);
         if (syncSharedMappings) syncNamedMappedViews();
         pumpHostMessages();
         if (cooperateThreads) cooperateGuestThreadsAfterCall(name);
@@ -1250,7 +1254,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                 wndProc = activeSlotProc;
             }
         }
-        return wndProc;
+        return normalizeGuestCodeAddress(wndProc, why);
     };
     auto finalizeDestroyedWindow = [&](uint32_t hwnd,
                                        std::optional<bool> visibleOverride = std::nullopt,
@@ -1329,6 +1333,8 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
         setReg(UC_MIPS_REG_A1, message.message);
         setReg(UC_MIPS_REG_A2, message.wParam);
         setReg(UC_MIPS_REG_A3, message.lParam);
+        setReg(UC_MIPS_REG_GP, guestGpForCodeAddress(wndProc));
+        setReg(UC_MIPS_REG_T9, wndProc);
         setReg(UC_MIPS_REG_RA, blockingApiContinuationStub_);
         setReg(UC_MIPS_REG_PC, wndProc);
         return true;
@@ -1338,7 +1344,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
         if (pendingDestroyWindows_.empty()) {
             spdlog::warn("DestroyWindow continuation reached with no pending window");
             setReg(UC_MIPS_REG_V0, 1);
-            setReg(UC_MIPS_REG_PC, ra);
+            setReg(UC_MIPS_REG_PC, normalizeGuestCodeAddress(ra, name.c_str()));
             return;
         }
         auto& pending = pendingDestroyWindows_.back();
@@ -1354,12 +1360,15 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
             setReg(UC_MIPS_REG_A1, 0x0082); // WM_NCDESTROY
             setReg(UC_MIPS_REG_A2, 0);
             setReg(UC_MIPS_REG_A3, 0);
+            setReg(UC_MIPS_REG_GP, guestGpForCodeAddress(wndProc));
+            setReg(UC_MIPS_REG_T9, wndProc);
             setReg(UC_MIPS_REG_RA, destroyWindowContinuationStub_);
             setReg(UC_MIPS_REG_PC, wndProc);
             return;
         }
         const uint32_t hwnd = pending.hwnd;
         const uint32_t originalRa = pending.originalRa;
+        const uint32_t originalGp = pending.originalGp;
         const uint32_t parent = pending.parent;
         const bool wasVisible = pending.wasVisible;
         pendingDestroyWindows_.pop_back();
@@ -1367,7 +1376,8 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
         lastError_ = 0;
         setReg(UC_MIPS_REG_V0, 1);
         setReg(UC_MIPS_REG_RA, originalRa);
-        setReg(UC_MIPS_REG_PC, originalRa);
+        setReg(UC_MIPS_REG_GP, originalGp);
+        setReg(UC_MIPS_REG_PC, normalizeGuestCodeAddress(originalRa, name.c_str()));
         spdlog::info("DestroyWindow synchronous destroy complete hwnd=0x{:08x} return=0x{:08x}", hwnd, originalRa);
         pumpHostMessages();
         return;
@@ -1377,7 +1387,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
         if (pendingCreateWindows_.empty()) {
             spdlog::warn("CreateWindowExW continuation reached with no pending window");
             setReg(UC_MIPS_REG_V0, 0);
-            setReg(UC_MIPS_REG_PC, ra);
+            setReg(UC_MIPS_REG_PC, normalizeGuestCodeAddress(ra, name.c_str()));
             return;
         }
         auto& pending = pendingCreateWindows_.back();
@@ -1385,13 +1395,15 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
         if (pending.stage == 0) {
             if (wndProcResult == 0) {
                 const uint32_t originalRa = pending.originalRa;
+                const uint32_t originalGp = pending.originalGp;
                 const uint32_t hwnd = pending.hwnd;
                 pendingCreateWindows_.pop_back();
                 finalizeDestroyedWindow(hwnd);
                 lastError_ = 0;
                 setReg(UC_MIPS_REG_V0, 0);
                 setReg(UC_MIPS_REG_RA, originalRa);
-                setReg(UC_MIPS_REG_PC, originalRa);
+                setReg(UC_MIPS_REG_GP, originalGp);
+                setReg(UC_MIPS_REG_PC, normalizeGuestCodeAddress(originalRa, name.c_str()));
                 spdlog::info("CreateWindowExW synchronous WM_NCCREATE rejected hwnd=0x{:08x}", hwnd);
                 pumpHostMessages();
                 return;
@@ -1407,12 +1419,15 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
             setReg(UC_MIPS_REG_A1, 0x0001); // WM_CREATE
             setReg(UC_MIPS_REG_A2, 0);
             setReg(UC_MIPS_REG_A3, pending.createStruct);
+            setReg(UC_MIPS_REG_GP, guestGpForCodeAddress(wndProc));
+            setReg(UC_MIPS_REG_T9, wndProc);
             setReg(UC_MIPS_REG_RA, createWindowContinuationStub_);
             setReg(UC_MIPS_REG_PC, wndProc);
             return;
         }
         const uint32_t hwnd = pending.hwnd;
         const uint32_t originalRa = pending.originalRa;
+        const uint32_t originalGp = pending.originalGp;
         pendingCreateWindows_.pop_back();
         auto completedWindow = windows_.find(hwnd);
         if (wndProcResult == 0xffffffffu ||
@@ -1430,7 +1445,8 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
             queueVisiblePopupPaint(hwnd);
         }
         setReg(UC_MIPS_REG_RA, originalRa);
-        setReg(UC_MIPS_REG_PC, originalRa);
+        setReg(UC_MIPS_REG_GP, originalGp);
+        setReg(UC_MIPS_REG_PC, normalizeGuestCodeAddress(originalRa, name.c_str()));
         pumpHostMessages();
         return;
     }
@@ -1439,7 +1455,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
         if (pendingBlockingApis_.empty()) {
             spdlog::warn("blocking API continuation reached with no pending call");
             setReg(UC_MIPS_REG_V0, 0);
-            setReg(UC_MIPS_REG_PC, ra);
+            setReg(UC_MIPS_REG_PC, normalizeGuestCodeAddress(ra, name.c_str()));
             return;
         }
         auto& pending = pendingBlockingApis_.back();
@@ -1464,7 +1480,8 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
         }
         setReg(UC_MIPS_REG_V0, ret);
         setReg(UC_MIPS_REG_RA, pendingCall.args.ra);
-        setReg(UC_MIPS_REG_PC, pendingCall.args.ra);
+        setReg(UC_MIPS_REG_GP, guestGpForCodeAddress(pendingCall.args.ra));
+        setReg(UC_MIPS_REG_PC, normalizeGuestCodeAddress(pendingCall.args.ra, name.c_str()));
         spdlog::info("{} resumed after cooperative paint wait=0x{:08x} timeout=0x{:08x} return=0x{:08x} ra=0x{:08x} queued={} activeThread=0x{:08x}",
                      pendingCall.name, pendingCall.args.a0, pendingCall.args.a1, ret,
                      pendingCall.args.ra, guestMessages_.size(), activeGuestThread_);
@@ -1477,7 +1494,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
         if (pendingUpdateWindows_.empty()) {
             spdlog::warn("UpdateWindow continuation reached with no pending window");
             setReg(UC_MIPS_REG_V0, 1);
-            setReg(UC_MIPS_REG_PC, ra);
+            setReg(UC_MIPS_REG_PC, normalizeGuestCodeAddress(ra, name.c_str()));
             return;
         }
         auto& pending = pendingUpdateWindows_.back();
@@ -1490,12 +1507,14 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                 pending.deferredHostPresent = false;
             }
             const uint32_t originalRa = pending.originalRa;
+            const uint32_t originalGp = pending.originalGp;
             const uint32_t hwnd = pending.hwnd;
             pendingUpdateWindows_.pop_back();
             lastError_ = 0;
             setReg(UC_MIPS_REG_V0, 1);
             setReg(UC_MIPS_REG_RA, originalRa);
-            setReg(UC_MIPS_REG_PC, originalRa);
+            setReg(UC_MIPS_REG_GP, originalGp);
+            setReg(UC_MIPS_REG_PC, normalizeGuestCodeAddress(originalRa, name.c_str()));
             spdlog::info("{} skipped invisible/destroyed hwnd=0x{:08x}", sourceName, hwnd);
             pumpHostMessages();
             return;
@@ -1510,11 +1529,14 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
             setReg(UC_MIPS_REG_A1, 0x000f); // WM_PAINT
             setReg(UC_MIPS_REG_A2, 0);
             setReg(UC_MIPS_REG_A3, 0);
+            setReg(UC_MIPS_REG_GP, guestGpForCodeAddress(wndProc));
+            setReg(UC_MIPS_REG_T9, wndProc);
             setReg(UC_MIPS_REG_RA, updateWindowContinuationStub_);
             setReg(UC_MIPS_REG_PC, wndProc);
             return;
         }
         const uint32_t originalRa = pending.originalRa;
+        const uint32_t originalGp = pending.originalGp;
         const uint32_t hwnd = pending.hwnd;
         if (pending.deferredHostPresent) {
             releaseHostErasePresentDeferral(hwnd);
@@ -1524,7 +1546,8 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
         lastError_ = 0;
         setReg(UC_MIPS_REG_V0, 1);
         setReg(UC_MIPS_REG_RA, originalRa);
-        setReg(UC_MIPS_REG_PC, originalRa);
+        setReg(UC_MIPS_REG_GP, originalGp);
+        setReg(UC_MIPS_REG_PC, normalizeGuestCodeAddress(originalRa, name.c_str()));
         spdlog::info("{} synchronous paint complete hwnd=0x{:08x} return=0x{:08x}",
                      sourceName, hwnd, originalRa);
         queueVisiblePopupPaintsAbove(hwnd);
@@ -1538,8 +1561,10 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
             spdlog::error("message transfer continuation reached with no pending message pc=0x{:08x} ra=0x{:08x} "
                           "v0=0x{:08x} queued={} activeThread=0x{:08x}",
                           pc, ra, reg(UC_MIPS_REG_V0), guestMessages_.size(), activeGuestThread_);
-            if (ra && ra != messageTransferContinuationStub_ && isGuestRangeReadable(ra, 4)) {
-                setReg(UC_MIPS_REG_PC, ra);
+            const uint32_t normalizedRa = normalizeGuestCodeAddress(ra, name.c_str());
+            if (normalizedRa && normalizedRa != messageTransferContinuationStub_ &&
+                isGuestRangeReadable(normalizedRa, 4)) {
+                setReg(UC_MIPS_REG_PC, normalizedRa);
             } else if (restoreMainThreadContextIfRunnable("empty-message-transfer-continuation")) {
                 return;
             } else if (switchToRunnableGuestThread("empty-message-transfer-continuation")) {
@@ -1603,15 +1628,17 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
             presentHostWindows(true);
         }
         auto readableReturn = [&](uint32_t address) {
-            return address && address != messageTransferContinuationStub_ && isGuestRangeReadable(address, 4);
+            const uint32_t normalized = normalizeGuestCodeAddress(address, pending.sourceName.c_str());
+            return normalized && normalized != messageTransferContinuationStub_ &&
+                   isGuestRangeReadable(normalized, 4);
         };
-        uint32_t returnRa = pending.originalRa;
+        uint32_t returnRa = normalizeGuestCodeAddress(pending.originalRa, pending.sourceName.c_str());
         if (returnRa == messageTransferContinuationStub_ && pendingMessageTransfers_.empty()) {
             if (readableReturn(pending.outerReturnRa)) {
                 spdlog::warn("{} collapsed orphaned message-transfer continuation hwnd=0x{:08x} msg=0x{:08x} "
                              "result=0x{:08x} return=0x{:08x}",
                              pending.sourceName, pending.hwnd, pending.message, wndProcResult, pending.outerReturnRa);
-                returnRa = pending.outerReturnRa;
+                returnRa = normalizeGuestCodeAddress(pending.outerReturnRa, pending.sourceName.c_str());
             } else {
                 spdlog::error("{} cannot resolve orphaned message-transfer continuation hwnd=0x{:08x} msg=0x{:08x} "
                               "result=0x{:08x} queued={} activeThread=0x{:08x}",
@@ -1628,7 +1655,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                              "result=0x{:08x} return=0x{:08x} outer=0x{:08x}",
                              pending.sourceName, pending.hwnd, pending.message, wndProcResult,
                              returnRa, pending.outerReturnRa);
-                returnRa = pending.outerReturnRa;
+                returnRa = normalizeGuestCodeAddress(pending.outerReturnRa, pending.sourceName.c_str());
             } else if (restoreMainThreadContextIfRunnable("invalid-message-transfer-return")) {
                 spdlog::warn("{} restored parked main context after unreadable message-transfer return hwnd=0x{:08x} "
                              "msg=0x{:08x} result=0x{:08x} return=0x{:08x} outer=0x{:08x}",
@@ -1652,7 +1679,8 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
             }
         }
         setReg(UC_MIPS_REG_RA, returnRa);
-        setReg(UC_MIPS_REG_PC, returnRa);
+        setReg(UC_MIPS_REG_GP, pending.originalGp);
+        setReg(UC_MIPS_REG_PC, normalizeGuestCodeAddress(returnRa, pending.sourceName.c_str()));
         return;
     }
 
@@ -1694,7 +1722,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
             }
             const uint32_t wndProc = translatedWndProc(window->second.wndProc, "CreateWindowExW");
             pendingCreateWindows_.push_back(PendingCreateWindow{
-                ret, wndProc, ra, window->second.createStruct, 0,
+                ret, wndProc, ra, reg(UC_MIPS_REG_GP), window->second.createStruct, 0,
             });
             spdlog::info("CreateWindowExW synchronous WM_NCCREATE hwnd=0x{:08x} wndproc=0x{:08x} return=0x{:08x}",
                          ret, wndProc, ra);
@@ -1702,6 +1730,8 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
             setReg(UC_MIPS_REG_A1, 0x0081); // WM_NCCREATE
             setReg(UC_MIPS_REG_A2, 0);
             setReg(UC_MIPS_REG_A3, window->second.createStruct);
+            setReg(UC_MIPS_REG_GP, guestGpForCodeAddress(wndProc));
+            setReg(UC_MIPS_REG_T9, wndProc);
             setReg(UC_MIPS_REG_RA, createWindowContinuationStub_);
             setReg(UC_MIPS_REG_PC, wndProc);
             return;
@@ -1729,13 +1759,16 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
             ensureHostWindow(a0, it->second);
             const uint32_t eraseDc = makeGuestDc(a0);
             const bool deferredHostPresent = beginHostErasePresentDeferral(a0);
-            pendingUpdateWindows_.push_back(PendingUpdateWindow{a0, wndProc, ra, eraseDc, 0, deferredHostPresent, "UpdateWindow"});
+            pendingUpdateWindows_.push_back(PendingUpdateWindow{
+                a0, wndProc, ra, reg(UC_MIPS_REG_GP), eraseDc, 0, deferredHostPresent, "UpdateWindow"});
             spdlog::info("UpdateWindow synchronous WM_ERASEBKGND hwnd=0x{:08x} wndproc=0x{:08x}",
                          a0, wndProc);
             setReg(UC_MIPS_REG_A0, a0);
             setReg(UC_MIPS_REG_A1, 0x0014); // WM_ERASEBKGND
             setReg(UC_MIPS_REG_A2, eraseDc);
             setReg(UC_MIPS_REG_A3, 0);
+            setReg(UC_MIPS_REG_GP, guestGpForCodeAddress(wndProc));
+            setReg(UC_MIPS_REG_T9, wndProc);
             setReg(UC_MIPS_REG_RA, updateWindowContinuationStub_);
             setReg(UC_MIPS_REG_PC, wndProc);
             return;
@@ -1764,13 +1797,16 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                 finishImmediateReturn(1);
                 return;
             }
-            pendingDestroyWindows_.push_back(PendingDestroyWindow{a0, wndProc, ra, 0, parent, wasVisible});
+            pendingDestroyWindows_.push_back(PendingDestroyWindow{
+                a0, wndProc, ra, reg(UC_MIPS_REG_GP), 0, parent, wasVisible});
             spdlog::info("DestroyWindow synchronous WM_DESTROY hwnd=0x{:08x} wndproc=0x{:08x} return=0x{:08x}",
                          a0, wndProc, ra);
             setReg(UC_MIPS_REG_A0, a0);
             setReg(UC_MIPS_REG_A1, 0x0002); // WM_DESTROY
             setReg(UC_MIPS_REG_A2, 0);
             setReg(UC_MIPS_REG_A3, 0);
+            setReg(UC_MIPS_REG_GP, guestGpForCodeAddress(wndProc));
+            setReg(UC_MIPS_REG_T9, wndProc);
             setReg(UC_MIPS_REG_RA, destroyWindowContinuationStub_);
             setReg(UC_MIPS_REG_PC, wndProc);
             return;
@@ -2318,11 +2354,14 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                     hwnd,
                     msg,
                     ra,
+                    reg(UC_MIPS_REG_GP),
                     outerReturnRa,
                     synchronousSender,
                     releaseHostPresentAfterPaint,
                     name,
                 });
+                setReg(UC_MIPS_REG_GP, guestGpForCodeAddress(wndProc));
+                setReg(UC_MIPS_REG_T9, wndProc);
                 setReg(UC_MIPS_REG_RA, messageTransferContinuationStub_);
             } else if (deferredHostPresentForErase) {
                 releaseHostErasePresentDeferral(hwnd);
