@@ -102,6 +102,11 @@ Current emulator difference:
   pruning, and pending-message cleanup during destroy. The 2026-05-30 Release
   build passed after this erase migration with the same Boost Beast warning
   from `remote_server.cpp`.
+- First-match queue peek/dequeue operations now route through
+  `CeGwe::firstMatching`, covering blocking paint dispatch and
+  `GetMessageW`/`PeekMessageW` filtering while preserving the current match
+  predicates and remove flags. The 2026-05-30 Release build passed after this
+  dequeue migration with the same Boost Beast warning from `remote_server.cpp`.
 
 ## Threading And Message Queues
 

@@ -82,6 +82,8 @@ file-name shortcuts, route-screen shortcuts, or coordinate-specific fixes.
   - [x] Route front/priority message insertion through named `CeGwe` queue
     helpers.
   - [x] Route simple queued-message pruning through `CeGwe::eraseIf`.
+  - [x] Route first-match dequeue/peek operations through
+    `CeGwe::firstMatching`.
   - [ ] Replace direct runtime deque operations with named `CeGwe` queue
     methods in small behavior-preserving batches.
 - [ ] Add per-thread or per-owner queues aligned with CE `MsgQueue`

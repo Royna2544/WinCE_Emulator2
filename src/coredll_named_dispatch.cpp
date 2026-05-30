@@ -3807,10 +3807,9 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                 }
                 return true;
             };
-            auto it = std::find_if(guestMessages_.begin(), guestMessages_.end(), matchesFilter);
-            if (it == guestMessages_.end()) return false;
-            message = *it;
-            if (!peek || (removeFlags & 1)) guestMessages_.erase(it);
+            auto queued = ceGwe_.firstMatching(matchesFilter, !peek || (removeFlags & 1));
+            if (!queued) return false;
+            message = *queued;
             return true;
         };
         haveMessage = takeMessage();

@@ -1303,19 +1303,17 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                    msg == 0x0018 || // WM_SHOWWINDOW
                    msg == 0x0113;   // WM_TIMER
         };
-        auto queued = std::find_if(guestMessages_.begin(), guestMessages_.end(),
-                                   [&](const GuestMessage& message) {
-                                       if (!isPaintish(message.message)) return false;
-                                       auto window = windows_.find(message.hwnd);
-                                       if (window == windows_.end() || window->second.destroyed || !window->second.wndProc) {
-                                           return false;
-                                       }
-                                       const bool paintMessage = message.message == 0x0014 || message.message == 0x000f;
-                                       return !paintMessage || !hasCoveringRootPopup(message.hwnd);
-                                   });
-        if (queued == guestMessages_.end()) return false;
+        auto queued = ceGwe_.firstMatching([&](const GuestMessage& message) {
+            if (!isPaintish(message.message)) return false;
+            auto window = windows_.find(message.hwnd);
+            if (window == windows_.end() || window->second.destroyed || !window->second.wndProc) {
+                return false;
+            }
+            const bool paintMessage = message.message == 0x0014 || message.message == 0x000f;
+            return !paintMessage || !hasCoveringRootPopup(message.hwnd);
+        }, true);
+        if (!queued) return false;
         const GuestMessage message = *queued;
-        guestMessages_.erase(queued);
         auto window = windows_.find(message.hwnd);
         uint32_t wndProc = translatedWndProc(window->second.wndProc, pending.name.c_str());
         if (message.message == 0x0014) {

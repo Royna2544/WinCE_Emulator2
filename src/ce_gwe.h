@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <optional>
 #include <string_view>
 
 class CeGwe {
@@ -59,6 +60,17 @@ public:
             }
         }
         return oldSize - messages_.size();
+    }
+
+    template <typename Predicate>
+    std::optional<GuestMessage> firstMatching(Predicate predicate, bool remove) {
+        for (auto it = messages_.begin(); it != messages_.end(); ++it) {
+            if (!predicate(*it)) continue;
+            GuestMessage message = *it;
+            if (remove) messages_.erase(it);
+            return message;
+        }
+        return std::nullopt;
     }
 
 private:
