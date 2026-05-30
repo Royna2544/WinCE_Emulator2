@@ -1065,7 +1065,7 @@ void SyntheticDllRuntime::queueGuestPaint(uint32_t hwnd, bool erase) {
             eraseMessage.message = 0x0014; // WM_ERASEBKGND
             eraseMessage.wParam = makeGuestDc(hwnd);
             eraseMessage.time = uint32_t(++tick_ * 16);
-            ceGwe_.postMessage(eraseMessage);
+            ceGwe_.postPostedMessage(eraseMessage);
         }
     }
     if (!hasQueued(0x000f)) {
@@ -1073,7 +1073,7 @@ void SyntheticDllRuntime::queueGuestPaint(uint32_t hwnd, bool erase) {
         paint.hwnd = hwnd;
         paint.message = 0x000f; // WM_PAINT
         paint.time = uint32_t(++tick_ * 16);
-        ceGwe_.postMessage(paint);
+        ceGwe_.postPostedMessage(paint);
     }
     invalidateHostWindows();
 }
@@ -1114,7 +1114,7 @@ void SyntheticDllRuntime::queueVisibleFullScreenPopupPaint(uint32_t hwnd) {
         show.message = 0x0018; // WM_SHOWWINDOW
         show.wParam = 1;
         show.time = uint32_t(++tick_ * 16);
-        ceGwe_.postMessage(show);
+        ceGwe_.postPostedMessage(show);
     }
     queueGuestPaint(hwnd, true);
     prioritizeQueuedWindowMessages(hwnd);
@@ -1142,7 +1142,7 @@ void SyntheticDllRuntime::queueVisiblePopupPaint(uint32_t hwnd) {
         show.message = 0x0018; // WM_SHOWWINDOW
         show.wParam = 1;
         show.time = uint32_t(++tick_ * 16);
-        ceGwe_.postMessage(show);
+        ceGwe_.postPostedMessage(show);
     }
     queueGuestPaint(hwnd, true);
     size_t discardedMouseMoves = 0;
@@ -1548,7 +1548,7 @@ void SyntheticDllRuntime::enqueueDueTimers() {
         message.wParam = timer.id;
         message.lParam = timer.callback;
         message.time = uint32_t(++tick_ * 16);
-        ceGwe_.postMessage(message);
+        ceGwe_.postTimerMessage(message);
         const uint32_t interval = std::max<uint32_t>(1, timer.intervalMs);
         do {
             timer.nextDueMs += interval;
@@ -1851,7 +1851,7 @@ void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t
                 return queued.hwnd == input.hwnd && mustRunBeforeInputForSameWindow(queued.message);
             });
         if (hasPendingLifecycleForTarget) {
-            ceGwe_.postMessage(input);
+            ceGwe_.postInputMessage(input);
             compactQueuedPointerMotion();
             return;
         }

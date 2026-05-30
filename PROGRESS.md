@@ -154,6 +154,20 @@ Current emulator difference:
   `captures/inavi_autodrive_20260530_185114`; startup window capture completed
   and the high-signal log scan found no new zero-PC fatal, hard-error, or
   unsupported coredll ordinal lines.
+- `CeGwe` now exposes semantic posting entry points for posted, input, thread,
+  and timer messages. These still feed the existing backing queue, but callers
+  no longer have to express all queue producers as generic posts. This prepares
+  the later split into CE-style posted/input/timer/sent queues without changing
+  delivery order yet. Current source references:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_gwe.h`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_named_dispatch.cpp`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp`, and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/remote_server.cpp`.
+  The 2026-05-30 Release build passed with the same Boost Beast warning.
+  Bounded autodrive with the companion enabled wrote
+  `captures/inavi_autodrive_20260530_185430`; startup capture completed and
+  the high-signal log scan found no new zero-PC fatal, hard-error, unsupported
+  coredll ordinal, or deadlock lines.
 
 ## Threading And Message Queues
 

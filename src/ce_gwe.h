@@ -56,6 +56,10 @@ public:
     const std::map<uint32_t, ThreadQueue>& threadQueues() const noexcept { return threadQueues_; }
     void postMessage(const GuestMessage& message) { messages_.push_back(message); }
     void postMessage(GuestMessage&& message) { messages_.push_back(message); }
+    void postPostedMessage(const GuestMessage& message) { postMessage(message); }
+    void postInputMessage(const GuestMessage& message) { postMessage(message); }
+    void postThreadMessage(const GuestMessage& message) { postMessage(message); }
+    void postTimerMessage(const GuestMessage& message) { postMessage(message); }
     void postFront(const GuestMessage& message) { messages_.push_front(message); }
 
     template <typename Predicate>

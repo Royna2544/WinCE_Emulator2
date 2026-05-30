@@ -161,8 +161,8 @@ bool SyntheticDllRuntime::handleGetForegroundWindow(SyntheticExportCode, const G
 
 bool SyntheticDllRuntime::handleSetForegroundWindow(SyntheticExportCode, const GuestCallArgs& args, uint32_t& ret) {
     if (windows_.count(args.a0)) {
-        ceGwe_.postMessage({args.a0, 0x0006, 1, 0, uint32_t(++tick_ * 16), 0, 0});
-        ceGwe_.postMessage({args.a0, 0x0007, 0, 0, uint32_t(++tick_ * 16), 0, 0});
+        ceGwe_.postPostedMessage({args.a0, 0x0006, 1, 0, uint32_t(++tick_ * 16), 0, 0});
+        ceGwe_.postPostedMessage({args.a0, 0x0007, 0, 0, uint32_t(++tick_ * 16), 0, 0});
         focusedWindow_ = args.a0;
         lastError_ = 0;
         ret = 1;
