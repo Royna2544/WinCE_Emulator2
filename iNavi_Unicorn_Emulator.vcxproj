@@ -66,6 +66,9 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="src\ce_gwe.cpp" />
+    <ClCompile Include="src\ce_kernel.cpp" />
+    <ClCompile Include="src\ce_mgdi.cpp" />
     <ClCompile Include="src\coredll_bitmap.cpp" />
     <ClCompile Include="src\coredll_host_audio.cpp" />
     <ClCompile Include="src\coredll_comm.cpp" />
@@ -99,6 +102,9 @@
     <ClCompile Include="src\synthetic_dll_winsock.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="src\ce_gwe.h" />
+    <ClInclude Include="src\ce_kernel.h" />
+    <ClInclude Include="src\ce_mgdi.h" />
     <ClInclude Include="src\synthetic_dll.h" />
     <ClInclude Include="third_party\NVIDIAImageScaling\NIS\NIS_Config.h" />
     <ClInclude Include="third_party\NVIDIAImageScaling\NIS\NIS_Scaler.h" />

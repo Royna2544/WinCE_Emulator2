@@ -6,6 +6,8 @@ This file was reset to track the CE coredll/GWE behavior-modeling work. Do not
 add app-specific shortcuts here. Use CE source references and current emulator
 line references when changing behavior.
 
+Active refactor checklist: `PLAN.md`.
+
 ## Immediate
 
 1. Introduce a CE-shaped internal `MsgQueue` model.

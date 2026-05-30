@@ -32,6 +32,10 @@ Current emulator difference:
   state, scheduling, host presentation, and several device shims inside
   `SyntheticDllRuntime`. This is acceptable for emulation, but it means CE's
   subsystem boundaries are currently flattened.
+- Build-only `CeKernel`, `CeGwe`, and `CeMgdi` scaffolds now exist and are
+  wired into `iNavi_Unicorn_Emulator.vcxproj`. No runtime behavior has moved
+  into those scaffolds yet. The 2026-05-30 Release build passed with one
+  pre-existing Boost Beast warning from `remote_server.cpp`.
 
 ## Threading And Message Queues
 
