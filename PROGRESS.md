@@ -91,6 +91,12 @@ Current emulator difference:
   for later named queue APIs. The 2026-05-30 Release build passed after this
   append-post migration with the same Boost Beast warning from
   `remote_server.cpp`.
+- Front and priority queue insertion now routes through `CeGwe::postFront`,
+  `postAfterLeadingMatches`, and `postBeforeFirstMatch`. This preserves the
+  current popup-priority, input-priority, and synchronous-send insertion order
+  while moving insertion ownership behind GWE. The 2026-05-30 Release build
+  passed after this insertion migration with the same Boost Beast warning from
+  `remote_server.cpp`.
 
 ## Threading And Message Queues
 

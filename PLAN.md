@@ -79,6 +79,8 @@ file-name shortcuts, route-screen shortcuts, or coordinate-specific fixes.
     through it.
   - [x] Route remaining append-style message producers through
     `CeGwe::postMessage`.
+  - [x] Route front/priority message insertion through named `CeGwe` queue
+    helpers.
   - [ ] Replace direct runtime deque operations with named `CeGwe` queue
     methods in small behavior-preserving batches.
 - [ ] Add per-thread or per-owner queues aligned with CE `MsgQueue`

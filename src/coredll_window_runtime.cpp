@@ -1089,7 +1089,7 @@ void SyntheticDllRuntime::prioritizeQueuedWindowMessages(uint32_t hwnd) {
         }
     }
     while (!selected.empty()) {
-        guestMessages_.push_front(selected.back());
+        ceGwe_.postFront(selected.back());
         selected.pop_back();
     }
 }
@@ -1876,11 +1876,7 @@ void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t
             compactQueuedPointerMotion();
             return;
         }
-        auto insertAt = guestMessages_.begin();
-        while (insertAt != guestMessages_.end() && isInputPriority(*insertAt)) {
-            ++insertAt;
-        }
-        guestMessages_.insert(insertAt, input);
+        ceGwe_.postAfterLeadingMatches(input, isInputPriority);
         compactQueuedPointerMotion();
     };
     if (message == 0x0201) {

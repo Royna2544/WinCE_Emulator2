@@ -2173,11 +2173,9 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                 message.lParam = lParam;
                 message.time = uint32_t(++tick_ * 16);
                 message.synchronousSender = ceKernel_.activeGuestThread();
-                auto insertAt = std::find_if(guestMessages_.begin(), guestMessages_.end(),
-                                             [](const GuestMessage& queued) {
-                                                 return queued.synchronousSender == 0;
-                                             });
-                guestMessages_.insert(insertAt, message);
+                ceGwe_.postBeforeFirstMatch(message, [](const GuestMessage& queued) {
+                    return queued.synchronousSender == 0;
+                });
                 wakeGuestThreadsWaitingForMessage();
                 lastError_ = 0;
                 const uint32_t senderHandle = ceKernel_.activeGuestThread();

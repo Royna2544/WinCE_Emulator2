@@ -27,6 +27,25 @@ public:
     const std::deque<GuestMessage>& messages() const noexcept { return messages_; }
     void postMessage(const GuestMessage& message) { messages_.push_back(message); }
     void postMessage(GuestMessage&& message) { messages_.push_back(message); }
+    void postFront(const GuestMessage& message) { messages_.push_front(message); }
+
+    template <typename Predicate>
+    void postAfterLeadingMatches(const GuestMessage& message, Predicate predicate) {
+        auto it = messages_.begin();
+        while (it != messages_.end() && predicate(*it)) {
+            ++it;
+        }
+        messages_.insert(it, message);
+    }
+
+    template <typename Predicate>
+    void postBeforeFirstMatch(const GuestMessage& message, Predicate predicate) {
+        auto it = messages_.begin();
+        while (it != messages_.end() && !predicate(*it)) {
+            ++it;
+        }
+        messages_.insert(it, message);
+    }
 
 private:
     std::deque<GuestMessage> messages_;
