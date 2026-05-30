@@ -622,6 +622,20 @@ Current emulator difference:
   `captures/inavi_autodrive_20260530_213738`; `00_initial.png` was captured at
   816x519 and the high-signal capture scan found no new unsupported coredll
   ordinal, hard-error, invalid mapping, false zero-PC, or deadlock markers.
+- `CeMgdi` now mirrors region metadata as GDI object state. `CreateRectRgn`
+  publishes simple bounds, `CombineRgn` refreshes the destination bounds from
+  the host region box, region `DeleteObject` tears down the MGDI mirror, and
+  successful `SetWindowRgn` ownership transfer removes the adopted region from
+  MGDI as well as the kernel handle table. CE reference:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/MGDI/INC/gdiobj.h:358`.
+  Current source references:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_mgdi.h:76` and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_named_dispatch.cpp:2531`.
+  The 2026-05-30 Release build passed with the pre-existing Boost Beast
+  warning from `remote_server.cpp`. Bounded autodrive wrote
+  `captures/inavi_autodrive_20260530_214126`; `00_initial.png` was captured at
+  816x519 and the high-signal capture scan found no new unsupported coredll
+  ordinal, hard-error, invalid mapping, false zero-PC, or deadlock markers.
 - The touched MGDI bitmap/DC path now uses named local constants for GDI stock
   object IDs and the `BITMAP` metadata byte count instead of raw values in the
   migrated code. Current source references:

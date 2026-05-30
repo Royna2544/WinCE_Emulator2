@@ -247,6 +247,9 @@ results, or timing thresholds.
     `Ellipse`, `FillRect`, `PatBlt`, `Rectangle`, and `LineTo` through
     `CeMgdi` object state. Current source anchor:
     `src/coredll_named_dispatch.cpp`.
+  - [x] Mirror region bounds/ownership into `CeMgdi` for `CreateRectRgn`,
+    `CombineRgn`, region `DeleteObject`, and `SetWindowRgn` transfer. Current
+    source anchors: `src/ce_mgdi.h` and `src/coredll_named_dispatch.cpp`.
 - [ ] Add app clip, system clip, and actual device clip state before adding
   more blit optimizations. CE source anchor:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/MGDI/INC/dc.hpp:13`.

@@ -73,6 +73,12 @@ public:
         bool stock{};
     };
 
+    struct RegionState {
+        uint32_t hregion{};
+        bool hasBounds{};
+        Rect bounds;
+    };
+
     struct WindowBitmapState {
         uint32_t hwnd{};
         Rect viewport;
@@ -354,6 +360,25 @@ public:
         return it == fontStates_.end() ? nullptr : &it->second;
     }
 
+    void trackRegion(const RegionState& region) {
+        if (!region.hregion) return;
+        regionStates_[region.hregion] = region;
+    }
+
+    void destroyRegion(uint32_t hregion) {
+        regionStates_.erase(hregion);
+    }
+
+    RegionState* regionState(uint32_t hregion) {
+        auto it = regionStates_.find(hregion);
+        return it == regionStates_.end() ? nullptr : &it->second;
+    }
+
+    const RegionState* regionState(uint32_t hregion) const {
+        auto it = regionStates_.find(hregion);
+        return it == regionStates_.end() ? nullptr : &it->second;
+    }
+
     void updateWindowBitmap(uint32_t hwnd, Rect viewport, std::optional<Rect> systemClip) {
         if (!hwnd) return;
         auto& state = windowBitmapStates_[hwnd];
@@ -400,5 +425,6 @@ private:
     std::map<uint32_t, BrushState> brushStates_;
     std::map<uint32_t, PenState> penStates_;
     std::map<uint32_t, FontState> fontStates_;
+    std::map<uint32_t, RegionState> regionStates_;
     std::map<uint32_t, WindowBitmapState> windowBitmapStates_;
 };

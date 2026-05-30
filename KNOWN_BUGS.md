@@ -210,6 +210,8 @@ Status:
   MGDI, with host text font selection and brush/pen/font `DeleteObject` stock
   checks reading that MGDI metadata. Brush/pen drawing metadata reads for
   polygon, polyline, ellipse, fill, pat-blit, rectangle, and line drawing now
-  also read through MGDI object state. The bug remains open until more pixel
-  storage/DC object ownership moves behind MGDI instead of runtime GDI-object
-  maps and saved backing heuristics remaining the clipping truth.
+  also read through MGDI object state. Region bounds/ownership now mirror into
+  MGDI for `CreateRectRgn`, `CombineRgn`, region deletion, and `SetWindowRgn`
+  transfer. The bug remains open until more pixel storage/DC object ownership
+  moves behind MGDI instead of runtime GDI-object maps and saved backing
+  heuristics remaining the clipping truth.

@@ -2528,6 +2528,13 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
         ret = makeGuestHandle({GuestHandle::Kind::HostRegion, 0, 0});
         lastError_ = ret ? 0 : 8;
 #endif
+        if (ret) {
+            ceMgdi_.trackRegion(CeMgdi::RegionState{
+                ret,
+                true,
+                CeMgdi::Rect{int32_t(a0), int32_t(a1), int32_t(a2), int32_t(a3)}
+            });
+        }
         break;
     }
     case ord(CoredllOrdinal::CombineRgn):
@@ -2552,6 +2559,17 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                                       reinterpret_cast<HRGN>(src1->second.hostValue),
                                       hostSrc2,
                                       int(a3)));
+            if (ret) {
+                RECT box{};
+                const int boxType = GetRgnBox(reinterpret_cast<HRGN>(dest->second.hostValue), &box);
+                if (boxType) {
+                    ceMgdi_.trackRegion(CeMgdi::RegionState{
+                        a0,
+                        true,
+                        CeMgdi::Rect{box.left, box.top, box.right, box.bottom}
+                    });
+                }
+            }
             lastError_ = ret ? 0 : GetLastError();
         }
 #else
@@ -2676,6 +2694,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
 #if defined(_WIN32)
             if (object->second.hostValue) DeleteObject(reinterpret_cast<HRGN>(object->second.hostValue));
 #endif
+            ceMgdi_.destroyRegion(a0);
             ceKernel_.handles().erase(object);
             ret = 1;
             lastError_ = 0;
@@ -3505,6 +3524,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                 hostOk = SetWindowRgn(reinterpret_cast<HWND>(it->second.hostHwnd), region, a2 != 0) != 0;
                 if (hostOk && regionHandle != ceKernel_.handles().end()) {
                     regionHandle->second.hostValue = 0;
+                    ceMgdi_.destroyRegion(a1);
                     ceKernel_.handles().erase(regionHandle);
                 }
             }
