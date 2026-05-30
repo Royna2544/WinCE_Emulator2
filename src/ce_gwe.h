@@ -65,9 +65,41 @@ public:
     void unregisterWindow(uint32_t hwnd) { windowOwners_.erase(hwnd); }
     uint32_t ownerForWindow(uint32_t hwnd) const {
         auto it = windowOwners_.find(hwnd);
-        return it == windowOwners_.end() ? 0 : it->second;
+        return it == windowOwners_.end() ? kNoOwnerThread : it->second;
+    }
+    uint32_t ownerForMessage(const GuestMessage& message) const {
+        const auto owner = messageOwners_.find(message.queueId);
+        if (owner != messageOwners_.end()) return owner->second;
+        return message.hwnd ? ownerForWindow(message.hwnd) : kNoOwnerThread;
     }
     const std::map<uint32_t, ThreadQueue>& threadQueues() const noexcept { return threadQueues_; }
+    static size_t laneMessageCount(const ThreadQueue& queue, MessageQueueKind kind) noexcept {
+        switch (kind) {
+        case MessageQueueKind::Sent:
+            return queue.sent.size();
+        case MessageQueueKind::Input:
+            return queue.input.size();
+        case MessageQueueKind::Timer:
+            return queue.timers.size();
+        case MessageQueueKind::Thread:
+            return queue.thread.size();
+        case MessageQueueKind::Posted:
+        default:
+            return queue.posted.size();
+        }
+    }
+    size_t messageCountForOwner(uint32_t ownerThread) const noexcept {
+        const auto queue = threadQueues_.find(ownerThread);
+        if (queue == threadQueues_.end()) return 0;
+        return queue->second.posted.size() +
+               queue->second.sent.size() +
+               queue->second.input.size() +
+               queue->second.timers.size() +
+               queue->second.thread.size();
+    }
+    bool hasMessagesForOwner(uint32_t ownerThread) const noexcept {
+        return messageCountForOwner(ownerThread) != 0;
+    }
     void postMessage(const GuestMessage& message) { postBack(message, MessageQueueKind::Posted); }
     void postMessage(GuestMessage&& message) { postBack(message, MessageQueueKind::Posted); }
     void postPostedMessage(const GuestMessage& message) { postBack(message, MessageQueueKind::Posted); }
@@ -178,6 +210,18 @@ public:
         return std::nullopt;
     }
 
+    template <typename Predicate>
+    std::optional<GuestMessage> firstMatchingForOwner(uint32_t ownerThread,
+                                                      Predicate predicate,
+                                                      bool remove) {
+        return firstMatching([&](const GuestMessage& message) {
+            if (ownerThread != kNoOwnerThread && ownerForMessage(message) != ownerThread) {
+                return false;
+            }
+            return predicate(message);
+        }, remove);
+    }
+
     template <typename Visitor>
     void forEachMessage(Visitor visitor) const {
         size_t index = 0;
@@ -214,10 +258,10 @@ private:
         queued.queueKind = kind;
         if (ownerThread) {
             messageOwners_[queued.queueId] = ownerThread;
-        } else if (queued.hwnd) {
-            const uint32_t windowOwner = ownerForWindow(queued.hwnd);
-            if (windowOwner) {
-                messageOwners_[queued.queueId] = windowOwner;
+        } else {
+            const uint32_t messageOwner = ownerForMessage(queued);
+            if (messageOwner != kNoOwnerThread) {
+                messageOwners_[queued.queueId] = messageOwner;
             }
         }
         return queued;

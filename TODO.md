@@ -24,8 +24,9 @@ Active refactor checklist: `PLAN.md`.
      queues instead of treating all guest messages as one mostly global deque.
    - Current status: `CeGwe` now has owner-thread lane mirrors for posted,
      sent, input, timer, and thread messages, but `GetMessageW`/`PeekMessageW`
-     still consume the flat queue as dispatch truth. Next step is to make
-     selection owner-thread-aware without changing CE-visible order.
+     still consume the flat queue as dispatch truth. Owner-filtered query
+     helpers now exist; next step is to make selection owner-thread-aware
+     without changing CE-visible order.
 
 2. Model cross-thread `SendMessageW` as a queue transaction.
    - CE reference:

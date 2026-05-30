@@ -103,6 +103,9 @@ results, or timing thresholds.
     the dispatch source. Current source anchors: `src/ce_gwe.h`,
     `src/synthetic_dll.cpp`, `src/coredll_named_dispatch.cpp`, and
     `src/coredll_window_runtime.cpp`.
+  - [x] Add owner/lane query helpers and owner-filtered first-match selection
+    in `CeGwe` as the staging API for migrating `GetMessageW`/`PeekMessageW`
+    off flat global matching.
 - [ ] Route `PostMessageW`, thread messages, input messages, timers,
   `GetMessageW`, `PeekMessageW`, `DispatchMessageW`, and
   `MsgWaitForMultipleObjectsEx` through `CeGwe`.

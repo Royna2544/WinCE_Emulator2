@@ -192,6 +192,16 @@ Current emulator difference:
   the high-signal log scan found no new hard-error, unsupported coredll
   ordinal, or false zero-PC success lines. `DeviceParser.exe` still exited via
   the decoded CE kernel path.
+- `CeGwe` now exposes owner/lane query helpers and an owner-filtered
+  first-match API for the next `GetMessageW`/`PeekMessageW` migration step.
+  This does not change dispatch behavior yet; it gives runtime code a
+  CE-shaped query surface before selection is switched away from the flat
+  queue. Current source references:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_gwe.h:70`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_gwe.h:76`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_gwe.h:91`, and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_gwe.h:213`.
+  The 2026-05-30 Release build passed with the same Boost Beast warning.
 
 ## Threading And Message Queues
 
