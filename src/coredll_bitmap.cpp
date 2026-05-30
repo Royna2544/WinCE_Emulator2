@@ -1426,21 +1426,22 @@ bool SyntheticDllRuntime::handleSetDIBColorTable(const GuestCallArgs& args, uint
 }
 
 bool SyntheticDllRuntime::handleSetBitmapBits(const GuestCallArgs& args, uint32_t& ret) {
-    auto bitmap = bitmaps_.find(args.a0);
-    if (bitmap == bitmaps_.end() || !args.a2) {
-        lastError_ = bitmap == bitmaps_.end() ? 6 : 87;
+    const CeMgdi::BitmapState* bitmap = ceMgdi_.bitmapState(args.a0);
+    if (!bitmap || !args.a2) {
+        lastError_ = bitmap ? 87 : 6;
         ret = 0;
         return true;
     }
 
-    GuestBitmap& bm = bitmap->second;
-    const uint32_t height = uint32_t(bm.heightRaw < 0 ? -bm.heightRaw : bm.heightRaw);
-    const uint32_t byteCount = std::min<uint32_t>(args.a1, bm.stride * height);
+    const uint64_t storageBytes = CeMgdi::bitmapStorageByteCount(*bitmap);
+    const uint32_t cappedStorageBytes =
+        storageBytes > UINT32_MAX ? UINT32_MAX : uint32_t(storageBytes);
+    const uint32_t byteCount = std::min<uint32_t>(args.a1, cappedStorageBytes);
     std::vector<uint8_t> raw(byteCount);
     if (byteCount && uc_mem_read(uc_, args.a2, raw.data(), raw.size()) != UC_ERR_OK) {
         lastError_ = 998;
         ret = 0;
-    } else if (byteCount && uc_mem_write(uc_, bm.bits, raw.data(), raw.size()) != UC_ERR_OK) {
+    } else if (byteCount && uc_mem_write(uc_, bitmap->bits, raw.data(), raw.size()) != UC_ERR_OK) {
         lastError_ = 998;
         ret = 0;
     } else {

@@ -65,6 +65,11 @@ public:
         return x >= rect.left && y >= rect.top && x < rect.right && y < rect.bottom;
     }
 
+    static uint64_t bitmapStorageByteCount(const BitmapState& bitmap) noexcept {
+        const uint32_t height = uint32_t(bitmap.heightRaw < 0 ? -bitmap.heightRaw : bitmap.heightRaw);
+        return uint64_t(bitmap.stride) * uint64_t(height);
+    }
+
     void createDc(uint32_t hdc, uint32_t hwnd) {
         if (!hdc) return;
         if (const auto existing = dcStates_.find(hdc); existing != dcStates_.end()) {

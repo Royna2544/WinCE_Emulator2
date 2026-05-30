@@ -417,6 +417,20 @@ Current emulator difference:
   `00_initial.png` was captured at 816x519 and the high-signal log scan found
   no new unsupported coredll ordinal, hard-error, invalid mapping, false
   zero-PC, or deadlock markers.
+- `SetBitmapBits` now uses `CeMgdi::BitmapState` for bitmap existence,
+  storage byte count, and guest bits pointer. Pixel bytes still live in guest
+  memory and drawing paths still use `GuestBitmap` until the next pixel
+  operation migrations. CE reference:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/MGDI/INC/gdiobj.h:358`.
+  Current source references:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_mgdi.h:68` and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_bitmap.cpp:1428`.
+  The 2026-05-30 Release build passed with the pre-existing Boost Beast
+  warning from `remote_server.cpp`. Bounded autodrive with the companion
+  enabled wrote `captures/inavi_autodrive_20260530_203308`; `00_initial.png`
+  was captured at 816x519 and the high-signal log scan found no new
+  unsupported coredll ordinal, hard-error, invalid mapping, false zero-PC, or
+  deadlock markers.
 - The touched MGDI bitmap/DC path now uses named local constants for GDI stock
   object IDs and the `BITMAP` metadata byte count instead of raw values in the
   migrated code. Current source references:

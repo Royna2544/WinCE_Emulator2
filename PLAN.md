@@ -188,6 +188,9 @@ results, or timing thresholds.
   - [x] Route `GetObjectW` bitmap metadata through `CeMgdi::BitmapState`
     instead of reading `GuestBitmap` directly. Current source anchor:
     `src/coredll_bitmap.cpp`.
+  - [x] Route `SetBitmapBits` storage-size and guest-bits lookup through
+    `CeMgdi::BitmapState` while leaving pixel bytes in guest memory. Current
+    source anchors: `src/ce_mgdi.h` and `src/coredll_bitmap.cpp`.
 - [ ] Add app clip, system clip, and actual device clip state before adding
   more blit optimizations. CE source anchor:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/MGDI/INC/dc.hpp:13`.
