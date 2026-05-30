@@ -2,8 +2,10 @@
 
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 class CeDevice {
 public:
@@ -39,6 +41,26 @@ public:
         bool open{};
     };
 
+    enum class NoDataReadAction {
+        CompleteZero,
+        WaitUntilDeadline,
+        WaitIndefinitely,
+    };
+
+    struct NoDataReadDecision {
+        NoDataReadAction action{NoDataReadAction::CompleteZero};
+        uint64_t deadlineMs{};
+    };
+
+    struct PendingSerialRead {
+        uint32_t threadHandle{};
+        uint32_t serialHandle{};
+        uint32_t buffer{};
+        uint32_t requested{};
+        uint32_t transferredPtr{};
+        uint64_t deadlineMs{};
+    };
+
     static constexpr std::string_view name() noexcept { return "CE device manager"; }
     static constexpr std::string_view role() noexcept {
         return "Future owner for virtual CE device and serial state.";
@@ -54,7 +76,13 @@ public:
     bool setSerialMask(uint32_t handle, uint32_t mask, uint32_t lastError = 0);
     bool setSerialQueueSizes(uint32_t handle, uint32_t inQueueSize, uint32_t outQueueSize, uint32_t lastError = 0);
     bool markSerialPurged(uint32_t handle, uint32_t flags, uint32_t lastError = 0);
+    NoDataReadDecision decideNoDataRead(uint32_t handle, uint32_t requested, uint64_t nowMs) const;
+    void beginPendingSerialRead(PendingSerialRead read);
+    std::optional<PendingSerialRead> pendingSerialRead(uint32_t threadHandle) const;
+    std::vector<PendingSerialRead> pendingSerialReads() const;
+    bool completePendingSerialRead(uint32_t threadHandle);
 
 private:
     std::map<uint32_t, SerialState> serialStates_;
+    std::map<uint32_t, PendingSerialRead> pendingSerialReadsByThread_;
 };

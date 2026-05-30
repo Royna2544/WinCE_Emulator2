@@ -105,9 +105,11 @@ Current emulator reference:
 Status:
 
 - `CeDevice` now owns serial config, DCB-like mode, `COMMTIMEOUTS`, comm mask,
-  queue sizes, and virtual no-data backend state. The bug remains open until
-  no-data reads park through `CeKernel` according to timeout mode and GWE
-  owner queues are preferred over serial polling workers when UI work exists.
+  queue sizes, and virtual no-data backend state. No-data virtual serial reads
+  now park active guest threads and wake them on remote bytes or deadline
+  expiry. The bug remains open until this is verified in a live UI interaction
+  path and GWE owner queues are preferred over serial polling workers when UI
+  work exists.
 
 ## Window Visibility And Modal Ownership Are Region-Incomplete
 

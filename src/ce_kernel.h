@@ -62,6 +62,7 @@ public:
         Waiting,
         WaitingForMessage,
         WaitingForSendMessage,
+        WaitingForSerialRead,
         Terminated,
     };
 

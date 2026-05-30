@@ -253,8 +253,52 @@ void SyntheticDllRuntime::wakeGuestThreadsWaitingForMessage() {
     }
 }
 
+void SyntheticDllRuntime::refreshPendingSerialReads() {
+    const uint64_t nowMs = hostTickMilliseconds();
+    for (const CeDevice::PendingSerialRead& read : ceDevice_.pendingSerialReads()) {
+        auto thread = ceKernel_.threads().find(read.threadHandle);
+        if (thread == ceKernel_.threads().end() ||
+            thread->second.state != GuestThreadRunState::WaitingForSerialRead) {
+            ceDevice_.completePendingSerialRead(read.threadHandle);
+            continue;
+        }
+
+        const bool hasData = remoteSerialByteCount() != 0;
+        const bool timedOut = read.deadlineMs && nowMs >= read.deadlineMs;
+        if (!hasData && !timedOut) continue;
+
+        uint32_t transferred = 0;
+        if (hasData && read.requested && read.buffer) {
+            constexpr uint32_t kMaxVirtualSerialReadChunk = 64 * 1024;
+            const uint32_t requested = std::min(read.requested, kMaxVirtualSerialReadChunk);
+            std::vector<uint8_t> bytes(requested);
+            transferred = static_cast<uint32_t>(readRemoteSerialBytes(bytes.data(), bytes.size()));
+            if (transferred) {
+                uc_mem_write(uc_, read.buffer, bytes.data(), transferred);
+            }
+        }
+        if (read.transferredPtr) writeU32(read.transferredPtr, transferred);
+
+        thread->second.context.registers[UC_MIPS_REG_V0] = 1;
+        thread->second.state = GuestThreadRunState::Runnable;
+        thread->second.waitHandle = 0;
+        thread->second.waitHandles.clear();
+        thread->second.waitForMessages = false;
+        thread->second.waitWakeMask = 0;
+        thread->second.sleepUntilMs = 0;
+        ceDevice_.completePendingSerialRead(read.threadHandle);
+        lastError_ = 0;
+        spdlog::info("ReadFile virtual serial no-data wake handle=0x{:08x} thread=0x{:08x} transferred={} reason={}",
+                     read.serialHandle,
+                     read.threadHandle,
+                     transferred,
+                     transferred ? "data" : "timeout");
+    }
+}
+
 void SyntheticDllRuntime::refreshSignaledGuestWaits() {
     refreshCompletedHostWaveBuffers();
+    refreshPendingSerialReads();
 #if defined(_WIN32)
     auto hostWaitProbe = [](const GuestHandle& handle) {
         const DWORD wait = ::WaitForSingleObject(reinterpret_cast<HANDLE>(handle.hostValue), 0);

@@ -28,7 +28,10 @@ Active refactor checklist: `PLAN.md`.
      message owners over hot polling workers when UI/input work is pending.
    - Current status: serial configuration, DCB-like mode, `COMMTIMEOUTS`,
      comm mask, queue sizes, and virtual no-data backend state now live behind
-     `CeDevice`. Next step is timeout-aware no-data parking and wakeup.
+     `CeDevice`. Timeout-aware no-data reads now park active guest threads and
+     wake them on remote bytes or deadline expiry. Next step is GWE
+     owner-priority scheduling so pending UI/message owners win over generic
+     polling workers.
 
 2. Introduce a CE-shaped internal `MsgQueue` model.
    - CE reference:

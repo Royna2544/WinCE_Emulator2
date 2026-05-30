@@ -895,3 +895,31 @@ Confirmed behavior difference:
   and the high-signal scan found no unsupported coredll ordinal, false
   zero-PC success, heap exhaustion, hard-error, UC_ERR, or old disconnected
   serial-fallback wording.
+- Virtual serial `ReadFile` can now park active guest worker threads instead
+  of completing an unlimited no-data success loop. `CeDevice` decides whether
+  a no-data read is immediate, deadline-based, or indefinite from the stored
+  CE-style `COMMTIMEOUTS`; `SyntheticDllRuntime` saves the active guest CPU
+  context at the `ReadFile` return address, marks the thread
+  `WaitingForSerialRead`, and lets the main/message context continue. Pending
+  serial reads wake through the scheduler refresh path when remote serial
+  bytes arrive or the read deadline expires, then write the transferred byte
+  count and resume the guest thread with `ReadFile` success. CE references:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/DRIVERS/SERDEV/serial.c`
+  and
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COMM/IR/IRCOMM/ircomm.c:792`.
+  Current source references:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_device.h:44`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_fs.cpp:190`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_thread_runtime.cpp:256`,
+  and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp:2231`.
+  The 2026-05-30 Release build passed with the known Boost Beast warning.
+  Bounded Release autodrive wrote `captures/inavi_autodrive_20260530_225411`
+  and captured `00_initial.png` with no high-signal crash/ordinal regressions.
+  A longer Debug run wrote `captures/inavi_autodrive_20260530_225648`; it
+  reached the COM7 setup path and recorded `SetCommTimeouts` with
+  `ReadIntervalTimeout=4294967295`, `ReadTotalTimeoutMultiplier=0`, and
+  `ReadTotalTimeoutConstant=1000`, the timeout shape the new parking path
+  handles. That run did not reach an actual serial `ReadFile` before scripted
+  shutdown, so the broader interactive UI responsiveness acceptance remains
+  open for the owner-priority scheduler step.

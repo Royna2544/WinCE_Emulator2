@@ -243,6 +243,7 @@ bool coredllOrdinalTouchesSharedMappingBoundary(uint16_t ordinal) {
 bool coredllOrdinalUsesInlineDispatch(uint16_t ordinal) {
     switch (ordinal) {
     case 0x0006: // ExitThread
+    case 0x00aa: // ReadFile virtual serial wait parking
     case 0x00f6: // CreateWindowExW synchronous create messages
     case 0x0109: // DestroyWindow synchronous destroy messages
     case 0x010b: // UpdateWindow synchronous paint messages
@@ -2227,6 +2228,15 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
             finishImmediateReturn(ret, true);
             return;
         }
+        case 0x00AA:
+            if (tryParkGuestSerialRead(args, pc, ra)) {
+                return;
+            }
+            if (handleReadFile(SyntheticExportCode::CoreDllReadFile, args, ret)) {
+                finishImmediateReturn(ret, true);
+                return;
+            }
+            break;
         case 0x035D: {
             const uint32_t activeThread = ceKernel_.activeGuestThread();
             if (activeThread && !ceGwe_.hasMessagesForOwner(activeThread) && !quitPosted_) {

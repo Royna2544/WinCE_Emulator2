@@ -1296,7 +1296,9 @@ private:
     void closeHostWaveInHandle(uintptr_t hostValue);
     void closeHostWaveOutHandle(uintptr_t hostValue);
     void refreshCompletedHostWaveBuffers();
+    void refreshPendingSerialReads();
     void refreshSignaledGuestWaits();
+    bool tryParkGuestSerialRead(const GuestCallArgs& args, uint32_t pc, uint32_t returnPc);
     bool hasRunnableGuestThread();
     bool switchToRunnableGuestThread(const char* reason, uint32_t returnAddress = 0, uint32_t preferredHandle = 0);
     bool yieldActiveGuestThread(const char* reason, uint32_t returnAddress = 0);

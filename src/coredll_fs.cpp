@@ -4,6 +4,7 @@
 #include "synthetic_dll.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cctype>
 #include <cwctype>
 #include <cstdio>
@@ -16,6 +17,11 @@
 #include <spdlog/spdlog.h>
 
 namespace {
+
+uint64_t hostTickMilliseconds() {
+    using namespace std::chrono;
+    return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
+}
 
 std::string pathToUtf8(const std::filesystem::path& path) {
     auto text = path.u8string();
@@ -179,6 +185,63 @@ WIN32_FIND_DATAW translateGuestFindData(WIN32_FIND_DATAW data, bool rootEnumerat
     return data;
 }
 
+}
+
+bool SyntheticDllRuntime::tryParkGuestSerialRead(const GuestCallArgs& args, uint32_t pc, uint32_t returnPc) {
+    (void)pc;
+    auto* handle = lookupGuestHandle(args.a0);
+    if (!handle || handle->kind != GuestHandle::Kind::GuestSerialDevice) return false;
+
+    CeDevice::SerialState* serial = ceDevice_.serialState(args.a0);
+    if (!serial || !serial->virtualNoDataBackend || serial->deviceType != "serial") return false;
+    if (!args.a2 || remoteSerialByteCount() != 0) return false;
+
+    const uint64_t nowMs = hostTickMilliseconds();
+    const CeDevice::NoDataReadDecision decision = ceDevice_.decideNoDataRead(args.a0, args.a2, nowMs);
+    if (decision.action == CeDevice::NoDataReadAction::CompleteZero) return false;
+
+    const uint32_t activeThread = ceKernel_.activeGuestThread();
+    if (!activeThread) return false;
+    auto active = ceKernel_.threads().find(activeThread);
+    if (active == ceKernel_.threads().end()) return false;
+
+    active->second.context = captureGuestCpuContext();
+    active->second.context.registers[UC_MIPS_REG_PC] = returnPc;
+    active->second.context.registers[UC_MIPS_REG_GP] = guestGpForCodeAddress(returnPc);
+    active->second.context.registers[UC_MIPS_REG_V0] = 1;
+    active->second.state = GuestThreadRunState::WaitingForSerialRead;
+    active->second.waitHandle = args.a0;
+    active->second.waitHandles.clear();
+    active->second.waitAll = false;
+    active->second.waitForMessages = false;
+    active->second.waitWakeMask = 0;
+    active->second.sleepUntilMs = decision.deadlineMs;
+
+    ceDevice_.beginPendingSerialRead(CeDevice::PendingSerialRead{
+        activeThread,
+        args.a0,
+        args.a1,
+        args.a2,
+        args.a3,
+        decision.deadlineMs,
+    });
+
+    auto debugName = fileHandleDebugNames_.find(args.a0);
+    const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+    spdlog::info("ReadFile virtual serial no-data wait handle=0x{:08x} thread=0x{:08x} name=\"{}\" requested={} deadlineMs={} return=0x{:08x}",
+                 args.a0,
+                 activeThread,
+                 debugPath,
+                 args.a2,
+                 decision.deadlineMs,
+                 returnPc);
+
+    ceKernel_.activeGuestThread() = 0;
+    if (!restoreMainThreadContextIfRunnable("ReadFile-serial-wait")) {
+        switchToRunnableGuestThread("ReadFile-serial-wait");
+    }
+    pumpHostMessages();
+    return true;
 }
 
 std::vector<std::string> SyntheticDllRuntime::virtualRootNames() const {

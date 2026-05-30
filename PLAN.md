@@ -169,11 +169,11 @@ results, or timing thresholds.
 - [x] Replace "disconnected serial-fallback" wording with "virtual serial
   no-data backend" when the emulator intentionally keeps a guest-visible
   serial device open without host bytes.
-- [ ] Implement timeout-aware virtual serial reads: transfer remote/injected
+- [x] Implement timeout-aware virtual serial reads: transfer remote/injected
   bytes when present, return zero bytes only for CE nonblocking timeout modes,
   and otherwise park the active guest thread through `CeKernel` until serial
   data or timeout readiness.
-- [ ] Wake parked serial-read threads when remote serial data arrives or their
+- [x] Wake parked serial-read threads when remote serial data arrives or their
   read timeout expires. Do not model no-data serial polling as an immediate
   infinite success loop.
 - [ ] Add GWE owner-priority scheduling so pending owner queues are preferred
