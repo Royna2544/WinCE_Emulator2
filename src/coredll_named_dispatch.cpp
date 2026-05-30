@@ -1287,7 +1287,7 @@ void SyntheticDllRuntime::pollCrossProcessGuestMessages() {
                                  hwnd, sourcePid, cbData);
                 }
             }
-            guestMessages_.push_back(guestMessage);
+            ceGwe_.postMessage(guestMessage);
             spdlog::info("cross-process message received hwnd=0x{:08x} msg=0x{:08x} fromPid={} queued={}",
                          hwnd,
                          guestMessage.message,
@@ -1642,7 +1642,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
         size.message = 0x0005; // WM_SIZE
         size.lParam = (uint32_t(uint16_t(height)) << 16) | uint16_t(width);
         size.time = uint32_t(++tick_ * 16);
-        guestMessages_.push_back(size);
+        ceGwe_.postMessage(size);
         lastError_ = 0;
         spdlog::info("CreateDialogIndirectParamW guest=0x{:08x} class=\"{}\" title=\"{}\" parent=0x{:08x} "
                      "style=0x{:08x} ex=0x{:08x} dlgproc=0x{:08x} init=0x{:08x} rect={},{} {}x{} items={} menu=\"{}\"",
@@ -2357,7 +2357,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
         size.message = 0x0005; // WM_SIZE
         size.lParam = (uint32_t(uint16_t(window.height)) << 16) | uint16_t(window.width);
         size.time = uint32_t(++tick_ * 16);
-        guestMessages_.push_back(size);
+        ceGwe_.postMessage(size);
         lastError_ = 0;
         break;
     }
@@ -3288,7 +3288,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                 message.message = 0x0005; // WM_SIZE
                 message.lParam = (uint32_t(uint16_t(it->second.height)) << 16) | uint16_t(it->second.width);
                 message.time = uint32_t(++tick_ * 16);
-                guestMessages_.push_back(message);
+                ceGwe_.postMessage(message);
             }
             lastError_ = 0;
             ret = 1;
@@ -3350,7 +3350,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                 message.message = 0x0005; // WM_SIZE
                 message.lParam = (uint32_t(uint16_t(it->second.height)) << 16) | uint16_t(it->second.width);
                 message.time = uint32_t(++tick_ * 16);
-                guestMessages_.push_back(message);
+                ceGwe_.postMessage(message);
             }
             if (it->second.visible != oldVisible) {
                 GuestMessage message{};
@@ -3358,7 +3358,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                 message.message = 0x0018; // WM_SHOWWINDOW
                 message.wParam = it->second.visible ? 1 : 0;
                 message.time = uint32_t(++tick_ * 16);
-                guestMessages_.push_back(message);
+                ceGwe_.postMessage(message);
                 if (!it->second.visible && it->second.parent) {
                     eraseGuestWindowArea(a0, it->second);
                     spdlog::info("SetWindowPos invalidating parent=0x{:08x} after hiding child=0x{:08x}",
@@ -3457,12 +3457,12 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             destroy.hwnd = a0;
             destroy.message = 0x0002; // WM_DESTROY
             destroy.time = uint32_t(++tick_ * 16);
-            guestMessages_.push_back(destroy);
+            ceGwe_.postMessage(destroy);
             GuestMessage ncDestroy{};
             ncDestroy.hwnd = a0;
             ncDestroy.message = 0x0082; // WM_NCDESTROY
             ncDestroy.time = uint32_t(++tick_ * 16);
-            guestMessages_.push_back(ncDestroy);
+            ceGwe_.postMessage(ncDestroy);
             destroyHostWindow(it->second);
             if (wasVisible && parent) {
                 spdlog::info("DestroyWindow invalidating parent=0x{:08x} after child=0x{:08x}", parent, a0);
@@ -3530,7 +3530,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                 message.message = 0x0018; // WM_SHOWWINDOW
                 message.wParam = it->second.visible ? 1 : 0;
                 message.time = uint32_t(++tick_ * 16);
-                guestMessages_.push_back(message);
+                ceGwe_.postMessage(message);
                 if (!it->second.visible && it->second.parent) {
                     const bool exposesCoveredWindows =
                         wasVisible && isOwnedPopupWindow(a0) && guestWindowCoversFramebuffer(a0);
@@ -3633,7 +3633,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
         message.message = 0x0012; // WM_QUIT
         message.wParam = a0;
         message.time = uint32_t(++tick_ * 16);
-        guestMessages_.push_back(message);
+        ceGwe_.postMessage(message);
         wakeGuestThreadsWaitingForMessage();
         ret = 0;
         break;
@@ -3698,7 +3698,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                 message.wParam = a2;
                 message.lParam = a3;
                 message.time = uint32_t(++tick_ * 16);
-                guestMessages_.push_back(message);
+                ceGwe_.postMessage(message);
                 posted = true;
             }
             posted = postCrossProcessBroadcastMessage(a1, a2, a3) || posted;
@@ -3715,7 +3715,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             message.wParam = a2;
             message.lParam = a3;
             message.time = uint32_t(++tick_ * 16);
-            guestMessages_.push_back(message);
+            ceGwe_.postMessage(message);
             lastError_ = 0;
             ret = 1;
             if (tracePostMessage) {
@@ -3755,7 +3755,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             message.wParam = a2;
             message.lParam = a3;
             message.time = uint32_t(++tick_ * 16);
-            guestMessages_.push_back(message);
+            ceGwe_.postMessage(message);
             lastError_ = 0;
             ret = 1;
             if (tracePostMessage) {

@@ -77,6 +77,8 @@ file-name shortcuts, route-screen shortcuts, or coordinate-specific fixes.
     `CeGwe` while preserving the existing runtime alias.
   - [x] Add `CeGwe::postMessage` and route simple focus/foreground posts
     through it.
+  - [x] Route remaining append-style message producers through
+    `CeGwe::postMessage`.
   - [ ] Replace direct runtime deque operations with named `CeGwe` queue
     methods in small behavior-preserving batches.
 - [ ] Add per-thread or per-owner queues aligned with CE `MsgQueue`

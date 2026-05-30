@@ -85,6 +85,12 @@ Current emulator difference:
   preserving the existing queue order. The 2026-05-30 Release build passed
   after this queue-API batch with the same Boost Beast warning from
   `remote_server.cpp`.
+- Remaining append-style message producers now call `CeGwe::postMessage`,
+  including window runtime repaint/show/input posts, named-dispatch posts, and
+  remote input posts. Direct deque insert/erase/filter/dequeue operations remain
+  for later named queue APIs. The 2026-05-30 Release build passed after this
+  append-post migration with the same Boost Beast warning from
+  `remote_server.cpp`.
 
 ## Threading And Message Queues
 
