@@ -121,6 +121,19 @@ constexpr uint32_t kRgb565BlueMask = 0x0000001fu;
 constexpr uint32_t kRgb555RedMask = 0x00007c00u;
 constexpr uint32_t kRgb555GreenMask = 0x000003e0u;
 constexpr uint32_t kRgb555BlueMask = 0x0000001fu;
+constexpr int32_t kStockWhiteBrush = 0;
+constexpr int32_t kStockLtGrayBrush = 1;
+constexpr int32_t kStockGrayBrush = 2;
+constexpr int32_t kStockDkGrayBrush = 3;
+constexpr int32_t kStockBlackBrush = 4;
+constexpr int32_t kStockNullBrush = 5;
+constexpr int32_t kStockWhitePen = 6;
+constexpr int32_t kStockBlackPen = 7;
+constexpr int32_t kStockNullPen = 8;
+constexpr int32_t kStockSystemFont = 13;
+constexpr int32_t kStockDefaultGuiFont = 17;
+constexpr int32_t kStockDefaultBitmap = 21;
+constexpr uint32_t kBitmapObjectBytes = 24;
 
 uint32_t maskShift(uint32_t mask) {
     if (!mask) return 0;
@@ -253,9 +266,9 @@ void convertRgb565ToBgra32Avx2(const uint8_t* src, uint8_t* dst, int32_t pixels)
 uint32_t SyntheticDllRuntime::makeGuestDc(uint32_t hwnd) {
     GuestDc dc{};
     dc.hwnd = hwnd;
-    dc.selectedBrush = makeStockObject(4); // BLACK_BRUSH
-    dc.selectedPen = makeStockObject(7); // BLACK_PEN
-    dc.selectedFont = makeStockObject(17); // DEFAULT_GUI_FONT
+    dc.selectedBrush = makeStockObject(kStockBlackBrush);
+    dc.selectedPen = makeStockObject(kStockBlackPen);
+    dc.selectedFont = makeStockObject(kStockDefaultGuiFont);
     const uint32_t handle = makeGuestHandle({GuestHandle::Kind::GuestDc, 0, 0});
     dc.hdc = handle;
     dcs_[handle] = dc;
@@ -351,22 +364,22 @@ uint32_t SyntheticDllRuntime::makeStockObject(int32_t index) {
 
     uint32_t handle = 0;
     switch (index) {
-    case 0: handle = makeGuestBrush(0x00ffffff, true); break; // WHITE_BRUSH
-    case 1: handle = makeGuestBrush(0x00c0c0c0, true); break; // LTGRAY_BRUSH
-    case 2: handle = makeGuestBrush(0x00808080, true); break; // GRAY_BRUSH
-    case 3: handle = makeGuestBrush(0x00404040, true); break; // DKGRAY_BRUSH
-    case 4: handle = makeGuestBrush(0x00000000, true); break; // BLACK_BRUSH
-    case 5: handle = makeGuestBrush(0xffffffffu, true); break; // NULL_BRUSH
-    case 6: handle = makeGuestPen(0, 1, 0x00ffffff, true); break; // WHITE_PEN
-    case 7: handle = makeGuestPen(0, 1, 0x00000000, true); break; // BLACK_PEN
-    case 8: handle = makeGuestPen(5, 1, 0xffffffffu, true); break; // NULL_PEN
-    case 13:
-    case 17: {
+    case kStockWhiteBrush: handle = makeGuestBrush(0x00ffffff, true); break;
+    case kStockLtGrayBrush: handle = makeGuestBrush(0x00c0c0c0, true); break;
+    case kStockGrayBrush: handle = makeGuestBrush(0x00808080, true); break;
+    case kStockDkGrayBrush: handle = makeGuestBrush(0x00404040, true); break;
+    case kStockBlackBrush: handle = makeGuestBrush(0x00000000, true); break;
+    case kStockNullBrush: handle = makeGuestBrush(0xffffffffu, true); break;
+    case kStockWhitePen: handle = makeGuestPen(0, 1, 0x00ffffff, true); break;
+    case kStockBlackPen: handle = makeGuestPen(0, 1, 0x00000000, true); break;
+    case kStockNullPen: handle = makeGuestPen(5, 1, 0xffffffffu, true); break;
+    case kStockSystemFont:
+    case kStockDefaultGuiFont: {
         std::array<uint8_t, 92> font{};
         handle = makeGuestFont(font, true);
         break;
     }
-    case 21: { // DEFAULT_BITMAP
+    case kStockDefaultBitmap: {
         handle = makeGuestHandle({GuestHandle::Kind::HostBitmap, 0, 0});
         GuestBitmap bitmap{};
         bitmap.width = 1;
@@ -1341,7 +1354,7 @@ bool SyntheticDllRuntime::handleGetObjectW(const GuestCallArgs& args, uint32_t& 
     }
     if (!args.a2) {
         lastError_ = 0;
-        ret = 24;
+        ret = kBitmapObjectBytes;
         return true;
     }
 

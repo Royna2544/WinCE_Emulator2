@@ -273,6 +273,9 @@ results, or timing thresholds.
   enums, or local `constexpr` values. Keep source references beside behavior
   migrations so later work can tell CE-defined values apart from emulator-local
   thresholds.
+  - [x] Name the touched GDI stock-object IDs and `BITMAP` metadata byte count
+    in the MGDI bitmap/DC path. Current source anchors:
+    `src/coredll_bitmap.cpp` and `src/coredll_named_dispatch.cpp`.
 - [ ] Prioritize naming constants in wait/scheduler, GWE message queue,
   encoded-kernel-call, audio callback, and MGDI clipping code as those areas
   are migrated.

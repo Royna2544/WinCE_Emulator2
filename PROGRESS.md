@@ -417,6 +417,12 @@ Current emulator difference:
   `00_initial.png` was captured at 816x519 and the high-signal log scan found
   no new unsupported coredll ordinal, hard-error, invalid mapping, false
   zero-PC, or deadlock markers.
+- The touched MGDI bitmap/DC path now uses named local constants for GDI stock
+  object IDs and the `BITMAP` metadata byte count instead of raw values in the
+  migrated code. Current source references:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_bitmap.cpp:124` and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_named_dispatch.cpp:30`.
+  The 2026-05-30 Release build passed with no warnings after this cleanup.
 
 ## Threading And Message Queues
 

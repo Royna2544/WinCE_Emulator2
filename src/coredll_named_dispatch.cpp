@@ -27,6 +27,7 @@ namespace {
 constexpr uint32_t kWindowStyleChild = 0x40000000u;
 constexpr uint32_t kWmCopyData = 0x004au;
 constexpr uint32_t kMaxCrossProcessCopyData = 0x100000u;
+constexpr int32_t kStockDefaultBitmap = 21;
 
 bool isHostProcessAlive(uint32_t processId) {
     if (!processId) {
@@ -3054,7 +3055,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
     {
         ret = makeGuestDc(0);
         if (GuestDc* dc = lookupGuestDc(ret)) {
-            dc->selectedBitmap = makeStockObject(21); // DEFAULT_BITMAP
+            dc->selectedBitmap = makeStockObject(kStockDefaultBitmap);
             ceMgdi_.setSelectedBitmap(ret, dc->selectedBitmap);
         }
         lastError_ = ret ? 0 : 8;
