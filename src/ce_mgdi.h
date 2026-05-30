@@ -5,6 +5,8 @@
 #include <map>
 #include <optional>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 class CeMgdi {
 public:
@@ -45,6 +47,7 @@ public:
         uint32_t greenMask{};
         uint32_t blueMask{};
         size_t paletteEntries{};
+        std::vector<uint32_t> palette;
         bool stock{};
     };
 
@@ -214,6 +217,13 @@ public:
 
     void setBitmapPaletteEntries(uint32_t hbitmap, size_t entries) {
         if (auto* state = bitmapState(hbitmap)) state->paletteEntries = entries;
+    }
+
+    void setBitmapPalette(uint32_t hbitmap, std::vector<uint32_t> palette) {
+        if (auto* state = bitmapState(hbitmap)) {
+            state->palette = std::move(palette);
+            state->paletteEntries = state->palette.size();
+        }
     }
 
     const std::map<uint32_t, BitmapState>& bitmapStates() const noexcept { return bitmapStates_; }

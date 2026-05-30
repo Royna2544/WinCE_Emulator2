@@ -214,6 +214,10 @@ results, or timing thresholds.
     line, polygon, text, `GetPixel`, and palette-write bitmap selection.
     Current source anchors: `src/ce_mgdi.h`, `src/coredll_bitmap.cpp`, and
     `src/coredll_paint.cpp`.
+  - [x] Mirror palette vectors into `CeMgdi::BitmapState` and make
+    `SetDIBColorTable` mutate the MGDI palette first, with `GuestBitmap`
+    retained as the compatibility copy for current pixel readers. Current
+    source anchors: `src/ce_mgdi.h` and `src/coredll_bitmap.cpp`.
 - [ ] Add app clip, system clip, and actual device clip state before adding
   more blit optimizations. CE source anchor:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/MGDI/INC/dc.hpp:13`.

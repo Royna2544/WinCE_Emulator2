@@ -303,6 +303,7 @@ void SyntheticDllRuntime::mirrorMgdiBitmap(uint32_t handle, const GuestBitmap& b
     state.greenMask = bitmap.greenMask;
     state.blueMask = bitmap.blueMask;
     state.paletteEntries = bitmap.palette.size();
+    state.palette = bitmap.palette;
     state.stock = bitmap.stock;
     ceMgdi_.trackBitmap(state);
 }
@@ -1395,7 +1396,7 @@ bool SyntheticDllRuntime::handleGetObjectW(const GuestCallArgs& args, uint32_t& 
 bool SyntheticDllRuntime::handleSetDIBColorTable(const GuestCallArgs& args, uint32_t& ret) {
     GuestDc* dc = lookupGuestDc(args.a0);
     const uint32_t selectedBitmap = dc ? ceMgdi_.selectedBitmapForDc(args.a0, dc->selectedBitmap) : 0;
-    const CeMgdi::BitmapState* bitmapState = ceMgdi_.bitmapState(selectedBitmap);
+    CeMgdi::BitmapState* bitmapState = ceMgdi_.bitmapState(selectedBitmap);
     auto bitmap = dc ? bitmaps_.find(selectedBitmap) : bitmaps_.end();
     if (!dc || !bitmapState || bitmap == bitmaps_.end() || !args.a3 || bitmapState->bpp > 8) {
         lastError_ = dc ? 87 : 6;
@@ -1407,8 +1408,8 @@ bool SyntheticDllRuntime::handleSetDIBColorTable(const GuestCallArgs& args, uint
     const uint32_t maxColors = 1u << bitmapState->bpp;
     const uint32_t start = std::min<uint32_t>(args.a1, maxColors);
     const uint32_t count = std::min<uint32_t>(args.a2, maxColors - start);
-    if (bm.palette.empty()) bm.palette = defaultIndexedPalette(bitmapState->bpp);
-    if (bm.palette.size() < maxColors) bm.palette.resize(maxColors, 0xff000000u);
+    if (bitmapState->palette.empty()) bitmapState->palette = defaultIndexedPalette(bitmapState->bpp);
+    if (bitmapState->palette.size() < maxColors) bitmapState->palette.resize(maxColors, 0xff000000u);
 
     std::vector<uint8_t> raw(size_t(count) * 4);
     if (count && uc_mem_read(uc_, args.a3, raw.data(), raw.size()) != UC_ERR_OK) {
@@ -1420,10 +1421,11 @@ bool SyntheticDllRuntime::handleSetDIBColorTable(const GuestCallArgs& args, uint
         const uint8_t b = raw[size_t(i) * 4 + 0];
         const uint8_t g = raw[size_t(i) * 4 + 1];
         const uint8_t r = raw[size_t(i) * 4 + 2];
-        bm.palette[size_t(start + i)] =
+        bitmapState->palette[size_t(start + i)] =
             0xff000000u | (uint32_t(r) << 16) | (uint32_t(g) << 8) | uint32_t(b);
     }
-    ceMgdi_.setBitmapPaletteEntries(selectedBitmap, bm.palette.size());
+    bitmapState->paletteEntries = bitmapState->palette.size();
+    bm.palette = bitmapState->palette;
     lastError_ = 0;
     ret = count;
     spdlog::info("SetDIBColorTable hdc=0x{:08x} bitmap=0x{:08x} start={} count={} ret={}",
