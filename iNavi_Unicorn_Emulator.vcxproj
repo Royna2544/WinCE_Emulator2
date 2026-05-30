@@ -66,6 +66,7 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="src\ce_device.cpp" />
     <ClCompile Include="src\ce_gwe.cpp" />
     <ClCompile Include="src\ce_kernel.cpp" />
     <ClCompile Include="src\ce_mgdi.cpp" />
@@ -102,6 +103,7 @@
     <ClCompile Include="src\synthetic_dll_winsock.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="src\ce_device.h" />
     <ClInclude Include="src\ce_gwe.h" />
     <ClInclude Include="src\ce_kernel.h" />
     <ClInclude Include="src\ce_mgdi.h" />

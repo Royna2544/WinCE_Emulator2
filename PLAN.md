@@ -153,12 +153,12 @@ results, or timing thresholds.
 
 ## Phase 3.5: Virtual Device/Serial Wait Semantics And UI Responsiveness
 
-- [ ] Add `src/ce_device.h` and `src/ce_device.cpp` as the future owner for
+- [x] Add `src/ce_device.h` and `src/ce_device.cpp` as the future owner for
   CE device/serial state: guest device name, configured host path, virtual
   open status, DCB-like settings, `COMMTIMEOUTS`, comm mask, queue sizes,
   last error, and empty-read wait state. Current source anchors:
   `src/synthetic_dll.cpp`, `src/coredll_fs.cpp`, and `src/coredll_comm.cpp`.
-- [ ] Wire `CeDevice` into `iNavi_Unicorn_Emulator.vcxproj` as a build-only
+- [x] Wire `CeDevice` into `iNavi_Unicorn_Emulator.vcxproj` as a build-only
   scaffold before moving behavior.
 - [ ] Move virtual serial configuration, timeout, mask, queue-size, and
   status bookkeeping behind `CeDevice` while preserving current `ReadFile`
