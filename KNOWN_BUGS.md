@@ -138,7 +138,10 @@ Status:
   release/paint responsiveness through the previous mapping-storm path. A
   later remote run confirmed forced unmap writes are gone, but map UI updates
   can still look slow while long guest `message-transfer`/paint spans coincide
-  with high-frequency `iNavi_sharedMem_traffic_static` map/unmap churn.
+  with high-frequency `iNavi_sharedMem_traffic_static` map/unmap churn. The
+  successful named-shared mapping hot-path logs are now debug-level so normal
+  info logging no longer amplifies that churn; the remaining question is how
+  much of the visible delay is guest work versus emulator scheduling/rendering.
 
 ## Virtual Serial No-Data Reads Can Still Hot-Poll
 

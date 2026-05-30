@@ -115,6 +115,14 @@ Current emulator difference:
   guest `message-transfer`/paint spans plus high-frequency
   `iNavi_sharedMem_traffic_static` map/unmap churn, not to forced unmap
   writes.
+- Successful named-shared mapping hot-path diagnostics are now debug-level
+  instead of info-level: repeated `CreateFileMappingW`, `MapViewOfFile`, and
+  unchanged `UnmapViewOfFile` calls no longer flood the interactive log during
+  map/traffic polling. Explicit `FlushViewOfFile`, failed mapping calls, and
+  actual sync writes remain visible. Current source anchor:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_mapping.cpp:278`. The
+  2026-05-31 Release and Debug builds passed with zero warnings after this
+  logging-hygiene change.
 - `CeGwe` now owns the `GuestMessage` record type and backing message deque.
   `SyntheticDllRuntime::guestMessages_` remains a compatibility alias to that
   deque, so this Phase 3 scaffold step should preserve delivery behavior while

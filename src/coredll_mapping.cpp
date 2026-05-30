@@ -275,9 +275,15 @@ uint32_t SyntheticDllRuntime::handleCreateFileMappingW(uint32_t fileHandle, uint
     fileHandleDebugNames_[handle] = "mapping name=\"" + name + "\" file=\"" + debugPath + "\" backing=\"" +
                                     pathToUtf8(backingPath) + "\"";
     lastError_ = alreadyExists ? 183 : 0;
-    spdlog::info("CreateFileMappingW file=0x{:08x} path=\"{}\" protect=0x{:08x} size={} name=\"{}\" shared={} existing={} backing=\"{}\" -> 0x{:08x} lastError={}",
-                 fileHandle, debugPath, protect, mappingSize, name, namedShared, alreadyExists,
-                 pathToUtf8(backingPath), handle, lastError_);
+    if (namedShared) {
+        spdlog::debug("CreateFileMappingW file=0x{:08x} path=\"{}\" protect=0x{:08x} size={} name=\"{}\" shared={} existing={} backing=\"{}\" -> 0x{:08x} lastError={}",
+                      fileHandle, debugPath, protect, mappingSize, name, namedShared, alreadyExists,
+                      pathToUtf8(backingPath), handle, lastError_);
+    } else {
+        spdlog::info("CreateFileMappingW file=0x{:08x} path=\"{}\" protect=0x{:08x} size={} name=\"{}\" shared={} existing={} backing=\"{}\" -> 0x{:08x} lastError={}",
+                     fileHandle, debugPath, protect, mappingSize, name, namedShared, alreadyExists,
+                     pathToUtf8(backingPath), handle, lastError_);
+    }
     return handle;
 }
 
@@ -321,8 +327,8 @@ uint32_t SyntheticDllRuntime::handleMapViewOfFile(uint32_t mappingHandle, uint32
             view.refCount = std::max<uint32_t>(view.refCount, 1) + 1;
             syncNamedMappedView(base, view, false);
             lastError_ = 0;
-            spdlog::info("MapViewOfFile reused existing view mapping=0x{:08x} name=\"{}\" offset={} bytes={} -> base=0x{:08x} viewSize={} refs={}",
-                         mappingHandle, mapping->second.name, offset, bytesToMap, base, viewSize, view.refCount);
+            spdlog::debug("MapViewOfFile reused existing view mapping=0x{:08x} name=\"{}\" offset={} bytes={} -> base=0x{:08x} viewSize={} refs={}",
+                          mappingHandle, mapping->second.name, offset, bytesToMap, base, viewSize, view.refCount);
             return base;
         }
     }
@@ -366,9 +372,15 @@ uint32_t SyntheticDllRuntime::handleMapViewOfFile(uint32_t mappingHandle, uint32
     }
     mappedViews_[base] = std::move(mappedView);
     lastError_ = 0;
-    spdlog::info("MapViewOfFile mapping=0x{:08x} name=\"{}\" access=0x{:08x} offset={} bytes={} shared={} backing=\"{}\" -> base=0x{:08x} viewSize={}",
-                 mappingHandle, mapping->second.name, desiredAccess, offset, bytesToMap,
-                 mapping->second.namedShared, pathToUtf8(mapping->second.backingPath), base, viewSize);
+    if (mapping->second.namedShared) {
+        spdlog::debug("MapViewOfFile mapping=0x{:08x} name=\"{}\" access=0x{:08x} offset={} bytes={} shared={} backing=\"{}\" -> base=0x{:08x} viewSize={}",
+                      mappingHandle, mapping->second.name, desiredAccess, offset, bytesToMap,
+                      mapping->second.namedShared, pathToUtf8(mapping->second.backingPath), base, viewSize);
+    } else {
+        spdlog::info("MapViewOfFile mapping=0x{:08x} name=\"{}\" access=0x{:08x} offset={} bytes={} shared={} backing=\"{}\" -> base=0x{:08x} viewSize={}",
+                     mappingHandle, mapping->second.name, desiredAccess, offset, bytesToMap,
+                     mapping->second.namedShared, pathToUtf8(mapping->second.backingPath), base, viewSize);
+    }
     return base;
 }
 
@@ -381,17 +393,28 @@ uint32_t SyntheticDllRuntime::handleUnmapViewOfFile(uint32_t baseAddress) {
     }
     const auto mapping = fileMappings_.find(view->second.mappingHandle);
     const std::string name = mapping == fileMappings_.end() ? std::string{} : mapping->second.name;
+    const bool namedShared = mapping != fileMappings_.end() && mapping->second.namedShared;
     const uint32_t mappingHandle = view->second.mappingHandle;
     const bool synced = syncNamedMappedView(baseAddress, view->second, false);
     if (view->second.refCount > 1) {
         --view->second.refCount;
-        spdlog::info("UnmapViewOfFile decremented shared view base=0x{:08x} mapping=0x{:08x} name=\"{}\" size={} refs={} synced={}",
-                     baseAddress, mappingHandle, name, view->second.size, view->second.refCount, synced);
+        if (namedShared && !synced) {
+            spdlog::debug("UnmapViewOfFile decremented shared view base=0x{:08x} mapping=0x{:08x} name=\"{}\" size={} refs={} synced={}",
+                          baseAddress, mappingHandle, name, view->second.size, view->second.refCount, synced);
+        } else {
+            spdlog::info("UnmapViewOfFile decremented shared view base=0x{:08x} mapping=0x{:08x} name=\"{}\" size={} refs={} synced={}",
+                         baseAddress, mappingHandle, name, view->second.size, view->second.refCount, synced);
+        }
         lastError_ = 0;
         return 1;
     }
-    spdlog::info("UnmapViewOfFile base=0x{:08x} mapping=0x{:08x} name=\"{}\" size={} synced={}",
-                 baseAddress, mappingHandle, name, view->second.size, synced);
+    if (namedShared && !synced) {
+        spdlog::debug("UnmapViewOfFile base=0x{:08x} mapping=0x{:08x} name=\"{}\" size={} synced={}",
+                      baseAddress, mappingHandle, name, view->second.size, synced);
+    } else {
+        spdlog::info("UnmapViewOfFile base=0x{:08x} mapping=0x{:08x} name=\"{}\" size={} synced={}",
+                     baseAddress, mappingHandle, name, view->second.size, synced);
+    }
     releaseAllocation(baseAddress);
     mappedViews_.erase(view);
     const bool mappingHandleOpen = ceKernel_.handles().find(mappingHandle) != ceKernel_.handles().end();

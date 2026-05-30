@@ -228,6 +228,10 @@ results, or timing thresholds.
     synchronous `UpdateWindow` paint spans, and very frequent
     `iNavi_sharedMem_traffic_static` map/unmap churn even after force-writes
     were removed.
+  - [x] Demote successful named-shared `CreateFileMappingW`, `MapViewOfFile`,
+    and unchanged `UnmapViewOfFile` hot-path logs to debug so normal info
+    logging no longer taxes map-update polling. Explicit `FlushViewOfFile`,
+    failed mappings, and actual sync writes remain visible.
 
 ## Phase 4: Window Visible/Update/Client Region Migration
 
