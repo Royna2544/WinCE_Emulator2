@@ -61,6 +61,8 @@ file-name shortcuts, route-screen shortcuts, or coordinate-specific fixes.
   handles as guest-visible truth.
   - [x] Route immediate `WaitForMultipleObjects` readiness through `CeKernel`
     with a runtime-supplied host wait probe.
+  - [x] Route cooperative `WaitForSingleObject` readiness through `CeKernel`
+    with a runtime-supplied host wait probe.
   - [ ] Audit remaining direct `hostValue` uses so host APIs remain backing
     services and guest-visible decisions stay in the virtual CE subsystems.
 

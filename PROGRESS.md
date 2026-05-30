@@ -66,6 +66,10 @@ Current emulator difference:
   host wait probe. The 2026-05-30 Release build passed after this
   immediate-wait migration with the same Boost Beast warning from
   `remote_server.cpp`.
+- The cooperative `WaitForSingleObject` scheduler path now routes immediate
+  readiness through `CeKernel::queryWaitObject`, preserving sender/thread
+  preference and host wait probing as runtime-supplied backing behavior.
+  The 2026-05-30 Release build passed after this single-wait migration.
 
 ## Threading And Message Queues
 

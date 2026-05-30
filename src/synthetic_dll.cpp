@@ -1920,64 +1920,25 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
             break;
         }
         case 0x01F1: {
-            constexpr uint32_t kWaitObject0 = 0x00000000u;
-            constexpr uint32_t kWaitTimeout = 0x00000102u;
-            constexpr uint32_t kWaitFailed = 0xffffffffu;
+            constexpr uint32_t kWaitTimeout = CeKernel::kWaitTimeout;
+            constexpr uint32_t kWaitFailed = CeKernel::kWaitFailed;
             constexpr uint32_t kInfiniteTimeout = 0xffffffffu;
             auto pollSingleWait = [&](uint32_t& waitResult, uint32_t& preferredThread) {
-                preferredThread = 0;
-                auto* handle = lookupGuestHandle(a0);
-                if (!handle) {
-                    lastError_ = 6;
-                    waitResult = kWaitFailed;
-                    return;
-                }
 #if defined(_WIN32)
-                if (handle->hostValue &&
-                    (handle->kind == GuestHandle::Kind::HostEvent ||
-                     handle->kind == GuestHandle::Kind::HostMutex ||
-                     handle->kind == GuestHandle::Kind::GuestProcess ||
-                     handle->kind == GuestHandle::Kind::GuestThread)) {
-                    const DWORD wait = ::WaitForSingleObject(reinterpret_cast<HANDLE>(handle->hostValue), 0);
-                    if (wait == WAIT_OBJECT_0) {
-                        lastError_ = 0;
-                        waitResult = kWaitObject0;
-                    } else if (wait == WAIT_TIMEOUT) {
-                        lastError_ = 0;
-                        waitResult = kWaitTimeout;
-                    } else {
-                        lastError_ = GetLastError();
-                        waitResult = kWaitFailed;
-                    }
-                    if (handle->kind == GuestHandle::Kind::GuestThread) preferredThread = a0;
-                    return;
-                }
+                auto hostWaitProbe = [](const GuestHandle& handle) {
+                    const DWORD wait = ::WaitForSingleObject(reinterpret_cast<HANDLE>(handle.hostValue), 0);
+                    if (wait == WAIT_OBJECT_0) return CeKernel::HostWaitResult{true, false, 0};
+                    if (wait == WAIT_TIMEOUT) return CeKernel::HostWaitResult{false, false, 0};
+                    return CeKernel::HostWaitResult{false, true, GetLastError()};
+                };
+#else
+                CeKernel::HostWaitProbe hostWaitProbe;
 #endif
-                if (handle->kind == GuestHandle::Kind::GuestThread) {
-                    preferredThread = a0;
-                    auto thread = ceKernel_.threads().find(a0);
-                    lastError_ = 0;
-                    waitResult = (thread == ceKernel_.threads().end() ||
-                                  thread->second.state == GuestThreadRunState::Terminated)
-                        ? kWaitObject0
-                        : kWaitTimeout;
-                    return;
-                }
-                if (handle->kind == GuestHandle::Kind::GuestProcess && !handle->hostValue) {
-                    bool processStillRunning = false;
-                    for (const auto& [threadHandle, thread] : ceKernel_.threads()) {
-                        (void)threadHandle;
-                        if (thread.processHandle == a0 && thread.state != GuestThreadRunState::Terminated) {
-                            processStillRunning = true;
-                            break;
-                        }
-                    }
-                    lastError_ = 0;
-                    waitResult = processStillRunning ? kWaitTimeout : kWaitObject0;
-                    return;
-                }
-                lastError_ = 0;
-                waitResult = kWaitObject0;
+                const CeKernel::WaitQueryResult wait =
+                    ceKernel_.queryWaitObject(a0, hostWaitProbe, true);
+                lastError_ = wait.error;
+                waitResult = wait.result;
+                preferredThread = wait.preferredThread;
             };
 
             if (ceKernel_.activeGuestThread()) {
