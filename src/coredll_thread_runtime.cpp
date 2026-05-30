@@ -244,7 +244,10 @@ uint32_t SyntheticDllRuntime::resumeGuestThread(uint32_t guestHandle) {
 }
 
 void SyntheticDllRuntime::wakeGuestThreadsWaitingForMessage() {
-    for (const uint32_t threadHandle : ceKernel_.wakeThreadsWaitingForMessage()) {
+    auto hasMessagesForThread = [this](uint32_t threadHandle) {
+        return ceGwe_.hasMessagesForOwner(threadHandle);
+    };
+    for (const uint32_t threadHandle : ceKernel_.wakeThreadsWaitingForMessage(hasMessagesForThread)) {
         spdlog::info("guest thread message wait satisfied handle=0x{:08x}", threadHandle);
     }
 }

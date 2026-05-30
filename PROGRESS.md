@@ -215,6 +215,23 @@ Current emulator difference:
   startup capture completed, the high-signal log scan found no new hard-error
   or unsupported coredll ordinal lines, and `DeviceParser.exe` still exited via
   the decoded CE kernel path.
+- Message-wait wakeup is now owner-aware. `CeKernel` accepts a GWE-supplied
+  queue probe before waking `WaitingForMessage` guest threads, and active
+  guest-thread `GetMessageW` parks only when that thread's owner queue is
+  empty instead of checking the global queue. CE reference:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/cmsgque.h:798`.
+  Current source references:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_kernel.h:137`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_kernel.cpp:38`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_thread_runtime.cpp:246`,
+  and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp:2093`.
+  The 2026-05-30 Release build passed with the pre-existing Boost Beast
+  warning from `remote_server.cpp`. Bounded autodrive with the companion
+  enabled wrote `captures/inavi_autodrive_20260530_193402`; `00_initial.png`
+  was captured at 816x519, the high-signal log scan found no new unsupported
+  coredll ordinal, hard-error, invalid mapping, false zero-PC, or deadlock
+  markers, and `DeviceParser.exe` still exited via the decoded CE kernel path.
 
 ## Threading And Message Queues
 

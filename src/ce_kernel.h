@@ -134,6 +134,7 @@ public:
     };
 
     using HostWaitProbe = std::function<HostWaitResult(const GuestHandle&)>;
+    using MessageWaitProbe = std::function<bool(uint32_t threadHandle)>;
 
     static constexpr std::string_view name() noexcept { return "CE virtual kernel"; }
     static constexpr std::string_view role() noexcept {
@@ -146,7 +147,7 @@ public:
     bool eraseHandle(uint32_t guestHandle);
     bool containsHandle(uint32_t guestHandle) const;
     bool hasRunnableThread() const;
-    std::vector<uint32_t> wakeThreadsWaitingForMessage();
+    std::vector<uint32_t> wakeThreadsWaitingForMessage(const MessageWaitProbe& hasMessagesForThread);
     WaitQueryResult queryWaitObject(uint32_t guestHandle,
                                     const HostWaitProbe& hostWaitProbe,
                                     bool failOnHostError) const;

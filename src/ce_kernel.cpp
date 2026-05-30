@@ -35,10 +35,12 @@ bool CeKernel::hasRunnableThread() const {
     return false;
 }
 
-std::vector<uint32_t> CeKernel::wakeThreadsWaitingForMessage() {
+std::vector<uint32_t> CeKernel::wakeThreadsWaitingForMessage(
+    const MessageWaitProbe& hasMessagesForThread) {
     std::vector<uint32_t> awakened;
     for (auto& [threadHandle, thread] : guestThreads_) {
         if (thread.state != GuestThreadRunState::WaitingForMessage) continue;
+        if (hasMessagesForThread && !hasMessagesForThread(threadHandle)) continue;
         thread.state = GuestThreadRunState::Runnable;
         awakened.push_back(threadHandle);
     }

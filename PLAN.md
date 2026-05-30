@@ -117,6 +117,11 @@ results, or timing thresholds.
     owner-filtered `CeGwe` query API while preserving the existing flat queue
     ordering inside the selected owner queue.
     Current source anchor: `src/coredll_named_dispatch.cpp`.
+  - [x] Make message-wait wakeup owner-aware: waiting guest threads now wake
+    only when their `CeGwe` owner queue has work, and active-thread
+    `GetMessageW` parks based on its own queue instead of the global queue.
+    Current source anchors: `src/ce_kernel.cpp`,
+    `src/coredll_thread_runtime.cpp`, and `src/synthetic_dll.cpp`.
 - [ ] Model cross-thread `SendMessageW` as a sender-blocked queue transaction
   with receiver-context execution and result transfer back to the sender.
   Current source anchor: `src/synthetic_dll.cpp` send-message inline path.

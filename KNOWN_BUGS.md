@@ -65,9 +65,10 @@ Status:
 - Current scaffold status: `CeGwe` now mirrors posted, sent, input, timer, and
   thread messages into owner-thread lanes. `GetMessageW`/`PeekMessageW` now
   use owner-filtered selection while preserving flat ordering inside that owner
-  context. The bug remains open until `MsgWaitForMultipleObjectsEx`, wake-mask
-  checks, and cross-thread `SendMessageW` use the CE-shaped queue model as
-  behavioral truth.
+  context, and message-wait wakeup now checks the waiting thread's owner queue
+  before making it runnable. The bug remains open until
+  `MsgWaitForMultipleObjectsEx`, wake-mask checks, and cross-thread
+  `SendMessageW` use the CE-shaped queue model as behavioral truth.
 
 ## Window Visibility And Modal Ownership Are Region-Incomplete
 

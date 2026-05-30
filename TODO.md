@@ -25,8 +25,10 @@ Active refactor checklist: `PLAN.md`.
    - Current status: `CeGwe` now has owner-thread lane mirrors for posted,
      sent, input, timer, and thread messages. `GetMessageW`/`PeekMessageW`
      now use owner-filtered selection while preserving flat ordering inside
-     that owner context. Next step is to make message waits and wake masks use
-     the same owner-aware queue state.
+     that owner context, and guest message-wait wakeup now checks the waiting
+     thread's owner queue before making it runnable. Next step is to route
+     `MsgWaitForMultipleObjectsEx`/wake-mask checks through the same
+     owner-aware queue state.
 
 2. Model cross-thread `SendMessageW` as a queue transaction.
    - CE reference:

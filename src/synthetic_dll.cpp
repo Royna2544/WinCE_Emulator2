@@ -2091,14 +2091,15 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
             return;
         }
         case 0x035D: {
-            if (ceKernel_.activeGuestThread() && !ceGwe_.hasMessages() && !quitPosted_) {
-                auto active = ceKernel_.threads().find(ceKernel_.activeGuestThread());
+            const uint32_t activeThread = ceKernel_.activeGuestThread();
+            if (activeThread && !ceGwe_.hasMessagesForOwner(activeThread) && !quitPosted_) {
+                auto active = ceKernel_.threads().find(activeThread);
                 if (active != ceKernel_.threads().end()) {
                     active->second.context = captureGuestCpuContext();
                     active->second.context.registers[UC_MIPS_REG_PC] = pc;
                     active->second.state = GuestThreadRunState::WaitingForMessage;
                     spdlog::info("guest thread message wait handle=0x{:08x} return=0x{:08x} msgPtr=0x{:08x}",
-                                 ceKernel_.activeGuestThread(), ra, a0);
+                                 activeThread, ra, a0);
                 }
                 ceKernel_.activeGuestThread() = 0;
                 if (!restoreMainThreadContextIfRunnable(name.c_str())) {
