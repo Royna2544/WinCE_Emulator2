@@ -529,6 +529,7 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(uint16_t ordinal,
                     bitmap.palette = defaultIndexedPalette(uint16_t(bitsPerPixel));
                 }
                 bitmaps_[ret] = std::move(bitmap);
+                mirrorMgdiBitmap(ret, bitmaps_[ret]);
             }
             spdlog::debug("CreateDIBSection {}x{} bpp={} compression={} masks={:08x}/{:08x}/{:08x} stride={} bits=0x{:08x} bitmap=0x{:08x}",
                           width, heightRaw, bitsPerPixel, compression,
@@ -550,6 +551,7 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(uint16_t ordinal,
         if (ret) {
             bitmaps_[ret] = GuestBitmap{int32_t(width), -int32_t(height), uint16_t(bpp), stride, bits,
                                         0, 0, 0, {}};
+            mirrorMgdiBitmap(ret, bitmaps_[ret]);
         }
         lastError_ = ret ? 0 : 8;
         spdlog::info("CreateCompatibleBitmap {}x{} bits=0x{:08x} bitmap=0x{:08x}",
@@ -2647,6 +2649,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
 #if defined(_WIN32)
             if (object->second.hostValue) DeleteObject(reinterpret_cast<HGDIOBJ>(object->second.hostValue));
 #endif
+            ceMgdi_.destroyBitmap(a0);
             bitmaps_.erase(a0);
             if (object->second.filePointer) releaseAllocation(object->second.filePointer);
             ceKernel_.handles().erase(object);

@@ -1381,6 +1381,7 @@ private:
     bool fillDcRect(const GuestDc& dc, int32_t left, int32_t top, int32_t right, int32_t bottom, uint32_t pixel);
     bool drawDcLine(const GuestDc& dc, int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint32_t pixel);
     bool fillDcPolygon(const GuestDc& dc, const std::vector<std::pair<int32_t, int32_t>>& points, uint32_t pixel);
+    void mirrorMgdiBitmap(uint32_t handle, const GuestBitmap& bitmap);
     bool handleCreateBitmap(const GuestCallArgs& args, uint32_t& ret);
     bool handleGetObjectW(const GuestCallArgs& args, uint32_t& ret);
     bool handleSetDIBColorTable(const GuestCallArgs& args, uint32_t& ret);

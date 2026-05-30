@@ -363,6 +363,29 @@ Current emulator difference:
   was captured at 816x519 and the high-signal log scan found no new
   unsupported coredll ordinal, hard-error, invalid mapping, false zero-PC, or
   deadlock markers.
+- `CeMgdi` now also owns a bitmap metadata shadow. The existing `GuestBitmap`
+  map still owns pixel storage and feeds drawing, but stock/default bitmap,
+  `CreateBitmap`, `CreateDIBSection`, `CreateCompatibleBitmap`,
+  `SetDIBColorTable` palette-size changes, and bitmap deletion now mirror
+  width, raw height, bpp, stride, guest bits pointer, RGB masks, palette-entry
+  count, and stock state into `CeMgdi::BitmapState`. CE reference:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/MGDI/INC/gdiobj.h:358`.
+  Current source references:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_mgdi.h:37`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_mgdi.h:170`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_bitmap.cpp:281`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_bitmap.cpp:379`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_bitmap.cpp:1327`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_bitmap.cpp:1408`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_named_dispatch.cpp:532`,
+  and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_named_dispatch.cpp:2652`.
+  The 2026-05-30 Release build passed with the pre-existing Boost Beast
+  warning from `remote_server.cpp`. Bounded autodrive with the companion
+  enabled wrote `captures/inavi_autodrive_20260530_201929`; `00_initial.png`
+  was captured at 816x519 and the high-signal log scan found no new
+  unsupported coredll ordinal, hard-error, invalid mapping, false zero-PC, or
+  deadlock markers.
 
 ## Threading And Message Queues
 

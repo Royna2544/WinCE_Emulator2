@@ -278,6 +278,22 @@ SyntheticDllRuntime::GuestDc* SyntheticDllRuntime::lookupGuestDc(uint32_t hdc) {
     return dc == dcs_.end() ? nullptr : &dc->second;
 }
 
+void SyntheticDllRuntime::mirrorMgdiBitmap(uint32_t handle, const GuestBitmap& bitmap) {
+    CeMgdi::BitmapState state{};
+    state.hbitmap = handle;
+    state.width = bitmap.width;
+    state.heightRaw = bitmap.heightRaw;
+    state.bpp = bitmap.bpp;
+    state.stride = bitmap.stride;
+    state.bits = bitmap.bits;
+    state.redMask = bitmap.redMask;
+    state.greenMask = bitmap.greenMask;
+    state.blueMask = bitmap.blueMask;
+    state.paletteEntries = bitmap.palette.size();
+    state.stock = bitmap.stock;
+    ceMgdi_.trackBitmap(state);
+}
+
 uint32_t SyntheticDllRuntime::makeGuestBrush(uint32_t colorRef, bool stock) {
     const uint32_t handle = makeGuestHandle({GuestHandle::Kind::GuestBrush, 0, stock ? 1u : 0u});
     brushes_[handle] = GuestBrush{colorRef, 0, stock};
@@ -360,6 +376,7 @@ uint32_t SyntheticDllRuntime::makeStockObject(int32_t index) {
         bitmap.palette = defaultIndexedPalette(1);
         bitmap.stock = true;
         bitmaps_[handle] = std::move(bitmap);
+        mirrorMgdiBitmap(handle, bitmaps_[handle]);
         break;
     }
     default:
@@ -1307,6 +1324,7 @@ bool SyntheticDllRuntime::handleCreateBitmap(const GuestCallArgs& args, uint32_t
         if (bitmap.bpp == 16) ceDefault16BitMasks(bitmap.redMask, bitmap.greenMask, bitmap.blueMask);
         bitmap.palette = defaultIndexedPalette(uint16_t(bpp));
         bitmaps_[ret] = std::move(bitmap);
+        mirrorMgdiBitmap(ret, bitmaps_[ret]);
     }
     lastError_ = ret ? 0 : 8;
     spdlog::info("CreateBitmap {}x{} planes={} bpp={} bits=0x{:08x} bitmap=0x{:08x}",
@@ -1387,6 +1405,7 @@ bool SyntheticDllRuntime::handleSetDIBColorTable(const GuestCallArgs& args, uint
         bm.palette[size_t(start + i)] =
             0xff000000u | (uint32_t(r) << 16) | (uint32_t(g) << 8) | uint32_t(b);
     }
+    ceMgdi_.setBitmapPaletteEntries(dc->selectedBitmap, bm.palette.size());
     lastError_ = 0;
     ret = count;
     spdlog::info("SetDIBColorTable hdc=0x{:08x} bitmap=0x{:08x} start={} count={} ret={}",

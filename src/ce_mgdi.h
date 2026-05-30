@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <optional>
@@ -31,6 +32,20 @@ public:
         Rect systemClip;
         bool hasAppClip{};
         Rect appClip;
+    };
+
+    struct BitmapState {
+        uint32_t hbitmap{};
+        int32_t width{};
+        int32_t heightRaw{};
+        uint16_t bpp{};
+        uint32_t stride{};
+        uint32_t bits{};
+        uint32_t redMask{};
+        uint32_t greenMask{};
+        uint32_t blueMask{};
+        size_t paletteEntries{};
+        bool stock{};
     };
 
     static constexpr std::string_view name() noexcept { return "CE MGDI"; }
@@ -152,6 +167,32 @@ public:
 
     const std::map<uint32_t, DcState>& dcStates() const noexcept { return dcStates_; }
 
+    void trackBitmap(const BitmapState& bitmap) {
+        if (!bitmap.hbitmap) return;
+        bitmapStates_[bitmap.hbitmap] = bitmap;
+    }
+
+    void destroyBitmap(uint32_t hbitmap) {
+        bitmapStates_.erase(hbitmap);
+    }
+
+    BitmapState* bitmapState(uint32_t hbitmap) {
+        auto it = bitmapStates_.find(hbitmap);
+        return it == bitmapStates_.end() ? nullptr : &it->second;
+    }
+
+    const BitmapState* bitmapState(uint32_t hbitmap) const {
+        auto it = bitmapStates_.find(hbitmap);
+        return it == bitmapStates_.end() ? nullptr : &it->second;
+    }
+
+    void setBitmapPaletteEntries(uint32_t hbitmap, size_t entries) {
+        if (auto* state = bitmapState(hbitmap)) state->paletteEntries = entries;
+    }
+
+    const std::map<uint32_t, BitmapState>& bitmapStates() const noexcept { return bitmapStates_; }
+
 private:
     std::map<uint32_t, DcState> dcStates_;
+    std::map<uint32_t, BitmapState> bitmapStates_;
 };

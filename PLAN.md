@@ -180,6 +180,11 @@ results, or timing thresholds.
     enforcement yet. Current source anchors: `src/ce_mgdi.h`,
     `src/coredll_bitmap.cpp`, `src/coredll_paint.cpp`, and
     `src/coredll_named_dispatch.cpp`.
+  - [x] Add a `CeMgdi` bitmap-state shadow and mirror stock/default bitmap,
+    `CreateBitmap`, `CreateDIBSection`, `CreateCompatibleBitmap`, palette-size
+    changes, and bitmap deletion while keeping pixel storage in the current
+    runtime bitmap map. Current source anchors: `src/ce_mgdi.h`,
+    `src/coredll_bitmap.cpp`, and `src/coredll_named_dispatch.cpp`.
 - [ ] Add app clip, system clip, and actual device clip state before adding
   more blit optimizations. CE source anchor:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/MGDI/INC/dc.hpp:13`.

@@ -94,9 +94,10 @@ Active refactor checklist: `PLAN.md`.
      storage, and window-DC system clips seeded from GWE visible rectangles.
      Central framebuffer drawing helpers now consult MGDI system clipping for
      rectangle fills, line drawing, bitmap blits, `StretchDIBits`, and
-     transparent image writes. Next step is to move bitmap/DC object ownership
-     and window-bitmap semantics behind MGDI instead of keeping `GuestBitmap`
-     and saved backing layers as runtime-owned truth.
+     transparent image writes. Bitmap metadata now also mirrors into
+     `CeMgdi::BitmapState`. Next step is to move pixel storage/DC object
+     ownership and window-bitmap semantics behind MGDI instead of keeping
+     `GuestBitmap` and saved backing layers as runtime-owned truth.
 
 ## Next
 
