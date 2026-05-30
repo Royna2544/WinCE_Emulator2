@@ -35,6 +35,10 @@ For this target, use `Mipsii` as the primary SDK directory.
 
 The Visual Studio installation is at: `C:\Program Files\Microsoft Visual Studio\18\Community`
 
+Windows CE Core-OS source is at: `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/`
+
+MFC reference source is at: `C:\Program Files (x86)\Microsoft Visual Studio 8\VC\ce\atlmfc\src\mfc`
+
 The application targets latest Windows-only with x86 target at Zen5. You can add CPU specific-optimizations.
 
 ---
@@ -129,25 +133,6 @@ Maintain these files as durable memory across Codex sessions:
 ---
 
 ## MIPS / CPU Context
-
-Do not assume Unicorn alone handles every edge correctly once we intentionally stop/resume around hooks.
-
-Pay attention to:
-
-- delay slots
-- branch-likely annulment
-- jal / jalr
-- jr ra
-- saved registers `$s0-$s7`
-- stack frame save/restore
-- return-bounce handling
-- resume PC after intentional hook stops
-- setjmp / longjmp behavior
-
-Important MIPS rules:
-
-- Normal branch/jump: delay slot executes.
-- Branch-likely not taken: delay slot is annulled and must not execute.
 
 If PC becomes `0x0`, it is not a normal guest exit. Treat it as an
 emulator control-flow/resume/return-address bug unless proven otherwise, and
