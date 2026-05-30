@@ -151,6 +151,44 @@ results, or timing thresholds.
     `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/cmsgque.h:897`.
     Current source anchor: `src/synthetic_dll.cpp`.
 
+## Phase 3.5: Virtual Device/Serial Wait Semantics And UI Responsiveness
+
+- [ ] Add `src/ce_device.h` and `src/ce_device.cpp` as the future owner for
+  CE device/serial state: guest device name, configured host path, virtual
+  open status, DCB-like settings, `COMMTIMEOUTS`, comm mask, queue sizes,
+  last error, and empty-read wait state. Current source anchors:
+  `src/synthetic_dll.cpp`, `src/coredll_fs.cpp`, and `src/coredll_comm.cpp`.
+- [ ] Wire `CeDevice` into `iNavi_Unicorn_Emulator.vcxproj` as a build-only
+  scaffold before moving behavior.
+- [ ] Move virtual serial configuration, timeout, mask, queue-size, and
+  status bookkeeping behind `CeDevice` while preserving current `ReadFile`
+  behavior for one buildable migration step. CE source anchors:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/DRIVERS/SERDEV/serial.c`
+  and
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COMM/IR/IRCOMM/ircomm.c:792`.
+- [ ] Replace "disconnected serial-fallback" wording with "virtual serial
+  no-data backend" when the emulator intentionally keeps a guest-visible
+  serial device open without host bytes.
+- [ ] Implement timeout-aware virtual serial reads: transfer remote/injected
+  bytes when present, return zero bytes only for CE nonblocking timeout modes,
+  and otherwise park the active guest thread through `CeKernel` until serial
+  data or timeout readiness.
+- [ ] Wake parked serial-read threads when remote serial data arrives or their
+  read timeout expires. Do not model no-data serial polling as an immediate
+  infinite success loop.
+- [ ] Add GWE owner-priority scheduling so pending owner queues are preferred
+  over generic worker slices. CE source anchor:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/cmsgque.h:798`.
+  Current scheduler anchor: `src/coredll_thread_runtime.cpp`.
+- [ ] Restore or continue the valid main message-pump context before
+  `pre-queued-worker` slices when the main pseudo-thread owns pending UI work.
+- [ ] Add rate-limited diagnostics for virtual serial empty-read waits, GWE
+  owner queue counts, and scheduler owner-priority handoff.
+- [ ] Validate with Release build, bounded smoke, and Debug interactive logs:
+  `ReadFile transferred=0` must not appear as an unlimited hot loop,
+  `pre-queued-no-runnable` must not repeat while message owners have work, and
+  UI/dialog switching must remain responsive after sensor polling starts.
+
 ## Phase 4: Window Visible/Update/Client Region Migration
 
 - [ ] Move `GuestWindow`, `windows_`, window class maps, z-order, parent/owner
