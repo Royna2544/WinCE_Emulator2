@@ -2097,6 +2097,12 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
             spdlog::info("guest thread timeslice yield handle=0x{:08x} reason={} pc=0x{:08x} queued={}",
                          ceKernel_.activeGuestThread(), reason, pc, ceGwe_.messageCount());
             yieldActiveGuestThread("timeslice");
+        } else if (stoppedByWatchdog && !ceKernel_.activeGuestThread() &&
+                   pc && isGuestRangeReadable(pc, 4)) {
+            ceKernel_.mainThreadContext() = captureGuestCpuContext();
+            updateCurrentThreadKData(ceKernel_.mainThreadPseudoHandle(), ceKernel_.mainThreadTls());
+            spdlog::debug("saved main thread timeslice context reason={} pc=0x{:08x} ra=0x{:08x} queued={}",
+                          reason, pc, ra, ceGwe_.messageCount());
         }
         pumpHostMessages();
         presentHostWindows(false);
@@ -2222,8 +2228,17 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
             if (ceKernel_.activeGuestThread()) {
                 yieldActiveGuestThread("queued-message-preempt");
             }
-            if (!ceKernel_.activeGuestThread() && restoreMainThreadContextIfRunnable("queued-message")) {
-                spdlog::debug("restored parked main thread for queued messages queued={}", ceGwe_.messageCount());
+            if (!ceKernel_.activeGuestThread()) {
+                uint32_t currentPc = 0;
+                uc_reg_read(uc_, UC_MIPS_REG_PC, &currentPc);
+                if (!currentPc || !isGuestRangeReadable(currentPc, 4)) {
+                    if (restoreMainThreadContextIfRunnable("queued-message")) {
+                        spdlog::debug("restored parked main thread for queued messages queued={}",
+                                      ceGwe_.messageCount());
+                    }
+                } else {
+                    updateCurrentThreadKData(ceKernel_.mainThreadPseudoHandle(), ceKernel_.mainThreadTls());
+                }
             }
             compactQueuedPointerMotion();
             const uint64_t budget = 250000u;

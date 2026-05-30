@@ -30,8 +30,10 @@ Active refactor checklist: `PLAN.md`.
      is registered and routed through the same owner-aware queue state for
      basic message readiness. Cross-thread `SendMessageW` now queues to any
      different receiver owner and parks the sender until the transfer result
-     returns. Next step is to start Phase 4 window visible/update/client
-     region migration.
+     returns. Main-thread queued-message watchdog slices now preserve the
+     current readable pump context instead of restoring stale parked state.
+     Next step is to continue Phase 4 window visible/update/client region
+     migration.
 
 2. Model cross-thread `SendMessageW` as a queue transaction.
    - CE reference:

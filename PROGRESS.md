@@ -267,6 +267,27 @@ Current emulator difference:
   `captures/inavi_autodrive_20260530_194442`; `00_initial.png` was captured at
   816x519 and the high-signal log scan found no new unsupported coredll
   ordinal, hard-error, invalid mapping, false zero-PC, or deadlock markers.
+- Main-thread queued-message slices now preserve the current readable guest
+  CPU context when the interactive watchdog stops a slice, and the queue loop
+  restores the parked main context only when the current PC is missing or
+  unreadable. This matches the CE/MFC model where `PeekMessage`/`GetMessage`
+  pumping continues on the owning message queue thread instead of rewinding to
+  a stale parked context. CE/MFC references:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/cmsgque.h:924`,
+  `C:\Program Files (x86)\Microsoft Visual Studio 8\VC\ce\atlmfc\src\mfc\thrdcore.cpp:620`,
+  and
+  `C:\Program Files (x86)\Microsoft Visual Studio 8\VC\ce\atlmfc\src\mfc\wincore.cpp:4715`.
+  Current source references:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp:2100`
+  and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp:2231`.
+  The 2026-05-30 Debug build passed after stopping stale kept-alive Debug
+  emulator processes, and the 2026-05-30 Release build passed with no
+  warnings. Fresh interactive Debug autodrive wrote
+  `captures/interactive_debug_20260530_215815/inavi_autodrive_20260530_215816`;
+  `00_initial.png` was captured at 816x519, the main process stayed alive past
+  the previous queued-message `PC == 0` crash, and logs reached modal
+  `TGNaviDlg` create/destroy plus continued dispatch.
 - Phase 4 window-region scaffolding has started. `CeGwe` now carries a
   GWE-owned window-region shadow with window, client, visible, update,
   client-visible, and client-update rectangles. Existing window publication

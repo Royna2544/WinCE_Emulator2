@@ -131,6 +131,15 @@ results, or timing thresholds.
     `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/cmsgque.h:802`.
     Current source anchors: `src/synthetic_dll.cpp`,
     `src/ce_kernel.cpp`, and `src/synthetic_dll_modules.cpp`.
+  - [x] Preserve the main message-pump CPU context across queued-message
+    watchdog slices instead of restoring a stale parked context while the
+    current PC is still readable. CE source anchor:
+    `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/cmsgque.h:924`.
+    MFC source anchors:
+    `C:\Program Files (x86)\Microsoft Visual Studio 8\VC\ce\atlmfc\src\mfc\thrdcore.cpp:620`
+    and
+    `C:\Program Files (x86)\Microsoft Visual Studio 8\VC\ce\atlmfc\src\mfc\wincore.cpp:4715`.
+    Current source anchor: `src/coredll_window_runtime.cpp`.
 - [ ] Model cross-thread `SendMessageW` as a sender-blocked queue transaction
   with receiver-context execution and result transfer back to the sender.
   Current source anchor: `src/synthetic_dll.cpp` send-message inline path.

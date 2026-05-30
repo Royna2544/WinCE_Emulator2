@@ -70,9 +70,12 @@ Status:
   owner-aware message readiness, but wake masks are still category-coarse.
   Cross-thread `SendMessageW` now uses a sender-blocked queue/result path for
   any different window-owner queue; finer `InSendMessage`/timeout accounting
-  remains future work if the app reaches those APIs. The bug remains open
-  until the queue model, wake categories, and send-message edge cases are the
-  behavioral truth.
+  remains future work if the app reaches those APIs. A Debug interactive run
+  on 2026-05-30 also fixed the observed stale main-message-pump context
+  replay: queued-message watchdog slices now save the current readable main
+  context and only restore parked state when the current PC is invalid. The
+  bug remains open until the queue model, wake categories, and send-message
+  edge cases are the behavioral truth.
 
 ## Window Visibility And Modal Ownership Are Region-Incomplete
 
