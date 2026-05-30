@@ -132,6 +132,14 @@ Current emulator difference:
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/remote_server.cpp:759`. The
   2026-05-31 Release build passed with the existing Boost Beast warning from
   `remote_server.cpp`.
+- Host-backed serial open no longer retries a missing/unavailable Win32 COM
+  port inside the guest `CreateFileW` path. A mapped `win32_com` backend gets
+  one immediate host-open probe; if unavailable, the guest still receives the
+  virtual CE serial device and its no-data wait semantics. This removes the
+  observed ~1.75s startup delay around unavailable `COM7:`/host `COM21`
+  without special-casing that device. Current source anchor:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp:781`. The
+  2026-05-31 Release build passed with zero warnings.
 - `CeGwe` now owns the `GuestMessage` record type and backing message deque.
   `SyntheticDllRuntime::guestMessages_` remains a compatibility alias to that
   deque, so this Phase 3 scaffold step should preserve delivery behavior while

@@ -778,9 +778,9 @@ uint32_t SyntheticDllRuntime::openGuestSerialDevice(const std::string& guestPath
         const std::string displayName = narrowAsciiLossy(hostPort);
         HANDLE host = INVALID_HANDLE_VALUE;
         DWORD openError = 0;
-        constexpr int maxOpenAttempts = 8;
-        constexpr DWORD retryDelayMs = 250;
-        for (int attempt = 1; attempt <= maxOpenAttempts; ++attempt) {
+        constexpr int kHostSerialOpenAttempts = 1;
+        constexpr DWORD kHostSerialRetryDelayMs = 250;
+        for (int attempt = 1; attempt <= kHostSerialOpenAttempts; ++attempt) {
             host = CreateFileW(hostPort.c_str(), desiredAccess, share, nullptr, OPEN_EXISTING,
                                FILE_ATTRIBUTE_NORMAL, nullptr);
             if (host != INVALID_HANDLE_VALUE) {
@@ -795,10 +795,10 @@ uint32_t SyntheticDllRuntime::openGuestSerialDevice(const std::string& guestPath
             const bool retryable = openError == ERROR_ACCESS_DENIED ||
                                    openError == ERROR_FILE_NOT_FOUND ||
                                    openError == ERROR_PATH_NOT_FOUND;
-            if (!retryable || attempt == maxOpenAttempts) break;
+            if (!retryable || attempt == kHostSerialOpenAttempts) break;
             spdlog::debug("CreateFileW guest device=\"{}\" host=\"{}\" retrying after lastError={} attempt={}/{}",
-                          guestPath, displayName, openError, attempt, maxOpenAttempts);
-            Sleep(retryDelayMs);
+                          guestPath, displayName, openError, attempt, kHostSerialOpenAttempts);
+            Sleep(kHostSerialRetryDelayMs);
         }
         if (host != INVALID_HANDLE_VALUE) {
             DCB dcb{};

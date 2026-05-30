@@ -165,6 +165,27 @@ Status:
   explicit opt-out. The audio websocket now drains the bounded recent PCM
   buffer instead of clearing it on connect.
 
+## Resolved: Missing Host Serial Port Added Startup Delay
+
+Symptom:
+
+- Map/startup loading could pause while `CreateFileW("COM7:")` mapped to an
+  unavailable host COM port and the emulator retried the host `CreateFileW`
+  several times before falling back to the virtual serial backend.
+
+Evidence:
+
+- Current run `captures/inavi_autodrive_20260531_081857/emulator.stdout.log`
+  logged the serial-open wrapper at `08:19:20.933` and the unavailable-host
+  fallback at `08:19:22.687`, about 1.75s later.
+
+Status:
+
+- Fixed on 2026-05-31. Mapped `win32_com` serial backends now probe the host
+  port once in the guest `CreateFileW` path, then use the same virtual CE
+  serial no-data backend if the host port is unavailable. This is generic to
+  mapped serial devices and does not special-case `COM7:`.
+
 ## Virtual Serial No-Data Reads Can Still Hot-Poll
 
 Symptom:

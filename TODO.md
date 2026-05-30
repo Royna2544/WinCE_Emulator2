@@ -52,7 +52,10 @@ Active refactor checklist: `PLAN.md`.
      visually pressed when remote endpoint clicks arrive faster than the guest
      message pump drains them. Remote audio is now enabled by default in
      remote-server autodrive runs and the websocket keeps the bounded recent
-     PCM buffer instead of clearing startup audio on connect.
+     PCM buffer instead of clearing startup audio on connect. Host-backed
+     mapped serial open now does only one immediate host COM probe before
+     falling back to the virtual serial device, so missing host COM devices no
+     longer add multi-retry startup delay.
 
 2. Introduce a CE-shaped internal `MsgQueue` model.
    - CE reference:
