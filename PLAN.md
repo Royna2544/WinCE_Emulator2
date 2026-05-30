@@ -243,6 +243,10 @@ results, or timing thresholds.
     metadata while retaining runtime maps as compatibility copies. Current
     source anchors: `src/ce_mgdi.h`, `src/coredll_bitmap.cpp`, and
     `src/coredll_named_dispatch.cpp`.
+  - [x] Route brush/pen drawing metadata reads for `Polygon`, `Polyline`,
+    `Ellipse`, `FillRect`, `PatBlt`, `Rectangle`, and `LineTo` through
+    `CeMgdi` object state. Current source anchor:
+    `src/coredll_named_dispatch.cpp`.
 - [ ] Add app clip, system clip, and actual device clip state before adding
   more blit optimizations. CE source anchor:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/MGDI/INC/dc.hpp:13`.

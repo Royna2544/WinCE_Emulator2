@@ -564,11 +564,11 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(uint16_t ordinal,
         GuestDc* dc = lookupGuestDc(a0);
         const uint32_t selectedBrush = dc ? ceMgdi_.selectedBrushForDc(dc->hdc, dc->selectedBrush) : 0;
         const uint32_t selectedPen = dc ? ceMgdi_.selectedPenForDc(dc->hdc, dc->selectedPen) : 0;
-        auto brush = dc ? brushes_.find(selectedBrush) : brushes_.end();
-        auto pen = dc ? pens_.find(selectedPen) : pens_.end();
-        const bool hasBrush = brush != brushes_.end() && brush->second.colorRef != 0xffffffffu;
-        const bool hasPen = pen != pens_.end() && pen->second.style != 5 && pen->second.colorRef != 0xffffffffu;
-        if (!dc || !a1 || a2 < 2 || (brush == brushes_.end() && pen == pens_.end())) {
+        const CeMgdi::BrushState* brush = dc ? ceMgdi_.brushState(selectedBrush) : nullptr;
+        const CeMgdi::PenState* pen = dc ? ceMgdi_.penState(selectedPen) : nullptr;
+        const bool hasBrush = brush && brush->colorRef != 0xffffffffu;
+        const bool hasPen = pen && pen->style != 5 && pen->colorRef != 0xffffffffu;
+        if (!dc || !a1 || a2 < 2 || (!brush && !pen)) {
             lastError_ = dc ? 87 : 6;
             ret = 0;
         } else {
@@ -595,15 +595,15 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(uint16_t ordinal,
                               "brush=0x{:08x} brushColor=0x{:08x} pattern=0x{:08x} pen=0x{:08x} penColor=0x{:08x}",
                               polygonDebugCount, a0, dc->hwnd, dc->selectedBitmap, a2,
                               minX, minY, maxX, maxY, selectedBrush,
-                              hasBrush ? brush->second.colorRef : 0xffffffffu,
-                              hasBrush ? brush->second.patternBitmap : 0,
-                              selectedPen, hasPen ? pen->second.colorRef : 0xffffffffu);
+                              hasBrush ? brush->colorRef : 0xffffffffu,
+                              hasBrush ? brush->patternBitmap : 0,
+                              selectedPen, hasPen ? pen->colorRef : 0xffffffffu);
             }
             if (hasBrush) {
-                fillDcPolygon(*dc, points, colorRefToPixel(brush->second.colorRef));
+                fillDcPolygon(*dc, points, colorRefToPixel(brush->colorRef));
             }
             if (hasPen) {
-                const uint32_t pixel = colorRefToPixel(pen->second.colorRef);
+                const uint32_t pixel = colorRefToPixel(pen->colorRef);
                 for (size_t index = 0; index < points.size(); ++index) {
                     const auto& from = points[index];
                     const auto& to = points[(index + 1) % points.size()];
@@ -624,12 +624,12 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(uint16_t ordinal,
     {
         GuestDc* dc = lookupGuestDc(a0);
         const uint32_t selectedPen = dc ? ceMgdi_.selectedPenForDc(dc->hdc, dc->selectedPen) : 0;
-        auto pen = dc ? pens_.find(selectedPen) : pens_.end();
-        if (!dc || !a1 || a2 < 2 || pen == pens_.end()) {
+        const CeMgdi::PenState* pen = dc ? ceMgdi_.penState(selectedPen) : nullptr;
+        if (!dc || !a1 || a2 < 2 || !pen) {
             lastError_ = dc ? 87 : 6;
             ret = 0;
         } else {
-            const uint32_t pixel = colorRefToPixel(pen->second.colorRef);
+            const uint32_t pixel = colorRefToPixel(pen->colorRef);
             int32_t prevX = int32_t(readU32(a1));
             int32_t prevY = int32_t(readU32(a1 + 4));
             for (uint32_t index = 1; index < a2 && index < 0x10000; ++index) {
@@ -2726,9 +2726,9 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
         GuestDc* dc = lookupGuestDc(a0);
         const uint32_t selectedBrush = dc ? ceMgdi_.selectedBrushForDc(dc->hdc, dc->selectedBrush) : 0;
         const uint32_t selectedPen = dc ? ceMgdi_.selectedPenForDc(dc->hdc, dc->selectedPen) : 0;
-        auto brush = dc ? brushes_.find(selectedBrush) : brushes_.end();
-        auto pen = dc ? pens_.find(selectedPen) : pens_.end();
-        if (!dc || (brush == brushes_.end() && pen == pens_.end())) {
+        const CeMgdi::BrushState* brush = dc ? ceMgdi_.brushState(selectedBrush) : nullptr;
+        const CeMgdi::PenState* pen = dc ? ceMgdi_.penState(selectedPen) : nullptr;
+        if (!dc || (!brush && !pen)) {
             lastError_ = dc ? 87 : 6;
             ret = 0;
         } else {
@@ -2758,11 +2758,11 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                                     int32_t(std::lround(centerY + std::sin(angle) * radiusY)));
             }
 
-            if (brush != brushes_.end() && brush->second.colorRef != 0xffffffffu) {
-                fillDcPolygon(*dc, points, colorRefToPixel(brush->second.colorRef));
+            if (brush && brush->colorRef != 0xffffffffu) {
+                fillDcPolygon(*dc, points, colorRefToPixel(brush->colorRef));
             }
-            if (pen != pens_.end() && pen->second.style != 5 && pen->second.colorRef != 0xffffffffu) {
-                const uint32_t pixel = colorRefToPixel(pen->second.colorRef);
+            if (pen && pen->style != 5 && pen->colorRef != 0xffffffffu) {
+                const uint32_t pixel = colorRefToPixel(pen->colorRef);
                 for (size_t index = 0; index < points.size(); ++index) {
                     const auto& from = points[index];
                     const auto& to = points[(index + 1) % points.size()];
@@ -2778,17 +2778,17 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
     {
         GuestDc* dc = lookupGuestDc(a0);
         int32_t left = 0, top = 0, right = 0, bottom = 0;
-        auto brush = brushes_.find(a2);
-        if (!dc || !readGuestRect(a1, left, top, right, bottom) || brush == brushes_.end()) {
+        const CeMgdi::BrushState* brush = ceMgdi_.brushState(a2);
+        if (!dc || !readGuestRect(a1, left, top, right, bottom) || !brush) {
             lastError_ = 87;
             ret = 0;
         } else {
-            if (brush->second.colorRef != 0xffffffffu) {
-                fillDcRect(*dc, left, top, right, bottom, colorRefToPixel(brush->second.colorRef));
+            if (brush->colorRef != 0xffffffffu) {
+                fillDcRect(*dc, left, top, right, bottom, colorRefToPixel(brush->colorRef));
             }
             if (std::abs(right - left) >= 200 && std::abs(bottom - top) >= 120) {
                 spdlog::info("FillRect large dc=0x{:08x} hwnd=0x{:08x} bitmap=0x{:08x} rect={},{}..{},{} color=0x{:08x}",
-                             a0, dc->hwnd, dc->selectedBitmap, left, top, right, bottom, brush->second.colorRef);
+                             a0, dc->hwnd, dc->selectedBitmap, left, top, right, bottom, brush->colorRef);
             }
             lastError_ = 0;
             ret = 1;
@@ -2799,22 +2799,22 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
     {
         GuestDc* dc = lookupGuestDc(a0);
         const uint32_t selectedBrush = dc ? ceMgdi_.selectedBrushForDc(dc->hdc, dc->selectedBrush) : 0;
-        auto brush = dc ? brushes_.find(selectedBrush) : brushes_.end();
+        const CeMgdi::BrushState* brush = dc ? ceMgdi_.brushState(selectedBrush) : nullptr;
         const uint32_t rop = stackArg(5);
-        if (!dc || brush == brushes_.end() || rop != 0x00f00021u) {
+        if (!dc || !brush || rop != 0x00f00021u) {
             lastError_ = dc ? 120 : 6;
             ret = 0;
         } else {
-            if (brush->second.colorRef != 0xffffffffu) {
+            if (brush->colorRef != 0xffffffffu) {
                 fillDcRect(*dc, int32_t(a1), int32_t(a2),
                            int32_t(a1) + int32_t(a3),
                            int32_t(a2) + int32_t(stackArg(4)),
-                           colorRefToPixel(brush->second.colorRef));
+                           colorRefToPixel(brush->colorRef));
             }
             if (std::abs(int32_t(a3)) >= 200 && std::abs(int32_t(stackArg(4))) >= 120) {
                 spdlog::info("PatBlt large dc=0x{:08x} hwnd=0x{:08x} bitmap=0x{:08x} rect={},{} {}x{} color=0x{:08x} rop=0x{:08x}",
                              a0, dc->hwnd, dc->selectedBitmap, int32_t(a1), int32_t(a2),
-                             int32_t(a3), int32_t(stackArg(4)), brush->second.colorRef, rop);
+                             int32_t(a3), int32_t(stackArg(4)), brush->colorRef, rop);
             }
             lastError_ = 0;
             ret = 1;
@@ -2826,9 +2826,9 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
         GuestDc* dc = lookupGuestDc(a0);
         const uint32_t selectedBrush = dc ? ceMgdi_.selectedBrushForDc(dc->hdc, dc->selectedBrush) : 0;
         const uint32_t selectedPen = dc ? ceMgdi_.selectedPenForDc(dc->hdc, dc->selectedPen) : 0;
-        auto brush = dc ? brushes_.find(selectedBrush) : brushes_.end();
-        auto pen = dc ? pens_.find(selectedPen) : pens_.end();
-        if (!dc || (brush == brushes_.end() && pen == pens_.end())) {
+        const CeMgdi::BrushState* brush = dc ? ceMgdi_.brushState(selectedBrush) : nullptr;
+        const CeMgdi::PenState* pen = dc ? ceMgdi_.penState(selectedPen) : nullptr;
+        if (!dc || (!brush && !pen)) {
             lastError_ = dc ? 87 : 6;
             ret = 0;
         } else {
@@ -2836,11 +2836,11 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             const int32_t top = int32_t(a2);
             const int32_t right = int32_t(a3);
             const int32_t bottom = int32_t(stackArg(4));
-            if (brush != brushes_.end() && brush->second.colorRef != 0xffffffffu) {
-                fillDcRect(*dc, left, top, right, bottom, colorRefToPixel(brush->second.colorRef));
+            if (brush && brush->colorRef != 0xffffffffu) {
+                fillDcRect(*dc, left, top, right, bottom, colorRefToPixel(brush->colorRef));
             }
-            if (pen != pens_.end() && pen->second.style != 5 && pen->second.colorRef != 0xffffffffu) {
-                const uint32_t pixel = colorRefToPixel(pen->second.colorRef);
+            if (pen && pen->style != 5 && pen->colorRef != 0xffffffffu) {
+                const uint32_t pixel = colorRefToPixel(pen->colorRef);
                 drawDcLine(*dc, left, top, right - 1, top, pixel);
                 drawDcLine(*dc, left, bottom - 1, right - 1, bottom - 1, pixel);
                 drawDcLine(*dc, left, top, left, bottom - 1, pixel);
@@ -2875,15 +2875,15 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
     {
         GuestDc* dc = lookupGuestDc(a0);
         const uint32_t selectedPen = dc ? ceMgdi_.selectedPenForDc(dc->hdc, dc->selectedPen) : 0;
-        auto pen = dc ? pens_.find(selectedPen) : pens_.end();
-        if (!dc || pen == pens_.end()) {
+        const CeMgdi::PenState* pen = dc ? ceMgdi_.penState(selectedPen) : nullptr;
+        if (!dc || !pen) {
             lastError_ = dc ? 87 : 6;
             ret = 0;
         } else {
-            if (pen->second.style != 5 && pen->second.colorRef != 0xffffffffu) {
+            if (pen->style != 5 && pen->colorRef != 0xffffffffu) {
                 const auto currentPos = ceMgdi_.currentPositionForDc(a0, dc->x, dc->y);
                 drawDcLine(*dc, currentPos.first, currentPos.second, int32_t(a1), int32_t(a2),
-                           colorRefToPixel(pen->second.colorRef));
+                           colorRefToPixel(pen->colorRef));
             }
             dc->x = int32_t(a1);
             dc->y = int32_t(a2);

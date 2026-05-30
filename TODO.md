@@ -116,7 +116,9 @@ Active refactor checklist: `PLAN.md`.
      MGDI DC shadow for text drawing, setter return values, `MoveToEx`, and
      `LineTo`. Brush, pen, and font metadata now mirrors into MGDI, with host
      text font selection and brush/pen/font `DeleteObject` stock checks reading
-     that MGDI metadata. Next step is to move more pixel operations/DC object
+     that MGDI metadata. Brush/pen drawing metadata reads for polygon, polyline,
+     ellipse, fill, pat-blit, rectangle, and line drawing now also read through
+     MGDI object state. Next step is to move more pixel operations/DC object
      ownership behind MGDI instead of keeping `GuestBitmap`, runtime GDI-object
      maps, and saved backing layers as runtime-owned truth.
 
