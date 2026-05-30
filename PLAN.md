@@ -197,6 +197,9 @@ results, or timing thresholds.
   - [x] Route `DeleteObject` stock-bitmap protection through
     `CeMgdi::BitmapState` before host/guest bitmap storage teardown. Current
     source anchor: `src/coredll_named_dispatch.cpp`.
+  - [x] Route `SelectObject` bitmap selection validation through
+    `CeMgdi::BitmapState` before updating the DC selected-bitmap state.
+    Current source anchor: `src/coredll_named_dispatch.cpp`.
 - [ ] Add app clip, system clip, and actual device clip state before adding
   more blit optimizations. CE source anchor:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/MGDI/INC/dc.hpp:13`.

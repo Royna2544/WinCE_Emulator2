@@ -190,7 +190,7 @@ Status:
   scaffold for published guest windows, and `GetObjectW` bitmap metadata now
   reads through MGDI. `SetBitmapBits` now also uses MGDI metadata for storage
   size and guest bits lookup, `SetDIBColorTable` validates palette bounds
-  through MGDI metadata, and `DeleteObject` uses MGDI metadata for stock-bitmap
-  protection. The bug remains open until more pixel storage/DC object
-  ownership moves behind MGDI instead of saved backing heuristics remaining the
-  clipping truth.
+  through MGDI metadata, and `DeleteObject`/`SelectObject` use MGDI metadata
+  for stock-bitmap protection and bitmap selection validation. The bug remains
+  open until more pixel storage/DC object ownership moves behind MGDI instead
+  of saved backing heuristics remaining the clipping truth.

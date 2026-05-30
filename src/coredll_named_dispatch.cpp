@@ -2595,7 +2595,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             dc->selectedFont = a1;
             ceMgdi_.setSelectedFont(a0, a1);
             lastError_ = 0;
-        } else if (object->second.kind == GuestHandle::Kind::HostBitmap && bitmaps_.count(a1)) {
+        } else if (object->second.kind == GuestHandle::Kind::HostBitmap && ceMgdi_.bitmapState(a1)) {
             ret = dc->selectedBitmap;
             dc->selectedBitmap = a1;
             ceMgdi_.setSelectedBitmap(a0, a1);

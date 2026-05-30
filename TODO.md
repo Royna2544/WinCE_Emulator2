@@ -98,10 +98,11 @@ Active refactor checklist: `PLAN.md`.
      `CeMgdi::BitmapState`, and published windows now mirror into a
      `CeMgdi::WindowBitmapState` scaffold with viewport, system clip, and live
      DC count. `GetObjectW` bitmap metadata, `SetBitmapBits` storage lookup,
-     `SetDIBColorTable` palette bounds, and `DeleteObject` stock-bitmap
-     protection now read through MGDI metadata. Next step is to move more pixel
-     operations/DC object ownership behind MGDI instead of keeping
-     `GuestBitmap` and saved backing layers as runtime-owned truth.
+     `SetDIBColorTable` palette bounds, `DeleteObject` stock-bitmap protection,
+     and `SelectObject` bitmap validation now read through MGDI metadata. Next
+     step is to move more pixel operations/DC object ownership behind MGDI
+     instead of keeping `GuestBitmap` and saved backing layers as runtime-owned
+     truth.
 
 ## Next
 
