@@ -756,7 +756,6 @@ struct RemoteServerHandle {
         if (ec) return;
         ws.binary(true);
         const int chunkMs = queryInt(req, "chunkMs", 20, 5, 250);
-        runtime.clearRemoteAudioChunks();
         while (!stopping.load()) {
             const size_t available = ws.next_layer().available(ec);
             if (ec) return;
@@ -988,7 +987,7 @@ void SyntheticDllRuntime::publishRemoteAudioChunk(const std::vector<uint8_t>& pc
         remoteAudioNextPtsMs_ += chunk.durationMs;
         remoteAudioChunks_.push_back(std::move(chunk));
     }
-    constexpr size_t kMaxAudioChunks = 25;
+    constexpr size_t kMaxAudioChunks = 600;
     while (remoteAudioChunks_.size() > kMaxAudioChunks) remoteAudioChunks_.pop_front();
 }
 

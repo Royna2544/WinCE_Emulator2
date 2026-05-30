@@ -1,6 +1,6 @@
 # Progress
 
-Last refreshed: 2026-05-30.
+Last refreshed: 2026-05-31.
 
 ## Current Baseline: CE Coredll/GWE Behavior Versus Emulator Behavior
 
@@ -123,6 +123,15 @@ Current emulator difference:
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_mapping.cpp:278`. The
   2026-05-31 Release and Debug builds passed with zero warnings after this
   logging-hygiene change.
+- Remote-server audio is enabled by default for `tools/autodrive_inavi.ps1`
+  remote runs unless `-NoRemoteAudio` is passed. The remote audio websocket no
+  longer clears buffered PCM on connect, so a client that attaches after the
+  startup `waveOutWrite` can still drain the bounded recent audio buffer.
+  Current source anchors:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/tools/autodrive_inavi.ps1:20` and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/remote_server.cpp:759`. The
+  2026-05-31 Release build passed with the existing Boost Beast warning from
+  `remote_server.cpp`.
 - `CeGwe` now owns the `GuestMessage` record type and backing message deque.
   `SyntheticDllRuntime::guestMessages_` remains a compatibility alias to that
   deque, so this Phase 3 scaffold step should preserve delivery behavior while

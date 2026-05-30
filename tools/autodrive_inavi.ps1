@@ -18,6 +18,7 @@ param(
     [int]$RemoteVideoFps = 30,
     [int]$RemoteJpegQuality = 80,
     [switch]$RemoteAudio,
+    [switch]$NoRemoteAudio,
     [int]$RemoteAudioSampleRate = 44100,
     [int]$RemoteAudioChannels = 2,
     [string]$RemoteAudioFormat = "s16le",
@@ -327,7 +328,8 @@ if ($RemoteServer) {
         $argumentList += @("--remote-token", $RemoteToken)
     }
     $argumentList += @("--remote-video-fps", [string]$RemoteVideoFps, "--remote-jpeg-quality", [string]$RemoteJpegQuality)
-    if ($RemoteAudio) {
+    $remoteAudioEnabled = $RemoteAudio -or -not $NoRemoteAudio
+    if ($remoteAudioEnabled) {
         $argumentList += @(
             "--remote-audio",
             "--remote-audio-sample-rate", [string]$RemoteAudioSampleRate,

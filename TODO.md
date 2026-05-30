@@ -1,6 +1,6 @@
 # TODO
 
-Last refreshed: 2026-05-30.
+Last refreshed: 2026-05-31.
 
 This file was reset to track the CE coredll/GWE behavior-modeling work. Do not
 add app-specific shortcuts here. Use CE source references and current emulator
@@ -50,7 +50,9 @@ Active refactor checklist: `PLAN.md`.
      rejected pointer-down sequence, and queued-message preemption now requires
      a schedulable GWE owner. Next run should verify buttons no longer remain
      visually pressed when remote endpoint clicks arrive faster than the guest
-     message pump drains them.
+     message pump drains them. Remote audio is now enabled by default in
+     remote-server autodrive runs and the websocket keeps the bounded recent
+     PCM buffer instead of clearing startup audio on connect.
 
 2. Introduce a CE-shaped internal `MsgQueue` model.
    - CE reference:

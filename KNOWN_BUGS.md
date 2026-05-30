@@ -1,6 +1,6 @@
 # Known Bugs
 
-Last refreshed: 2026-05-30.
+Last refreshed: 2026-05-31.
 
 This file was reset to record behavior gaps explained by the CE 6.x
 coredll/GWE source comparison. Older route, GPS, remote-server, and performance
@@ -142,6 +142,28 @@ Status:
   successful named-shared mapping hot-path logs are now debug-level so normal
   info logging no longer amplifies that churn; the remaining question is how
   much of the visible delay is guest work versus emulator scheduling/rendering.
+
+## Resolved: Remote Audio WebSocket Had No Startup Audio In Autodrive Runs
+
+Symptom:
+
+- Debug remote-server runs could show guest `waveOutOpen`/`waveOutWrite` while
+  `/api/v1/audio/ws` produced no useful audio.
+
+Evidence:
+
+- Current run `captures/inavi_autodrive_20260531_081857/emulator.stdout.log`
+  logged `remote server: 192.168.0.39:8765 ... audio=0`, then later logged a
+  startup `waveOutWrite` with an 11.2s buffer. The websocket handler also
+  cleared the audio queue on connect, so even enabled clients attaching after
+  startup could discard buffered PCM.
+
+Status:
+
+- Fixed on 2026-05-31. `tools/autodrive_inavi.ps1` now enables remote audio by
+  default when `-RemoteServer` is used, with `-NoRemoteAudio` available for
+  explicit opt-out. The audio websocket now drains the bounded recent PCM
+  buffer instead of clearing it on connect.
 
 ## Virtual Serial No-Data Reads Can Still Hot-Poll
 
