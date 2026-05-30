@@ -100,6 +100,21 @@ Current emulator difference:
   `captures/inavi_autodrive_20260530_235445`; both captured startup without
   high-signal fatal/unsupported-ordinal log hits, but neither run exercised
   the full interactive remote-server button-stall path.
+- Remote host input now preserves pointer-stream pairing when the emulator
+  applies input backpressure. If a new host/remote `WM_LBUTTONDOWN` is rejected
+  because an older pointer sequence is still queued, the matching release is
+  dropped as part of that rejected host sequence instead of queuing an
+  unmatched guest `WM_LBUTTONUP`. Queued-message preemption also now checks
+  whether the oldest GWE message owner can actually be scheduled before
+  yielding an active worker. Current source anchors:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp:1691` and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_thread_runtime.cpp:415`.
+  The 2026-05-31 Release and Debug builds passed with the same Boost Beast
+  warning from `remote_server.cpp`; Debug interactive validation is next.
+  The latest remote run still suggests map UI update slowness is tied to long
+  guest `message-transfer`/paint spans plus high-frequency
+  `iNavi_sharedMem_traffic_static` map/unmap churn, not to forced unmap
+  writes.
 - `CeGwe` now owns the `GuestMessage` record type and backing message deque.
   `SyntheticDllRuntime::guestMessages_` remains a compatibility alias to that
   deque, so this Phase 3 scaffold step should preserve delivery behavior while

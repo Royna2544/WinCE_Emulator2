@@ -412,6 +412,23 @@ bool SyntheticDllRuntime::restoreMainThreadContextIfRunnable(const char* reason)
     return false;
 }
 
+bool SyntheticDllRuntime::hasSchedulableGweMessageOwner() const {
+    const std::optional<uint32_t> owner = ceGwe_.oldestPendingOwner();
+    if (!owner) return false;
+    const uint32_t activeThread = ceKernel_.activeGuestThread();
+    if (*owner == activeThread) return false;
+    if (*owner == ceKernel_.mainThreadPseudoHandle()) {
+        if (!activeThread) return true;
+        if (!ceKernel_.mainThreadContext().valid) return false;
+        const uint32_t pc = guestContextReg(ceKernel_.mainThreadContext(), UC_MIPS_REG_PC);
+        return pc && isGuestRangeReadable(pc, 4);
+    }
+    const auto queuedOwner = ceKernel_.threads().find(*owner);
+    return queuedOwner != ceKernel_.threads().end() &&
+           queuedOwner->second.state == GuestThreadRunState::Runnable &&
+           queuedOwner->second.context.valid;
+}
+
 bool SyntheticDllRuntime::switchToRunnableGuestThread(const char* reason,
                                                       uint32_t returnAddress,
                                                       uint32_t preferredHandle) {
@@ -583,7 +600,8 @@ bool SyntheticDllRuntime::cooperateGuestThreadsAfterCall(const std::string& name
                               name == "WaitForMultipleObjects";
     const bool queuedUiWork = name == "PostMessageW" || name == "InvalidateRect" ||
                               name == "SetTimer" || name == "ShowWindow";
-    if (ceKernel_.activeGuestThread() && (yieldingCall || (queuedUiWork && ceGwe_.hasMessages()))) {
+    if (ceKernel_.activeGuestThread() &&
+        (yieldingCall || (queuedUiWork && ceGwe_.hasMessages() && hasSchedulableGweMessageOwner()))) {
         return yieldActiveGuestThread(name.c_str(), returnAddress);
     }
     const bool processStarterCall = name == "CreateProcessW";

@@ -195,6 +195,17 @@ results, or timing thresholds.
   `ReadFile transferred=0` must not appear as an unlimited hot loop,
   `pre-queued-no-runnable` must not repeat while message owners have work, and
   UI/dialog switching must remain responsive after sensor polling starts.
+  - [x] Add host-input backpressure so a rejected pointer down drops the
+    matching release instead of feeding the guest an unmatched `WM_LBUTTONUP`
+    sequence while an older touch is still queued. Current source anchor:
+    `src/coredll_window_runtime.cpp`.
+  - [x] Gate queued-message preemption on a schedulable GWE owner instead of
+    preempting workers merely because any message exists. Current source
+    anchors: `src/coredll_thread_runtime.cpp` and
+    `src/coredll_window_runtime.cpp`.
+  - [ ] Re-run Debug interactive with the remote endpoint and check that
+    rejected remote clicks log paired drop behavior and no longer leave
+    buttons visually pressed.
 
 ## Phase 3.6: Source-Aligned Shared Mapping And UI Stall Fixes
 
@@ -212,6 +223,11 @@ results, or timing thresholds.
   startup audio must not block the whole emulator, button release/paint should
   clear through normal GWE/MFC paths, and logs should not show
   `iNavi_sharedMem_traffic_static` forced writes from `UnmapViewOfFile`.
+  - [ ] Investigate remaining map UI update slowness. Current evidence from
+    the remote Debug run points at long guest `message-transfer` slices,
+    synchronous `UpdateWindow` paint spans, and very frequent
+    `iNavi_sharedMem_traffic_static` map/unmap churn even after force-writes
+    were removed.
 
 ## Phase 4: Window Visible/Update/Client Region Migration
 

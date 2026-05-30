@@ -1690,6 +1690,22 @@ void SyntheticDllRuntime::compactQueuedPointerMotion(size_t maxMotionPerWindow) 
 
 void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t message,
                                                 int32_t hostX, int32_t hostY) {
+    constexpr uint32_t kGuestWmMouseMove = 0x0200;
+    constexpr uint32_t kGuestWmLButtonDown = 0x0201;
+    constexpr uint32_t kGuestWmLButtonUp = 0x0202;
+    if (hostPointerDropUntilRelease_) {
+        if (message == kGuestWmLButtonUp) {
+            hostPointerDropUntilRelease_ = false;
+            hostPointerCaptureWindow_ = 0;
+            hostPointerDragActive_ = false;
+            spdlog::info("discarded host mouse up for rejected touch sequence point={},{} queued={}",
+                         hostX, hostY, ceGwe_.messageCount());
+        } else if (message == kGuestWmLButtonDown || message == kGuestWmMouseMove) {
+            spdlog::debug("discarded host mouse msg=0x{:04x} while rejected touch sequence awaits release point={},{} queued={}",
+                          message, hostX, hostY, ceGwe_.messageCount());
+        }
+        return;
+    }
     auto root = windows_.find(rootGuestHwnd);
     if (root == windows_.end() || root->second.destroyed) {
         auto presenterRoot = windows_.find(hostPresenterGuestHwnd_);
@@ -1728,14 +1744,14 @@ void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t
         }
         return true;
     };
-    if (message == 0x0202 && hostPointerCaptureWindow_) {
+    if (message == kGuestWmLButtonUp && hostPointerCaptureWindow_) {
         auto captured = windows_.find(hostPointerCaptureWindow_);
         if (captured != windows_.end() && canUseCapturedWindow(hostPointerCaptureWindow_)) {
             hwnd = hostPointerCaptureWindow_;
         } else {
             hostPointerCaptureWindow_ = 0;
         }
-    } else if (message != 0x0201 && capturedWindow_) {
+    } else if (message != kGuestWmLButtonDown && capturedWindow_) {
         auto captured = windows_.find(capturedWindow_);
         if (captured != windows_.end() && canUseCapturedWindow(capturedWindow_)) {
             hwnd = capturedWindow_;
@@ -1748,18 +1764,19 @@ void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t
     }
     if (!hwnd) return;
 
-    const auto isPointerMessage = [](uint32_t msg) {
-        return msg == 0x0200 || msg == 0x0201 || msg == 0x0202;
+    const auto isPointerMessage = [&](uint32_t msg) {
+        return msg == kGuestWmMouseMove || msg == kGuestWmLButtonDown || msg == kGuestWmLButtonUp;
     };
     const bool hasQueuedPointer = ceGwe_.anyMessage([&](const GuestMessage& queued) {
         return isPointerMessage(queued.message);
     });
-    if (message == 0x0201 && hasQueuedPointer) {
+    if (message == kGuestWmLButtonDown && hasQueuedPointer) {
+        hostPointerDropUntilRelease_ = true;
         spdlog::info("discarded host mouse down while previous touch sequence is still queued hwnd=0x{:08x} point={},{} queued={}",
                      hwnd, hostX, hostY, ceGwe_.messageCount());
         return;
     }
-    if (message == 0x0200) {
+    if (message == kGuestWmMouseMove) {
         if (hasQueuedPointer || !pendingMessageTransfers_.empty()) {
             spdlog::debug("discarded host mouse move while pointer dispatch is in flight hwnd=0x{:08x} point={},{} queued={} transfers={}",
                           hwnd, hostX, hostY, ceGwe_.messageCount(), pendingMessageTransfers_.size());
@@ -1789,10 +1806,10 @@ void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t
             hostPointerLastMoveY_ = hostY;
         }
     }
-    if (message == 0x0200 && !hostPointerCaptureWindow_ && !hasQueuedPointer) {
+    if (message == kGuestWmMouseMove && !hostPointerCaptureWindow_ && !hasQueuedPointer) {
         return;
     }
-    if (message == 0x0202 && !hostPointerCaptureWindow_ && !hasQueuedPointer) {
+    if (message == kGuestWmLButtonUp && !hostPointerCaptureWindow_ && !hasQueuedPointer) {
         spdlog::info("discarded stray host mouse up hwnd=0x{:08x} point={},{}", hwnd, hostX, hostY);
         return;
     }
@@ -1801,7 +1818,7 @@ void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t
     if (targetWindow != windows_.end() && !targetWindow->second.parent &&
         hwnd != rootGuestHwnd && (targetWindow->second.style & 0x80000000u) &&
         !ceGwe_.visibleRegionContainsPoint(hwnd, hostX, hostY)) {
-        if (message == 0x0202 && hostPointerCaptureWindow_ == hwnd) {
+        if (message == kGuestWmLButtonUp && hostPointerCaptureWindow_ == hwnd) {
             hostPointerCaptureWindow_ = 0;
         }
         spdlog::info("discarded host mouse msg=0x{:04x} outside modal popup hwnd=0x{:08x} point={},{} client={},{}",
@@ -1815,7 +1832,7 @@ void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t
         auto window = windows_.find(current);
         if (window == windows_.end()) break;
         if (!window->second.enabled && !abovePopupRoot) {
-            if (message == 0x0202 && hostPointerCaptureWindow_ == hwnd) {
+            if (message == kGuestWmLButtonUp && hostPointerCaptureWindow_ == hwnd) {
                 hostPointerCaptureWindow_ = 0;
             }
             spdlog::info("discarded host mouse msg=0x{:04x} hwnd=0x{:08x} disabledAt=0x{:08x} point={},{}",
@@ -1842,10 +1859,10 @@ void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t
     clientX = hostX - originX;
     clientY = hostY - originY;
     auto queueInputMessage = [&](const GuestMessage& input) {
-        const auto isInputPriority = [](const GuestMessage& queued) {
+        const auto isInputPriority = [&](const GuestMessage& queued) {
             return queued.message == 0x0007 || queued.message == 0x0008 ||
-                   queued.message == 0x0200 || queued.message == 0x0201 ||
-                   queued.message == 0x0202;
+                   queued.message == kGuestWmMouseMove || queued.message == kGuestWmLButtonDown ||
+                   queued.message == kGuestWmLButtonUp;
         };
         const auto mustRunBeforeInputForSameWindow = [](uint32_t message) {
             return message == 0x0001 || // WM_CREATE
@@ -1868,7 +1885,7 @@ void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t
         ceGwe_.postAfterLeadingMatches(queuedInput, isInputPriority);
         compactQueuedPointerMotion();
     };
-    if (message == 0x0201) {
+    if (message == kGuestWmLButtonDown) {
         hostPointerCaptureWindow_ = hwnd;
         hostPointerDownX_ = hostX;
         hostPointerDownY_ = hostY;
@@ -1883,7 +1900,7 @@ void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t
             queueInputMessage({hwnd, 0x0007, focusedWindow_, 0, uint32_t(++tick_ * 16), 0, 0});
             focusedWindow_ = hwnd;
         }
-    } else if (message == 0x0202) {
+    } else if (message == kGuestWmLButtonUp) {
         if (pendingSyntheticChildButtonUpWindow_) {
             const uint32_t childHwnd = pendingSyntheticChildButtonUpWindow_;
             pendingSyntheticChildButtonUpWindow_ = 0;
@@ -1891,7 +1908,7 @@ void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t
             if (child != windows_.end() && !child->second.destroyed) {
                 GuestMessage childUp{};
                 childUp.hwnd = childHwnd;
-                childUp.message = 0x0202; // WM_LBUTTONUP
+                childUp.message = kGuestWmLButtonUp;
                 childUp.wParam = 0;
                 childUp.lParam = 0;
                 childUp.time = uint32_t(++tick_ * 16);
@@ -1908,7 +1925,7 @@ void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t
     GuestMessage guest{};
     guest.hwnd = hwnd;
     guest.message = message;
-    guest.wParam = message == 0x0201 ? 1 : 0;
+    guest.wParam = message == kGuestWmLButtonDown ? 1 : 0;
     guest.lParam = uint32_t(uint16_t(clientX) | (uint32_t(uint16_t(clientY)) << 16));
     guest.time = uint32_t(++tick_ * 16);
     // MSG.pt/GetMessagePos are screen/root coordinates; lParam remains client.
@@ -2236,7 +2253,8 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
         if (ceGwe_.hasMessages() && hasHostWindows()) {
             if (ceKernel_.activeGuestThread()) {
                 const std::optional<uint32_t> owner = ceGwe_.oldestPendingOwner();
-                if (!owner || *owner != ceKernel_.activeGuestThread()) {
+                if ((!owner || *owner != ceKernel_.activeGuestThread()) &&
+                    hasSchedulableGweMessageOwner()) {
                     yieldActiveGuestThread("queued-message-preempt");
                 }
             }

@@ -760,6 +760,7 @@ private:
     int32_t hostPointerLastMoveX_ = 0;
     int32_t hostPointerLastMoveY_ = 0;
     bool hostPointerDragActive_ = false;
+    bool hostPointerDropUntilRelease_ = false;
     uint32_t pendingSyntheticChildButtonUpWindow_ = 0;
     uint32_t strtokNext_ = 0;
     uint32_t comProxyVtable_ = 0;
@@ -1288,6 +1289,7 @@ private:
     uint32_t normalizeGuestCodeAddress(uint32_t address, const char* why = nullptr) const;
     uint32_t guestGpForCodeAddress(uint32_t address) const;
     bool restoreMainThreadContextIfRunnable(const char* reason);
+    bool hasSchedulableGweMessageOwner() const;
     uint32_t createGuestThread(uint32_t startAddress, uint32_t parameter, uint32_t flags);
     uint32_t resumeGuestThread(uint32_t guestHandle);
     void wakeGuestThreadsWaitingForMessage();

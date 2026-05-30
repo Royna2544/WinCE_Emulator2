@@ -46,6 +46,11 @@ Active refactor checklist: `PLAN.md`.
      on every `UnmapViewOfFile`; explicit `FlushViewOfFile` remains the
      force-sync path. Next validation should be a Debug interactive run with
      remote server and companion enabled through the button/update stall path.
+     A remote-input backpressure fix now drops the matching release for a
+     rejected pointer-down sequence, and queued-message preemption now requires
+     a schedulable GWE owner. Next run should verify buttons no longer remain
+     visually pressed when remote endpoint clicks arrive faster than the guest
+     message pump drains them.
 
 2. Introduce a CE-shaped internal `MsgQueue` model.
    - CE reference:

@@ -87,6 +87,13 @@ Status:
   `captures/inavi_autodrive_20260530_232138/emulator.stdout.log:4451`.
   Current source:
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp:2448`.
+  A later remote-endpoint run showed another pointer-stream pairing bug: when
+  a new down was rejected because an older touch was still queued, the matching
+  host release was still queued as a guest `WM_LBUTTONUP`. The host input
+  backpressure path now drops that matching release too, and queued-message
+  preemption now requires a schedulable GWE owner. Current source:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp:1691` and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_thread_runtime.cpp:415`.
   The bug remains open until the queue model, wake categories, and
   send-message edge cases are the behavioral truth.
 
@@ -128,7 +135,10 @@ Status:
   named shared mapping unmap no longer force-writes unchanged whole views.
   Release build passed and bounded startup smokes captured frames. The bug
   remains open until a Debug interactive remote-server run verifies button
-  release/paint responsiveness through the previous mapping-storm path.
+  release/paint responsiveness through the previous mapping-storm path. A
+  later remote run confirmed forced unmap writes are gone, but map UI updates
+  can still look slow while long guest `message-transfer`/paint spans coincide
+  with high-frequency `iNavi_sharedMem_traffic_static` map/unmap churn.
 
 ## Virtual Serial No-Data Reads Can Still Hot-Poll
 
