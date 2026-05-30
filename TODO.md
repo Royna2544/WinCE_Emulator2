@@ -105,7 +105,8 @@ Active refactor checklist: `PLAN.md`.
      and `StretchBlt`. Rectangle/line/polygon/text, `GetPixel`, and
      palette-write paths now use a shared MGDI selected-bitmap accessor, and
      `SetDIBColorTable` now mutates the MGDI bitmap palette before mirroring to
-     the runtime compatibility copy. Next step is to move more pixel
+     the runtime compatibility copy. `GetPixel` now overlays that MGDI palette
+     before decoding indexed bitmap pixels. Next step is to move more pixel
      operations/DC object ownership behind MGDI instead of keeping `GuestBitmap`
      and saved backing layers as runtime-owned truth.
 

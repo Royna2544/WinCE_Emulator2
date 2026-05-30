@@ -197,6 +197,7 @@ Status:
   source/destination bitmap selection. Rectangle/line/polygon/text,
   `GetPixel`, and palette-write paths now use a shared MGDI selected-bitmap
   accessor, and `SetDIBColorTable` now mutates the MGDI palette before
-  mirroring to the runtime compatibility copy. The bug remains open until more
-  pixel storage/DC object ownership moves behind MGDI instead of saved backing
+  mirroring to the runtime compatibility copy. `GetPixel` now overlays that
+  MGDI palette for indexed pixel decode. The bug remains open until more pixel
+  storage/DC object ownership moves behind MGDI instead of saved backing
   heuristics remaining the clipping truth.

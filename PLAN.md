@@ -218,6 +218,8 @@ results, or timing thresholds.
     `SetDIBColorTable` mutate the MGDI palette first, with `GuestBitmap`
     retained as the compatibility copy for current pixel readers. Current
     source anchors: `src/ce_mgdi.h` and `src/coredll_bitmap.cpp`.
+  - [x] Make `GetPixel` overlay the palette from `CeMgdi::BitmapState` before
+    decoding indexed bitmap pixels. Current source anchor: `src/coredll_paint.cpp`.
 - [ ] Add app clip, system clip, and actual device clip state before adding
   more blit optimizations. CE source anchor:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/MGDI/INC/dc.hpp:13`.
