@@ -793,15 +793,6 @@ private:
     std::map<uint32_t, uint32_t> tlsValues_;
     std::map<uint32_t, uint32_t> criticalSectionDepth_;
     std::map<uint32_t, uint32_t> syntheticHandleValues_;
-    GuestCpuContext mainThreadContext_;
-    uint32_t activeGuestThread_{};
-    uint32_t lastScheduledGuestThread_{};
-    uint32_t nextGuestThreadId_{1};
-    uint32_t mainThreadPseudoHandle_{0xfffffffeu};
-    uint32_t mainProcessPseudoHandle_{0xffffffffu};
-    uint32_t mainProcessId_{1};
-    uint32_t nextGuestProcessId_{2};
-    uint32_t mainThreadTls_{};
     std::map<std::string, GuestWindowClass> windowClassesByName_;
     std::map<uint16_t, std::string> windowClassNamesByAtom_;
     std::map<uint32_t, GuestWindow> windows_;

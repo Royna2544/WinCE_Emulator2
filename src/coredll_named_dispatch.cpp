@@ -1626,7 +1626,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
         // caller. Keep the HWND real and visible to FindWindow/message code,
         // then let later evidence drive a fuller dialog-manager shim.
         window.wndProc = 0;
-        window.ownerThread = activeGuestThread_ ? activeGuestThread_ : mainThreadPseudoHandle_;
+        window.ownerThread = ceKernel_.activeGuestThread() ? ceKernel_.activeGuestThread() : ceKernel_.mainThreadPseudoHandle();
         window.zOrder = nextWindowZOrder();
         window.x = x;
         window.y = y;
@@ -2337,7 +2337,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
         window.instance = instance;
         window.param = param;
         window.wndProc = wndProc;
-        window.ownerThread = activeGuestThread_ ? activeGuestThread_ : mainThreadPseudoHandle_;
+        window.ownerThread = ceKernel_.activeGuestThread() ? ceKernel_.activeGuestThread() : ceKernel_.mainThreadPseudoHandle();
         window.zOrder = nextWindowZOrder();
         window.x = normalizePos(rawX);
         window.y = normalizePos(rawY);
@@ -3644,7 +3644,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             visibleRoots += fmt::format("0x{:08x}:{}", hwnd, window.title);
         }
         spdlog::warn("PostQuitMessage exitCode=0x{:08x} ra=0x{:08x} activeThread=0x{:08x} queued={} visibleRoots=[{}]",
-                     a0, args.ra, activeGuestThread_, guestMessages_.size(), visibleRoots);
+                     a0, args.ra, ceKernel_.activeGuestThread(), guestMessages_.size(), visibleRoots);
         GuestMessage message{};
         message.message = 0x0012; // WM_QUIT
         message.wParam = a0;

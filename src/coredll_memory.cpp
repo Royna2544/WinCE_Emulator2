@@ -72,7 +72,7 @@ bool SyntheticDllRuntime::handleMalloc(SyntheticExportCode code, const GuestCall
     ret = allocate(args.a0, false);
     if (args.ra == 0x00327e60u || args.ra == 0x00327e6cu) {
         spdlog::info("diag double-buffer malloc ra=0x{:08x} size=0x{:x} -> 0x{:08x} activeThread=0x{:08x}",
-                     args.ra, args.a0, ret, activeGuestThread_);
+                     args.ra, args.a0, ret, ceKernel_.activeGuestThread());
     }
     return true;
 }
@@ -98,7 +98,7 @@ bool SyntheticDllRuntime::handleLocalFree(SyntheticExportCode code, const GuestC
 bool SyntheticDllRuntime::handleFree(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
     if (args.ra == 0x00327ee8u || args.ra == 0x00327ef0u) {
         spdlog::info("diag double-buffer free ra=0x{:08x} ptr=0x{:08x} size={} activeThread=0x{:08x}",
-                     args.ra, args.a0, allocationSize(args.a0), activeGuestThread_);
+                     args.ra, args.a0, allocationSize(args.a0), ceKernel_.activeGuestThread());
     }
     return handleLocalFree(code, args, ret);
 }

@@ -48,6 +48,12 @@ Current emulator difference:
   owned by `SyntheticDllRuntime` pending the next kernel migration step. The
   2026-05-30 Release build passed after this storage move with the same Boost
   Beast warning from `remote_server.cpp`.
+- Active guest thread, parked main-thread context, scheduler cursor,
+  pseudo-handles, main-thread TLS, and guest process/thread ID counters now
+  also live behind `CeKernel`. `SyntheticDllRuntime` still owns the scheduling
+  algorithms and Unicorn register capture/restore. The 2026-05-30 Release
+  build passed after this state move with the same Boost Beast warning from
+  `remote_server.cpp`.
 
 ## Threading And Message Queues
 

@@ -79,8 +79,8 @@ void SyntheticDllRuntime::restoreGuestCpuContext(const GuestCpuContext& context)
 }
 
 const SyntheticDllRuntime::GuestThreadState* SyntheticDllRuntime::activeGuestThreadState() const {
-    if (!activeGuestThread_) return nullptr;
-    auto it = ceKernel_.threads().find(activeGuestThread_);
+    if (!ceKernel_.activeGuestThread()) return nullptr;
+    auto it = ceKernel_.threads().find(ceKernel_.activeGuestThread());
     return it == ceKernel_.threads().end() ? nullptr : &it->second;
 }
 
@@ -113,7 +113,7 @@ uint32_t SyntheticDllRuntime::createGuestThread(uint32_t startAddress, uint32_t 
     const uint32_t stackTop = (stackBase + kGuestThreadStackSize - 0x100u) & ~0x0fu;
     GuestThreadState thread;
     thread.handle = guestHandle;
-    thread.threadId = nextGuestThreadId_++;
+    thread.threadId = ceKernel_.nextGuestThreadId()++;
     thread.startAddress = startAddress;
     thread.parameter = parameter;
     thread.stackBase = stackBase;
@@ -132,8 +132,8 @@ uint32_t SyntheticDllRuntime::createGuestThread(uint32_t startAddress, uint32_t 
         thread.moduleBase = active->moduleBase;
         thread.modulePath = active->modulePath;
     } else {
-        thread.processHandle = mainProcessPseudoHandle_;
-        thread.processId = mainProcessId_;
+        thread.processHandle = ceKernel_.mainProcessPseudoHandle();
+        thread.processId = ceKernel_.mainProcessId();
         thread.moduleBase = mainModuleBase_;
         thread.modulePath = mainModulePath_;
     }
@@ -176,14 +176,14 @@ bool SyntheticDllRuntime::startGuestProcessImage(const std::string& guestApplica
     }
     writeUtf16(commandLinePtr, commandLine, commandLineChars);
 
-    processId = nextGuestProcessId_++;
+    processId = ceKernel_.nextGuestProcessId()++;
     processHandle = makeGuestHandle({GuestHandle::Kind::GuestProcess, 0, processId});
     threadHandle = makeGuestHandle({GuestHandle::Kind::GuestThread, 0, 0});
     const uint32_t stackTop = (stackBase + kGuestThreadStackSize - 0x100u) & ~0x0fu;
 
     GuestThreadState thread;
     thread.handle = threadHandle;
-    thread.threadId = nextGuestThreadId_++;
+    thread.threadId = ceKernel_.nextGuestThreadId()++;
     thread.startAddress = entryPoint;
     thread.parameter = commandLinePtr;
     thread.stackBase = stackBase;
@@ -390,20 +390,20 @@ uint32_t SyntheticDllRuntime::guestGpForCodeAddress(uint32_t address) const {
 }
 
 bool SyntheticDllRuntime::restoreMainThreadContextIfRunnable(const char* reason) {
-    if (!mainThreadContext_.valid) return false;
-    const uint32_t pc = guestContextReg(mainThreadContext_, UC_MIPS_REG_PC);
-    const uint32_t ra = guestContextReg(mainThreadContext_, UC_MIPS_REG_RA);
-    const uint32_t sp = guestContextReg(mainThreadContext_, UC_MIPS_REG_SP);
+    if (!ceKernel_.mainThreadContext().valid) return false;
+    const uint32_t pc = guestContextReg(ceKernel_.mainThreadContext(), UC_MIPS_REG_PC);
+    const uint32_t ra = guestContextReg(ceKernel_.mainThreadContext(), UC_MIPS_REG_RA);
+    const uint32_t sp = guestContextReg(ceKernel_.mainThreadContext(), UC_MIPS_REG_SP);
     if (pc && isGuestRangeReadable(pc, 4)) {
-        updateCurrentThreadKData(mainThreadPseudoHandle_, mainThreadTls_);
-        restoreGuestCpuContext(mainThreadContext_);
+        updateCurrentThreadKData(ceKernel_.mainThreadPseudoHandle(), ceKernel_.mainThreadTls());
+        restoreGuestCpuContext(ceKernel_.mainThreadContext());
         spdlog::debug("restored parked main thread context reason={} pc=0x{:08x} ra=0x{:08x} sp=0x{:08x}",
                       reason ? reason : "cooperate", pc, ra, sp);
         return true;
     }
     spdlog::warn("discarded unreadable parked main thread context reason={} pc=0x{:08x} ra=0x{:08x} sp=0x{:08x}",
                  reason ? reason : "cooperate", pc, ra, sp);
-    mainThreadContext_.valid = false;
+    ceKernel_.mainThreadContext().valid = false;
     return false;
 }
 
@@ -412,8 +412,8 @@ bool SyntheticDllRuntime::switchToRunnableGuestThread(const char* reason,
                                                       uint32_t preferredHandle) {
     refreshSignaledGuestWaits();
     auto switchTo = [&](uint32_t handle, GuestThreadState& thread) {
-        if (activeGuestThread_) {
-            auto active = ceKernel_.threads().find(activeGuestThread_);
+        if (ceKernel_.activeGuestThread()) {
+            auto active = ceKernel_.threads().find(ceKernel_.activeGuestThread());
             if (active != ceKernel_.threads().end()) {
                 active->second.context = captureGuestCpuContext();
                 if (returnAddress) active->second.context.registers[UC_MIPS_REG_PC] = returnAddress;
@@ -434,13 +434,13 @@ bool SyntheticDllRuntime::switchToRunnableGuestThread(const char* reason,
                 ? capturedMain.registers[UC_MIPS_REG_SP]
                 : 0;
             const bool capturedPcReadable = capturedPc && isGuestRangeReadable(capturedPc, 4);
-            if (capturedPcReadable || !mainThreadContext_.valid) {
-                mainThreadContext_ = std::move(capturedMain);
+            if (capturedPcReadable || !ceKernel_.mainThreadContext().valid) {
+                ceKernel_.mainThreadContext() = std::move(capturedMain);
                 spdlog::debug("main thread context saved reason={} pc=0x{:08x} ra=0x{:08x} sp=0x{:08x}",
                               reason ? reason : "cooperate", capturedPc, capturedRa, capturedSp);
             } else {
-                const uint32_t preservedPc = mainThreadContext_.registers.count(UC_MIPS_REG_PC)
-                    ? mainThreadContext_.registers[UC_MIPS_REG_PC]
+                const uint32_t preservedPc = ceKernel_.mainThreadContext().registers.count(UC_MIPS_REG_PC)
+                    ? ceKernel_.mainThreadContext().registers[UC_MIPS_REG_PC]
                     : 0;
                 spdlog::warn("preserved parked main thread context reason={} currentPc=0x{:08x} currentRa=0x{:08x} "
                              "currentSp=0x{:08x} parkedPc=0x{:08x}",
@@ -460,8 +460,8 @@ bool SyntheticDllRuntime::switchToRunnableGuestThread(const char* reason,
             ? thread.context.registers.at(UC_MIPS_REG_V0)
             : 0;
         thread.state = GuestThreadRunState::Running;
-        activeGuestThread_ = handle;
-        lastScheduledGuestThread_ = handle;
+        ceKernel_.activeGuestThread() = handle;
+        ceKernel_.lastScheduledGuestThread() = handle;
         updateCurrentThreadKData(thread.threadId, thread.tlsBase);
         restoreGuestCpuContext(thread.context);
         spdlog::debug("guest thread switch reason={} handle=0x{:08x} start=0x{:08x} pc=0x{:08x} ra=0x{:08x} sp=0x{:08x} v0=0x{:08x}",
@@ -479,7 +479,7 @@ bool SyntheticDllRuntime::switchToRunnableGuestThread(const char* reason,
         }
     }
 
-    auto first = lastScheduledGuestThread_ ? ceKernel_.threads().upper_bound(lastScheduledGuestThread_)
+    auto first = ceKernel_.lastScheduledGuestThread() ? ceKernel_.threads().upper_bound(ceKernel_.lastScheduledGuestThread())
                                            : ceKernel_.threads().begin();
     for (auto it = first; it != ceKernel_.threads().end(); ++it) {
         if (it->second.state == GuestThreadRunState::Runnable && it->second.context.valid) {
@@ -495,34 +495,34 @@ bool SyntheticDllRuntime::switchToRunnableGuestThread(const char* reason,
 }
 
 bool SyntheticDllRuntime::yieldActiveGuestThread(const char* reason, uint32_t returnAddress) {
-    if (!activeGuestThread_) return switchToRunnableGuestThread(reason, returnAddress);
-    auto active = ceKernel_.threads().find(activeGuestThread_);
+    if (!ceKernel_.activeGuestThread()) return switchToRunnableGuestThread(reason, returnAddress);
+    auto active = ceKernel_.threads().find(ceKernel_.activeGuestThread());
     if (active != ceKernel_.threads().end() && active->second.state == GuestThreadRunState::Running) {
         active->second.context = captureGuestCpuContext();
         if (returnAddress) active->second.context.registers[UC_MIPS_REG_PC] = returnAddress;
         active->second.state = GuestThreadRunState::Runnable;
         spdlog::info("guest thread yield reason={} handle=0x{:08x} pc=0x{:08x}",
-                     reason ? reason : "cooperate", activeGuestThread_,
+                     reason ? reason : "cooperate", ceKernel_.activeGuestThread(),
                      active->second.context.registers.count(UC_MIPS_REG_PC)
                          ? active->second.context.registers.at(UC_MIPS_REG_PC)
                          : 0);
     }
-    activeGuestThread_ = 0;
+    ceKernel_.activeGuestThread() = 0;
     if (restoreMainThreadContextIfRunnable(reason)) return true;
     return switchToRunnableGuestThread(reason);
 }
 
 bool SyntheticDllRuntime::finishActiveGuestThread(uint32_t exitCode) {
-    if (!activeGuestThread_) return false;
-    auto active = ceKernel_.threads().find(activeGuestThread_);
+    if (!ceKernel_.activeGuestThread()) return false;
+    auto active = ceKernel_.threads().find(ceKernel_.activeGuestThread());
     if (active != ceKernel_.threads().end()) {
         active->second.exitCode = exitCode;
         active->second.state = GuestThreadRunState::Terminated;
         active->second.context = captureGuestCpuContext();
-        spdlog::info("guest thread exit handle=0x{:08x} exitCode=0x{:08x}", activeGuestThread_, exitCode);
+        spdlog::info("guest thread exit handle=0x{:08x} exitCode=0x{:08x}", ceKernel_.activeGuestThread(), exitCode);
     }
-    if (lastScheduledGuestThread_ == activeGuestThread_) lastScheduledGuestThread_ = 0;
-    activeGuestThread_ = 0;
+    if (ceKernel_.lastScheduledGuestThread() == ceKernel_.activeGuestThread()) ceKernel_.lastScheduledGuestThread() = 0;
+    ceKernel_.activeGuestThread() = 0;
     if (restoreMainThreadContextIfRunnable("thread exit")) return true;
     return switchToRunnableGuestThread("thread exit");
 }
@@ -533,20 +533,20 @@ bool SyntheticDllRuntime::cooperateGuestThreadsAfterCall(const std::string& name
                               name == "WaitForMultipleObjects";
     const bool queuedUiWork = name == "PostMessageW" || name == "InvalidateRect" ||
                               name == "SetTimer" || name == "ShowWindow";
-    if (activeGuestThread_ && (yieldingCall || (queuedUiWork && !guestMessages_.empty()))) {
+    if (ceKernel_.activeGuestThread() && (yieldingCall || (queuedUiWork && !guestMessages_.empty()))) {
         return yieldActiveGuestThread(name.c_str(), returnAddress);
     }
     const bool processStarterCall = name == "CreateProcessW";
-    if (activeGuestThread_ && processStarterCall && hasRunnableGuestThread()) {
+    if (ceKernel_.activeGuestThread() && processStarterCall && hasRunnableGuestThread()) {
         return yieldActiveGuestThread(name.c_str(), returnAddress);
     }
-    if (!activeGuestThread_ && name == "Sleep" && hasRunnableGuestThread()) {
+    if (!ceKernel_.activeGuestThread() && name == "Sleep" && hasRunnableGuestThread()) {
         setReg(UC_MIPS_REG_V0, 0);
         return switchToRunnableGuestThread(name.c_str(), returnAddress);
     }
     const bool threadStarterCall = name == "CreateThread" || name == "ResumeThread" ||
                                    processStarterCall;
-    if (!activeGuestThread_ && threadStarterCall && hasRunnableGuestThread()) {
+    if (!ceKernel_.activeGuestThread() && threadStarterCall && hasRunnableGuestThread()) {
         return switchToRunnableGuestThread(name.c_str(), returnAddress);
     }
     return false;

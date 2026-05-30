@@ -40,7 +40,7 @@ file-name shortcuts, route-screen shortcuts, or coordinate-specific fixes.
 - [x] Move `GuestHandle`, `guestHandles_`, `nextHandle_`, `makeGuestHandle`,
   `lookupGuestHandle`, and `closeGuestHandle` behind `CeKernel`.
   Current source anchors: `src/synthetic_dll.h`, `src/synthetic_dll.cpp`.
-- [ ] Move `GuestThreadState`, `GuestCpuContext`, `guestThreads_`,
+- [x] Move `GuestThreadState`, `GuestCpuContext`, `guestThreads_`,
   `activeGuestThread_`, `mainThreadContext_`, and thread IDs behind
   `CeKernel`, keeping Unicorn register capture/restore in the runtime until a
   clean adapter exists.
@@ -48,7 +48,7 @@ file-name shortcuts, route-screen shortcuts, or coordinate-specific fixes.
   `src/coredll_thread_runtime.cpp`.
   - [x] Move `GuestThreadState`, `GuestCpuContext`, `GuestThreadRunState`, and
     `guestThreads_` storage behind `CeKernel`.
-  - [ ] Move active-thread, parked main-thread context, scheduler cursor, and
+  - [x] Move active-thread, parked main-thread context, scheduler cursor, and
     thread/process ID counters behind `CeKernel`.
 - [ ] Move wait/sleep bookkeeping and readiness checks behind `CeKernel`.
   Current source anchors: `refreshSignaledGuestWaits`,

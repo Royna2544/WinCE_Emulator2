@@ -365,21 +365,21 @@ SyntheticDllRuntime::SyntheticDllRuntime(uc_engine* uc) : uc_(uc) {
 }
 
 void SyntheticDllRuntime::initializeUserKData() {
-    mainThreadTls_ = allocate(64 * sizeof(uint32_t), true);
+    ceKernel_.mainThreadTls() = allocate(64 * sizeof(uint32_t), true);
 
     // Windows CE exposes KDataStruct at PUserKData. On non-ARM builds this is
     // 0x00005800; application code reads SH_CURTHREAD/SH_CURPROC directly.
-    writeU32(0x00005800, mainThreadTls_);          // lpvTls
+    writeU32(0x00005800, ceKernel_.mainThreadTls());          // lpvTls
     writeU32(0x00005804, 0);                       // SH_WIN32 API set handle placeholder
-    writeU32(0x00005808, mainThreadPseudoHandle_); // SH_CURTHREAD
-    writeU32(0x0000580c, mainProcessPseudoHandle_);// SH_CURPROC
+    writeU32(0x00005808, ceKernel_.mainThreadPseudoHandle()); // SH_CURTHREAD
+    writeU32(0x0000580c, ceKernel_.mainProcessPseudoHandle());// SH_CURPROC
     writeU32(0x00005810, 0);                       // SH_KWIN32 placeholder
 }
 
 void SyntheticDllRuntime::updateCurrentThreadKData(uint32_t currentThreadValue, uint32_t tlsBase) {
-    writeU32(0x00005800, tlsBase ? tlsBase : mainThreadTls_);
-    writeU32(0x00005808, currentThreadValue ? currentThreadValue : mainThreadPseudoHandle_);
-    writeU32(0x0000580c, mainProcessPseudoHandle_);
+    writeU32(0x00005800, tlsBase ? tlsBase : ceKernel_.mainThreadTls());
+    writeU32(0x00005808, currentThreadValue ? currentThreadValue : ceKernel_.mainThreadPseudoHandle());
+    writeU32(0x0000580c, ceKernel_.mainProcessPseudoHandle());
 }
 
 void SyntheticDllRuntime::setMainModulePath(std::string path) {
@@ -579,7 +579,7 @@ void SyntheticDllRuntime::hookBasicBlock(uc_engine* uc, uint64_t address, uint32
             uc_reg_read(uc, UC_MIPS_REG_RA, &ra);
             spdlog::debug("guest slice watchdog deferred during message transfer reason={} activeThread=0x{:08x} "
                           "budget={} block=0x{:08x} pc=0x{:08x} ra=0x{:08x} pendingTransfers={} queued={}",
-                          runtime->interactiveSliceReason_, runtime->activeGuestThread_,
+                          runtime->interactiveSliceReason_, runtime->ceKernel_.activeGuestThread(),
                           runtime->interactiveSliceInstructionBudget_, uint32_t(address), pc, ra,
                           runtime->pendingMessageTransfers_.size(), runtime->guestMessages_.size());
         }
@@ -593,12 +593,12 @@ void SyntheticDllRuntime::hookBasicBlock(uc_engine* uc, uint64_t address, uint32
         uc_reg_read(uc, UC_MIPS_REG_RA, &ra);
         if (hostQueuePending) {
             spdlog::debug("guest slice watchdog stop reason={} stopCause=host-queue activeThread=0x{:08x} budget={} block=0x{:08x} pc=0x{:08x} ra=0x{:08x} queued={}",
-                          runtime->interactiveSliceReason_, runtime->activeGuestThread_,
+                          runtime->interactiveSliceReason_, runtime->ceKernel_.activeGuestThread(),
                           runtime->interactiveSliceInstructionBudget_, uint32_t(address), pc, ra,
                           runtime->guestMessages_.size());
         } else {
             spdlog::info("guest slice watchdog stop reason={} stopCause=deadline activeThread=0x{:08x} budget={} block=0x{:08x} pc=0x{:08x} ra=0x{:08x} queued={}",
-                         runtime->interactiveSliceReason_, runtime->activeGuestThread_,
+                         runtime->interactiveSliceReason_, runtime->ceKernel_.activeGuestThread(),
                          runtime->interactiveSliceInstructionBudget_, uint32_t(address), pc, ra,
                          runtime->guestMessages_.size());
         }
@@ -665,7 +665,7 @@ uint32_t SyntheticDllRuntime::closeGuestHandle(uint32_t guestHandle) {
                 releaseAllocation(thread->second.stackBase);
                 releaseAllocation(thread->second.tlsBase);
                 ceKernel_.threads().erase(thread);
-                if (lastScheduledGuestThread_ == guestHandle) lastScheduledGuestThread_ = 0;
+                if (ceKernel_.lastScheduledGuestThread() == guestHandle) ceKernel_.lastScheduledGuestThread() = 0;
             } else {
                 spdlog::info("CloseHandle released live guest thread handle=0x{:08x} state={} without terminating scheduler thread",
                              guestHandle, static_cast<int>(thread->second.state));
@@ -1481,7 +1481,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
         setReg(UC_MIPS_REG_PC, normalizeGuestCodeAddress(pendingCall.args.ra, name.c_str()));
         spdlog::info("{} resumed after cooperative paint wait=0x{:08x} timeout=0x{:08x} return=0x{:08x} ra=0x{:08x} queued={} activeThread=0x{:08x}",
                      pendingCall.name, pendingCall.args.a0, pendingCall.args.a1, ret,
-                     pendingCall.args.ra, guestMessages_.size(), activeGuestThread_);
+                     pendingCall.args.ra, guestMessages_.size(), ceKernel_.activeGuestThread());
         pumpHostMessages();
         cooperateGuestThreadsAfterCall(pendingCall.name);
         return;
@@ -1557,7 +1557,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
         if (pendingMessageTransfers_.empty()) {
             spdlog::error("message transfer continuation reached with no pending message pc=0x{:08x} ra=0x{:08x} "
                           "v0=0x{:08x} queued={} activeThread=0x{:08x}",
-                          pc, ra, reg(UC_MIPS_REG_V0), guestMessages_.size(), activeGuestThread_);
+                          pc, ra, reg(UC_MIPS_REG_V0), guestMessages_.size(), ceKernel_.activeGuestThread());
             const uint32_t normalizedRa = normalizeGuestCodeAddress(ra, name.c_str());
             if (normalizedRa && normalizedRa != messageTransferContinuationStub_ &&
                 isGuestRangeReadable(normalizedRa, 4)) {
@@ -1640,7 +1640,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                 spdlog::error("{} cannot resolve orphaned message-transfer continuation hwnd=0x{:08x} msg=0x{:08x} "
                               "result=0x{:08x} queued={} activeThread=0x{:08x}",
                               pending.sourceName, pending.hwnd, pending.message, wndProcResult,
-                              guestMessages_.size(), activeGuestThread_);
+                              guestMessages_.size(), ceKernel_.activeGuestThread());
                 setReg(UC_MIPS_REG_PC, 0);
                 uc_emu_stop(uc_);
                 return;
@@ -1669,7 +1669,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                 spdlog::error("{} cannot resolve unreadable message-transfer return hwnd=0x{:08x} msg=0x{:08x} "
                               "result=0x{:08x} return=0x{:08x} outer=0x{:08x} queued={} activeThread=0x{:08x}",
                               pending.sourceName, pending.hwnd, pending.message, wndProcResult,
-                              returnRa, pending.outerReturnRa, guestMessages_.size(), activeGuestThread_);
+                              returnRa, pending.outerReturnRa, guestMessages_.size(), ceKernel_.activeGuestThread());
                 setReg(UC_MIPS_REG_PC, 0);
                 uc_emu_stop(uc_);
                 return;
@@ -1810,8 +1810,8 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
 
         }
         case 0x01F0: {
-            if (activeGuestThread_) {
-                auto active = ceKernel_.threads().find(activeGuestThread_);
+            if (ceKernel_.activeGuestThread()) {
+                auto active = ceKernel_.threads().find(ceKernel_.activeGuestThread());
                 if (active != ceKernel_.threads().end()) {
                     active->second.context = captureGuestCpuContext();
                     active->second.context.registers[UC_MIPS_REG_PC] = ra;
@@ -1833,9 +1833,9 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                         ? active->second.context.registers[UC_MIPS_REG_SP]
                         : 0;
                     spdlog::debug("guest thread sleep handle=0x{:08x} timeout={} return=0x{:08x} savedRa=0x{:08x} savedSp=0x{:08x}",
-                                  activeGuestThread_, a0, ra, savedRa, savedSp);
+                                  ceKernel_.activeGuestThread(), a0, ra, savedRa, savedSp);
                 }
-                activeGuestThread_ = 0;
+                ceKernel_.activeGuestThread() = 0;
                 if (!restoreMainThreadContextIfRunnable(name.c_str())) {
                     switchToRunnableGuestThread(name.c_str());
                 }
@@ -1856,7 +1856,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
         case 0x01F2: {
             constexpr uint32_t kWaitTimeout = 0x00000102u;
             constexpr uint32_t kWaitFailed = 0xffffffffu;
-            if (activeGuestThread_) {
+            if (ceKernel_.activeGuestThread()) {
                 uint32_t ret = waitForMultipleGuestObjects(a0, a1, a2 != 0);
                 const bool wouldBlock = ret == kWaitTimeout && a3 != 0;
                 if (wouldBlock) {
@@ -1867,7 +1867,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                         pumpHostMessages();
                         return;
                     }
-                    auto active = ceKernel_.threads().find(activeGuestThread_);
+                    auto active = ceKernel_.threads().find(ceKernel_.activeGuestThread());
                     if (active != ceKernel_.threads().end()) {
                         active->second.context = captureGuestCpuContext();
                         active->second.context.registers[UC_MIPS_REG_PC] = ra;
@@ -1877,9 +1877,9 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                         active->second.waitHandles = std::move(handles);
                         active->second.waitAll = a2 != 0;
                         spdlog::info("guest thread wait-multiple handle=0x{:08x} count={} waitAll={} timeout=0x{:08x} return=0x{:08x}",
-                                     activeGuestThread_, a0, a2 != 0, a3, ra);
+                                     ceKernel_.activeGuestThread(), a0, a2 != 0, a3, ra);
                     }
-                    activeGuestThread_ = 0;
+                    ceKernel_.activeGuestThread() = 0;
                     if (!restoreMainThreadContextIfRunnable(name.c_str())) {
                         switchToRunnableGuestThread(name.c_str());
                     }
@@ -1980,13 +1980,13 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                 waitResult = kWaitObject0;
             };
 
-            if (activeGuestThread_) {
+            if (ceKernel_.activeGuestThread()) {
                 uint32_t ret = kWaitFailed;
                 uint32_t ignoredPreferredThread = 0;
                 pollSingleWait(ret, ignoredPreferredThread);
                 const bool wouldBlock = ret == kWaitTimeout && a1 != 0;
                 if (wouldBlock) {
-                    auto active = ceKernel_.threads().find(activeGuestThread_);
+                    auto active = ceKernel_.threads().find(ceKernel_.activeGuestThread());
                     if (active != ceKernel_.threads().end()) {
                         active->second.context = captureGuestCpuContext();
                         active->second.context.registers[UC_MIPS_REG_PC] = ra;
@@ -1996,9 +1996,9 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                         active->second.waitHandles.clear();
                         active->second.waitAll = false;
                         spdlog::info("guest thread wait handle=0x{:08x} wait=0x{:08x} return=0x{:08x}",
-                                     activeGuestThread_, a0, ra);
+                                     ceKernel_.activeGuestThread(), a0, ra);
                     }
-                    activeGuestThread_ = 0;
+                    ceKernel_.activeGuestThread() = 0;
                     if (!restoreMainThreadContextIfRunnable(name.c_str())) {
                         switchToRunnableGuestThread(name.c_str());
                     }
@@ -2111,16 +2111,16 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
             return;
         }
         case 0x035D: {
-            if (activeGuestThread_ && guestMessages_.empty() && !quitPosted_) {
-                auto active = ceKernel_.threads().find(activeGuestThread_);
+            if (ceKernel_.activeGuestThread() && guestMessages_.empty() && !quitPosted_) {
+                auto active = ceKernel_.threads().find(ceKernel_.activeGuestThread());
                 if (active != ceKernel_.threads().end()) {
                     active->second.context = captureGuestCpuContext();
                     active->second.context.registers[UC_MIPS_REG_PC] = pc;
                     active->second.state = GuestThreadRunState::WaitingForMessage;
                     spdlog::info("guest thread message wait handle=0x{:08x} return=0x{:08x} msgPtr=0x{:08x}",
-                                 activeGuestThread_, ra, a0);
+                                 ceKernel_.activeGuestThread(), ra, a0);
                 }
-                activeGuestThread_ = 0;
+                ceKernel_.activeGuestThread() = 0;
                 if (!restoreMainThreadContextIfRunnable(name.c_str())) {
                     switchToRunnableGuestThread(name.c_str());
                 }
@@ -2201,17 +2201,17 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                 finishImmediateReturn(ret);
                 return;
             }
-            if (isSendMessageW && activeGuestThread_ &&
+            if (isSendMessageW && ceKernel_.activeGuestThread() &&
                 targetWindow != windows_.end() &&
-                targetWindow->second.ownerThread == mainThreadPseudoHandle_ &&
-                targetWindow->second.ownerThread != activeGuestThread_) {
+                targetWindow->second.ownerThread == ceKernel_.mainThreadPseudoHandle() &&
+                targetWindow->second.ownerThread != ceKernel_.activeGuestThread()) {
                 GuestMessage message{};
                 message.hwnd = hwnd;
                 message.message = msg;
                 message.wParam = wParam;
                 message.lParam = lParam;
                 message.time = uint32_t(++tick_ * 16);
-                message.synchronousSender = activeGuestThread_;
+                message.synchronousSender = ceKernel_.activeGuestThread();
                 auto insertAt = std::find_if(guestMessages_.begin(), guestMessages_.end(),
                                              [](const GuestMessage& queued) {
                                                  return queued.synchronousSender == 0;
@@ -2219,7 +2219,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                 guestMessages_.insert(insertAt, message);
                 wakeGuestThreadsWaitingForMessage();
                 lastError_ = 0;
-                const uint32_t senderHandle = activeGuestThread_;
+                const uint32_t senderHandle = ceKernel_.activeGuestThread();
                 auto sender = ceKernel_.threads().find(senderHandle);
                 if (sender != ceKernel_.threads().end() &&
                     sender->second.state == GuestThreadRunState::Running) {
@@ -2256,7 +2256,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                                   guestMessages_.size(),
                                   sender != ceKernel_.threads().end());
                 }
-                activeGuestThread_ = 0;
+                ceKernel_.activeGuestThread() = 0;
                 if (!restoreMainThreadContextIfRunnable("SendMessageW-cross-thread")) {
                     switchToRunnableGuestThread("SendMessageW-cross-thread");
                 }
@@ -2337,7 +2337,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                 auto readableReturn = [&](uint32_t address) {
                     return address && address != messageTransferContinuationStub_ && isGuestRangeReadable(address, 4);
                 };
-                const uint32_t parkedMainPc = guestContextReg(mainThreadContext_, UC_MIPS_REG_PC);
+                const uint32_t parkedMainPc = guestContextReg(ceKernel_.mainThreadContext(), UC_MIPS_REG_PC);
                 const uint32_t outerReturnRa =
                     (ra == messageTransferContinuationStub_ && !pendingMessageTransfers_.empty())
                         ? pendingMessageTransfers_.back().outerReturnRa
