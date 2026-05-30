@@ -2449,7 +2449,34 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                 auto target = windows_.find(hwnd);
                 if (target != windows_.end() && !target->second.destroyed &&
                     (target->second.style & kWindowStyleChild) && target->second.parent) {
+                    constexpr uint32_t kWmLButtonUp = 0x0202;
                     pendingSyntheticChildButtonUpWindow_ = hwnd;
+                    auto matchingQueuedRelease = [&](const GuestMessage& queued) {
+                        return queued.message == kWmLButtonUp &&
+                               queued.hwnd &&
+                               isWindowOrDescendant(hwnd, queued.hwnd);
+                    };
+                    const bool alreadyMirroredRelease = ceGwe_.anyMessage([&](const GuestMessage& queued) {
+                        return queued.hwnd == hwnd && queued.message == kWmLButtonUp;
+                    });
+                    if (!alreadyMirroredRelease) {
+                        auto parentRelease = ceGwe_.firstMatching(matchingQueuedRelease, false);
+                        if (parentRelease) {
+                            GuestMessage childUp{};
+                            childUp.hwnd = hwnd;
+                            childUp.message = kWmLButtonUp;
+                            childUp.wParam = 0;
+                            childUp.lParam = 0;
+                            childUp.time = uint32_t(++tick_ * 16);
+                            childUp.x = parentRelease->x;
+                            childUp.y = parentRelease->y;
+                            childUp.queueKind = CeGwe::MessageQueueKind::Input;
+                            ceGwe_.postBeforeFirstMatch(childUp, matchingQueuedRelease);
+                            pendingSyntheticChildButtonUpWindow_ = 0;
+                            spdlog::info("queued mirrored child button-up hwnd=0x{:08x} before pending parent release hwnd=0x{:08x}",
+                                         hwnd, parentRelease->hwnd);
+                        }
+                    }
                     spdlog::info("remembered synthetic child button-down hwnd=0x{:08x} parent=0x{:08x}",
                                  hwnd, target->second.parent);
                 }

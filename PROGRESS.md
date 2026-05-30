@@ -967,3 +967,14 @@ Confirmed behavior difference:
   and worker-burst queue growth seen in the previous remote run. Remaining
   slow paint spans are still visible and should be investigated as rendering
   or remote-streaming cost, not the earlier scheduler storm.
+- The same Debug remote-server run showed a pressed button could remain visually
+  down after a tap. Log evidence at
+  `captures/inavi_autodrive_20260530_232138/emulator.stdout.log:4451`
+  through `:4471` showed the host/root `WM_LBUTTONUP` was queued before the
+  synthetic child button-down was remembered, so the old deferred child-up
+  mirror had no future release to attach to. The synthetic child-button bridge
+  now detects an already queued ancestor/root `WM_LBUTTONUP` and inserts a
+  matching child `WM_LBUTTONUP` before it, preserving CE/MFC-style
+  down/up pairing without adding app-specific button behavior. Current source
+  reference:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp:2448`.

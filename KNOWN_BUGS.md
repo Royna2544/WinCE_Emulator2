@@ -80,7 +80,13 @@ Status:
   worker is already the oldest pending message owner, and disables the legacy
   `pre-queued-worker` burst while GWE has a pending owner. This removed the
   rapid `queued-message-preempt` bounce and worker-burst queue growth seen
-  after the first fix.
+  after the first fix. Live remote input then showed a stuck pressed-button
+  state when a synthetic child button-down was remembered after its ancestor
+  `WM_LBUTTONUP` was already queued; the bridge now inserts a matching child
+  `WM_LBUTTONUP` before that queued ancestor release. Evidence:
+  `captures/inavi_autodrive_20260530_232138/emulator.stdout.log:4451`.
+  Current source:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp:2448`.
   The bug remains open until the queue model, wake categories, and
   send-message edge cases are the behavioral truth.
 

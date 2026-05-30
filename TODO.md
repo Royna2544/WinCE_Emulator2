@@ -63,6 +63,9 @@ Active refactor checklist: `PLAN.md`.
      different receiver owner and parks the sender until the transfer result
      returns. Main-thread queued-message watchdog slices now preserve the
      current readable pump context instead of restoring stale parked state.
+     The synthetic child-button bridge now also mirrors a child `WM_LBUTTONUP`
+     before an already queued ancestor/root release when the child down is
+     observed late from synchronous MFC message dispatch.
      Next step is to continue Phase 4 window visible/update/client region
      migration.
 
