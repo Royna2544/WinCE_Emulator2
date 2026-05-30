@@ -50,7 +50,16 @@ bool SyntheticDllRuntime::handleBeginPaint(SyntheticExportCode code, const Guest
             uc_mem_write(uc_, args.a1, paint.data(), paint.size());
             writeU32(args.a1, ret);
             writeU32(args.a1 + 4, 1);
-            writeGuestRect(args.a1 + 8, 0, 0, it->second.width, it->second.height);
+            const CeGwe::WindowRegionState* region = ceGwe_.windowRegionState(args.a0);
+            if (region && region->hasClientUpdateRegion) {
+                writeGuestRect(args.a1 + 8,
+                               region->clientUpdateRect.left,
+                               region->clientUpdateRect.top,
+                               region->clientUpdateRect.right,
+                               region->clientUpdateRect.bottom);
+            } else {
+                writeGuestRect(args.a1 + 8, 0, 0, it->second.width, it->second.height);
+            }
         }
         lastError_ = 0;
     }
@@ -67,7 +76,10 @@ bool SyntheticDllRuntime::handleEndPaint(SyntheticExportCode code, const GuestCa
     }
     ret = windows_.count(args.a0) ? 1 : 0;
     lastError_ = ret ? 0 : 1400;
-    if (ret) presentHostWindows(true);
+    if (ret) {
+        ceGwe_.validateWindow(args.a0);
+        presentHostWindows(true);
+    }
     return true;
 }
 

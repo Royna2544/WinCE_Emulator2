@@ -141,8 +141,10 @@ Status:
 - Known behavior gap. Paint APIs should be backed by window update/client
   regions.
 - Current scaffold status: `InvalidateRect` and `ValidateRect` now update the
-  new `CeGwe` window-region shadow, but `BeginPaint` still reports the existing
-  paint rectangle until the next migration step consumes that shadow.
+  new `CeGwe` window-region shadow, and `BeginPaint` now reports the
+  GWE client-update rectangle when present. The bug remains open until update
+  regions are intersected with real visible/client regions and DC clipping uses
+  the same model.
 
 ## GDI Clipping Is Not Yet A First-Class DC/Window Invariant
 

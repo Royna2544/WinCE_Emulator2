@@ -56,8 +56,10 @@ Active refactor checklist: `PLAN.md`.
    - Goal: stop relying on popup/backing/z-order heuristics as the primary
      visibility model.
    - Current status: `CeGwe` now owns a window-region shadow populated from
-     current window state and invalidate/validate calls. Next step is to make
-     paint APIs consume that update/client state.
+     current window state and invalidate/validate calls. `BeginPaint` now
+     consumes the GWE client-update rectangle when present, and `EndPaint`
+     clears the GWE update region. Next step is to broaden region-owned
+     visibility, hit testing, and DC clipping.
 
 4. Make paint APIs consume update regions.
    - CE reference:
@@ -70,6 +72,9 @@ Active refactor checklist: `PLAN.md`.
    - Goal: `BeginPaint`, `EndPaint`, `InvalidateRect`, and `ValidateRect`
      should manipulate window update/client regions instead of whole-window
      paint rectangles only.
+   - Current status: first migration is complete for `BeginPaint`/`EndPaint`
+     PAINTSTRUCT rectangles. Remaining work is to intersect updates with real
+     visible/client regions and feed MGDI/DC clipping from the same model.
 
 5. Add a CE-shaped GDI clipping layer.
    - CE reference:

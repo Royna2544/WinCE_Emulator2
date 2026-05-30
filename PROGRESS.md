@@ -285,6 +285,20 @@ Current emulator difference:
   was captured at 816x519 and the high-signal log scan found no new
   unsupported coredll ordinal, hard-error, invalid mapping, false zero-PC, or
   deadlock markers.
+- Paint APIs now consume the new GWE update-region shadow in the first narrow
+  path: `BeginPaint` writes the GWE client-update rectangle to `PAINTSTRUCT`
+  when one exists and falls back to the previous full-window rectangle
+  otherwise; `EndPaint` clears the GWE update region. CE references:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/INC/gweapiset1.hpp:350`
+  and
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/window.hpp:1351`.
+  Current source reference:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_paint.cpp:40`.
+  The 2026-05-30 Release build passed with no warnings after this narrow
+  change. Bounded autodrive with the companion enabled wrote
+  `captures/inavi_autodrive_20260530_195145`; `00_initial.png` was captured at
+  816x519 and the high-signal log scan found no new unsupported coredll
+  ordinal, hard-error, invalid mapping, false zero-PC, or deadlock markers.
 
 ## Threading And Message Queues
 

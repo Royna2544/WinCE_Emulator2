@@ -156,6 +156,9 @@ results, or timing thresholds.
     window publication and invalidate/validate calls without changing
     `BeginPaint` behavior yet. Current source anchors: `src/ce_gwe.h`,
     `src/coredll_named_dispatch.cpp`, and `src/coredll_paint.cpp`.
+  - [x] Make `BeginPaint` consume the GWE client-update rectangle when present
+    and make `EndPaint` validate the GWE update region after painting. Current
+    source anchor: `src/coredll_paint.cpp`.
 - [ ] Replace popup/backing/z-order heuristics with region-owned visibility
   decisions where possible. CE source anchor:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/window.hpp:1038`.
