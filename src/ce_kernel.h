@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -92,6 +93,19 @@ public:
         uint32_t error{};
     };
 
+    enum class EncodedKernelCallKind {
+        Unknown,
+        TerminateProcess,
+    };
+
+    struct EncodedKernelCall {
+        EncodedKernelCallKind kind{EncodedKernelCallKind::Unknown};
+        uint32_t target{};
+        uint32_t apiSet{};
+        uint32_t method{};
+        bool oldEncoding{};
+    };
+
     static constexpr uint32_t kWaitObject0 = 0x00000000u;
     static constexpr uint32_t kWaitTimeout = 0x00000102u;
     static constexpr uint32_t kWaitFailed = 0xffffffffu;
@@ -143,6 +157,10 @@ public:
     std::vector<WaitRefreshEvent> refreshSignaledWaits(uint64_t nowMs,
                                                        int resultRegister,
                                                        const HostWaitProbe& hostWaitProbe);
+    static std::optional<EncodedKernelCall> decodeMipsKernelCall(uint32_t target);
+    void terminateCurrentProcess(uint32_t exitCode);
+    bool processTerminated() const noexcept { return processTerminated_; }
+    uint32_t processExitCode() const noexcept { return processExitCode_; }
 
     std::map<uint32_t, GuestHandle>& handles() noexcept { return guestHandles_; }
     const std::map<uint32_t, GuestHandle>& handles() const noexcept { return guestHandles_; }
@@ -178,4 +196,6 @@ private:
     uint32_t mainProcessId_{1};
     uint32_t nextGuestProcessId_{2};
     uint32_t mainThreadTls_{};
+    bool processTerminated_{};
+    uint32_t processExitCode_{};
 };

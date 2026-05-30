@@ -382,6 +382,27 @@ void SyntheticDllRuntime::updateCurrentThreadKData(uint32_t currentThreadValue, 
     writeU32(0x0000580c, ceKernel_.mainProcessPseudoHandle());
 }
 
+bool SyntheticDllRuntime::handleEncodedKernelCall(uint32_t target, uint32_t arg0, uint32_t arg1,
+                                                  uint32_t callerPc, uint32_t returnPc,
+                                                  uint32_t& exitCode) {
+    const auto call = CeKernel::decodeMipsKernelCall(target);
+    if (!call) return false;
+
+    if (call->kind == CeKernel::EncodedKernelCallKind::TerminateProcess) {
+        exitCode = call->oldEncoding ? arg0 : arg1;
+        ceKernel_.terminateCurrentProcess(exitCode);
+        quitPosted_ = true;
+        spdlog::info("decoded MIPS CE kernel call TerminateProcess target=0x{:08x} "
+                     "apiSet={} method={} oldEncoding={} caller=0x{:08x} return=0x{:08x} "
+                     "arg0=0x{:08x} arg1=0x{:08x} exitCode=0x{:08x}",
+                     target, call->apiSet, call->method, call->oldEncoding,
+                     callerPc, returnPc, arg0, arg1, exitCode);
+        return true;
+    }
+
+    return false;
+}
+
 void SyntheticDllRuntime::setMainModulePath(std::string path) {
     if (path.empty()) return;
     hostMainModulePath_ = std::filesystem::path(path);

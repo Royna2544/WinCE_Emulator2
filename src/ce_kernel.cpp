@@ -191,3 +191,44 @@ std::vector<CeKernel::WaitRefreshEvent> CeKernel::refreshSignaledWaits(
     }
     return events;
 }
+
+std::optional<CeKernel::EncodedKernelCall> CeKernel::decodeMipsKernelCall(uint32_t target) {
+    // CE nkmips.h defines this old MIPS encoding for directly-linked
+    // TerminateProcess calls from CRT startup/security code.
+    constexpr uint32_t kOldFirstMethod = 0xfffffc02u;
+    constexpr uint32_t kApiCallScale = 4;
+    constexpr uint32_t kApiSetShift = 8;
+    constexpr uint32_t kCurrentProcessApiSet = 2;
+    constexpr uint32_t kProcTerminateMethod = 2;
+
+    if (target > kOldFirstMethod) return std::nullopt;
+    const uint32_t delta = kOldFirstMethod - target;
+    if (delta % kApiCallScale != 0) return std::nullopt;
+
+    const uint32_t encoded = delta / kApiCallScale;
+    const uint32_t apiSet = encoded >> kApiSetShift;
+    const uint32_t method = encoded & ((1u << kApiSetShift) - 1u);
+    EncodedKernelCall call{};
+    call.target = target;
+    call.apiSet = apiSet;
+    call.method = method;
+    call.oldEncoding = true;
+    if (apiSet == kCurrentProcessApiSet && method == kProcTerminateMethod) {
+        call.kind = EncodedKernelCallKind::TerminateProcess;
+    }
+    return call.kind == EncodedKernelCallKind::Unknown ? std::nullopt
+                                                       : std::optional<EncodedKernelCall>{call};
+}
+
+void CeKernel::terminateCurrentProcess(uint32_t exitCode) {
+    processTerminated_ = true;
+    processExitCode_ = exitCode;
+    for (auto& [threadHandle, thread] : guestThreads_) {
+        (void)threadHandle;
+        if (thread.processHandle != mainProcessPseudoHandle_) continue;
+        thread.exitCode = exitCode;
+        thread.state = GuestThreadRunState::Terminated;
+    }
+    activeGuestThread_ = 0;
+    lastScheduledGuestThread_ = 0;
+}

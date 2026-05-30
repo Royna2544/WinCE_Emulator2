@@ -106,6 +106,9 @@ public:
     bool hasHostWindows() const;
     void runHostMessageLoopUntilClosed(bool showHostWindows = true);
     uint32_t threadExitStubAddress() const;
+    bool handleEncodedKernelCall(uint32_t target, uint32_t arg0, uint32_t arg1,
+                                 uint32_t callerPc, uint32_t returnPc,
+                                 uint32_t& exitCode);
     void queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t message, int32_t hostX, int32_t hostY);
     std::optional<SyntheticModule> createModule(const std::string& dllName);
     static void hookCode(uc_engine* uc, uint64_t address, uint32_t size, void* user);

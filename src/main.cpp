@@ -131,6 +131,24 @@ static bool decodeJalr(uc_engine *uc, uint32_t address, uint8_t &rd,
   return true;
 }
 
+struct MipsCeKernelThunk {
+  uint32_t caller{};
+  uint32_t target{};
+};
+
+static std::optional<MipsCeKernelThunk> decodeMipsCeKernelThunk(uc_engine *uc,
+                                                                uint32_t ra) {
+  if (ra < 12) return std::nullopt;
+  uint8_t addRt = 0, addRs = 0, jalrRd = 0, jalrRs = 0;
+  int16_t addImm = 0;
+  if (!decodeAddiu(uc, ra - 12, addRt, addRs, addImm) ||
+      !decodeJalr(uc, ra - 8, jalrRd, jalrRs) ||
+      addRs != 0 || addRt != jalrRs || jalrRd != 31) {
+    return std::nullopt;
+  }
+  return MipsCeKernelThunk{ra - 8, uint32_t(int32_t(addImm))};
+}
+
 static void logPcZeroDetails(uc_engine *uc, uint32_t ra) {
   uint32_t sp = 0, v0 = 0, a0 = 0, a1 = 0, a2 = 0, a3 = 0, t0 = 0, t9 = 0;
   uc_reg_read(uc, UC_MIPS_REG_SP, &sp);
@@ -148,15 +166,10 @@ static void logPcZeroDetails(uc_engine *uc, uint32_t ra) {
   if (ra >= 12) {
     spdlog::error("fatal: instructions before zero PC at ra-12..ra-4: {}",
                   readGuestHex(uc, ra - 12, 12));
-    uint8_t addRt = 0, addRs = 0, jalrRd = 0, jalrRs = 0;
-    int16_t addImm = 0;
-    if (decodeAddiu(uc, ra - 12, addRt, addRs, addImm) &&
-        decodeJalr(uc, ra - 8, jalrRd, jalrRs) &&
-        addRs == 0 && addRt == jalrRs && jalrRd == 31) {
-      const uint32_t target = uint32_t(int32_t(addImm));
+    if (const auto thunk = decodeMipsCeKernelThunk(uc, ra)) {
       spdlog::error("fatal: zero PC followed MIPS/CE kernel-call thunk "
                     "caller=0x{:08x} target=0x{:08x} arg0=0x{:08x} arg1=0x{:08x}",
-                    ra - 8, target, a0, a1);
+                    thunk->caller, thunk->target, a0, a1);
     }
   }
 }
@@ -1089,11 +1102,26 @@ static int runImage(PeImage &pe, const std::vector<fs::path> &dllSearchDirs,
     uint32_t pc = 0, ra = 0;
     uc_reg_read(uc, UC_MIPS_REG_PC, &pc);
     uc_reg_read(uc, UC_MIPS_REG_RA, &ra);
-    const bool zeroPcBug = pc == 0;
+    bool decodedKernelExit = false;
+    uint32_t decodedKernelExitCode = 0;
+    if (pc == 0) {
+      uint32_t a0 = 0, a1 = 0;
+      uc_reg_read(uc, UC_MIPS_REG_A0, &a0);
+      uc_reg_read(uc, UC_MIPS_REG_A1, &a1);
+      if (const auto thunk = decodeMipsCeKernelThunk(uc, ra)) {
+        decodedKernelExit = synthetic.handleEncodedKernelCall(
+            thunk->target, a0, a1, thunk->caller, ra, decodedKernelExitCode);
+      }
+    }
+    const bool zeroPcBug = pc == 0 && !decodedKernelExit;
     if (zeroPcBug) {
       spdlog::error("emulation stopped hard error err={} ({}) pc=0x{:08x} ra=0x{:08x}",
                     int(err), uc_strerror(err), pc, ra);
       logPcZeroDetails(uc, ra);
+    } else if (decodedKernelExit) {
+      spdlog::info("emulation stopped through decoded CE kernel exit "
+                   "err={} ({}) pc=0x{:08x} ra=0x{:08x} exitCode=0x{:08x}",
+                   int(err), uc_strerror(err), pc, ra, decodedKernelExitCode);
     } else {
       spdlog::warn("emulation stopped err={} ({}) pc=0x{:08x} ra=0x{:08x}",
                    int(err), uc_strerror(err), pc, ra);
@@ -1101,7 +1129,7 @@ static int runImage(PeImage &pe, const std::vector<fs::path> &dllSearchDirs,
     synthetic.flushRegistry();
     synthetic.runHostMessageLoopUntilClosed(!headless);
     close();
-    return err == UC_ERR_OK && !zeroPcBug ? 0 : 2;
+    return ((err == UC_ERR_OK || decodedKernelExit) && !zeroPcBug) ? 0 : 2;
   } catch (...) {
     close();
     throw;

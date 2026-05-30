@@ -6,6 +6,27 @@ This file was reset to record behavior gaps explained by the CE 6.x
 coredll/GWE source comparison. Older route, GPS, remote-server, and performance
 entries were intentionally removed.
 
+## Resolved: Old MIPS TerminateProcess Encoding Reached PC Zero
+
+Symptom:
+
+- `DeviceParser.exe` could stop with `PC == 0` after a high-address MIPS/CE
+  kernel-call thunk targeting `0xfffff3fa`.
+
+Evidence:
+
+- Release smoke log:
+  `captures/inavi_autodrive_20260530_182807/child_24848_1_DeviceParser.exe.stdout.log`.
+- CE MIPS compatibility encoding:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/NK/INC/nkmips.h:95`.
+- CE process API set method 2 is `TerminateProcess`:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/NK/KERNEL/process.c:356`.
+
+Status:
+
+- Fixed by decoding the CE old MIPS `TerminateProcess` API-call target through
+  `CeKernel` while preserving fatal handling for undecoded `PC == 0` paths.
+
 ## Message Queue And Scheduler Semantics Are Too Flat
 
 Symptom:

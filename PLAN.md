@@ -128,13 +128,21 @@ file-name shortcuts, route-screen shortcuts, or coordinate-specific fixes.
 
 ## Phase 6: Encoded MIPS CE Kernel-Call Dispatch
 
-- [ ] Add decode helpers for high-address MIPS CE API-call thunks such as the
+- [x] Add decode helpers for high-address MIPS CE API-call thunks such as the
   observed `0xfffff3fa` path.
-- [ ] Dispatch decoded process/thread termination calls through `CeKernel`
+  CE source anchors:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/NK/INC/nkmips.h:95`
+  and
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/NK/KERNEL/process.c:356`.
+  Current source anchors: `src/main.cpp`, `src/ce_kernel.cpp`.
+- [x] Dispatch decoded process/thread termination calls through `CeKernel`
   instead of reporting a bad guest PC when the target is a valid CE API-call
   encoding.
-- [ ] Preserve the project rule that `PC == 0` is fatal unless a specific
+  Current source anchors: `src/main.cpp`, `src/synthetic_dll.cpp`,
+  `src/ce_kernel.cpp`.
+- [x] Preserve the project rule that `PC == 0` is fatal unless a specific
   decoded CE kernel-call path proves a legitimate guest exit.
+  Current source anchor: `src/main.cpp`.
 
 ## Phase 7: Regression Testing And Memory-Doc Refresh
 

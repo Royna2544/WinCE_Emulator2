@@ -107,6 +107,24 @@ Current emulator difference:
   `GetMessageW`/`PeekMessageW` filtering while preserving the current match
   predicates and remove flags. The 2026-05-30 Release build passed after this
   dequeue migration with the same Boost Beast warning from `remote_server.cpp`.
+- MIPS CE old encoded kernel-call thunks now decode through `CeKernel` before
+  the `PC == 0` fatal path. The observed target `0xfffff3fa` matches CE's
+  old directly-linked `TerminateProcess` encoding for `SH_CURPROC` method 2,
+  so this path now terminates the current virtual CE process instead of
+  reporting an invalid guest PC. CE references:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/NK/INC/nkmips.h:95`
+  and
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/NK/KERNEL/process.c:356`.
+  Current source references:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/main.cpp:139`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/main.cpp:1105`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_kernel.cpp:195`, and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp:385`.
+  The 2026-05-30 Release build passed with the same Boost Beast warning from
+  `remote_server.cpp`. Bounded autodrive with the companion enabled wrote
+  `captures/inavi_autodrive_20260530_183949`; `DeviceParser.exe` logged the
+  decoded CE kernel exit instead of the previous fatal zero-PC crash, and the
+  log scan found no new zero-PC fatal or unsupported coredll ordinal lines.
 
 ## Threading And Message Queues
 
