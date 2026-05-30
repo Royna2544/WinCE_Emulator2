@@ -267,6 +267,24 @@ Current emulator difference:
   `captures/inavi_autodrive_20260530_194442`; `00_initial.png` was captured at
   816x519 and the high-signal log scan found no new unsupported coredll
   ordinal, hard-error, invalid mapping, false zero-PC, or deadlock markers.
+- Phase 4 window-region scaffolding has started. `CeGwe` now carries a
+  GWE-owned window-region shadow with window, client, visible, update,
+  client-visible, and client-update rectangles. Existing window publication
+  feeds geometry/visibility into that shadow, `InvalidateRect` marks update
+  regions there, and `ValidateRect` clears them there; `BeginPaint` still uses
+  the existing paint behavior until the next migration step. CE reference:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/window.hpp:1351`.
+  Current source references:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_gwe.h:54`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_named_dispatch.cpp:773`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_named_dispatch.cpp:2417`, and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_paint.cpp:159`.
+  The 2026-05-30 Release build passed with the pre-existing Boost Beast
+  warning from `remote_server.cpp`. Bounded autodrive with the companion
+  enabled wrote `captures/inavi_autodrive_20260530_194910`; `00_initial.png`
+  was captured at 816x519 and the high-signal log scan found no new
+  unsupported coredll ordinal, hard-error, invalid mapping, false zero-PC, or
+  deadlock markers.
 
 ## Threading And Message Queues
 

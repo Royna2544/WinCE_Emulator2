@@ -151,6 +151,11 @@ results, or timing thresholds.
 - [ ] Add CE-shaped visible, update, client-visible, and client-update regions
   before changing paint behavior. CE source anchor:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/window.hpp:1351`.
+  - [x] Add a GWE-side window-region shadow with window, client, visible,
+    update, client-visible, and client-update rectangles. Feed it from current
+    window publication and invalidate/validate calls without changing
+    `BeginPaint` behavior yet. Current source anchors: `src/ce_gwe.h`,
+    `src/coredll_named_dispatch.cpp`, and `src/coredll_paint.cpp`.
 - [ ] Replace popup/backing/z-order heuristics with region-owned visibility
   decisions where possible. CE source anchor:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/window.hpp:1038`.

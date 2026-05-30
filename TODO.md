@@ -55,6 +55,9 @@ Active refactor checklist: `PLAN.md`.
      `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp:821`.
    - Goal: stop relying on popup/backing/z-order heuristics as the primary
      visibility model.
+   - Current status: `CeGwe` now owns a window-region shadow populated from
+     current window state and invalidate/validate calls. Next step is to make
+     paint APIs consume that update/client state.
 
 4. Make paint APIs consume update regions.
    - CE reference:

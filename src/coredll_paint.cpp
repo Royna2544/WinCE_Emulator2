@@ -159,6 +159,7 @@ bool SyntheticDllRuntime::handleReleaseDC(SyntheticExportCode code, const GuestC
 bool SyntheticDllRuntime::handleValidateRect(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
     (void)code;
     ret = windows_.count(args.a0) ? 1 : 0;
+    if (ret) ceGwe_.validateWindow(args.a0);
     lastError_ = ret ? 0 : 1400;
     return true;
 }

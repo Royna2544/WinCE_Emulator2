@@ -775,6 +775,22 @@ void SyntheticDllRuntime::publishGuestWindowState(uint32_t hwnd) {
     if (windowIt == windows_.end() || windowIt->second.externalProcess) {
         return;
     }
+    const GuestWindow& window = windowIt->second;
+    if (window.destroyed) {
+        ceGwe_.unregisterWindow(hwnd);
+    } else {
+        ceGwe_.updateWindowState(hwnd,
+                                 window.ownerThread,
+                                 window.parent,
+                                 window.style,
+                                 window.exStyle,
+                                 window.x,
+                                 window.y,
+                                 window.width,
+                                 window.height,
+                                 window.visible,
+                                 window.destroyed);
+    }
     const std::filesystem::path registryPath = ensureCrossProcessWindowRegistryPath();
     if (registryPath.empty()) {
         return;
@@ -811,7 +827,6 @@ void SyntheticDllRuntime::publishGuestWindowState(uint32_t hwnd) {
         }
     }
 
-    const GuestWindow& window = windowIt->second;
     windowsJson.push_back({
         {"processId", processId},
         {"hwnd", hwnd},
@@ -2399,6 +2414,19 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             lastError_ = 1400;
             ret = 0;
         } else {
+            if (a1) {
+                int32_t left = 0;
+                int32_t top = 0;
+                int32_t right = 0;
+                int32_t bottom = 0;
+                if (readGuestRect(a1, left, top, right, bottom)) {
+                    ceGwe_.invalidateWindow(target, CeGwe::Rect{left, top, right, bottom});
+                } else {
+                    ceGwe_.invalidateWindow(target);
+                }
+            } else {
+                ceGwe_.invalidateWindow(target);
+            }
             queueGuestPaint(target, a2 != 0);
             lastError_ = 0;
             ret = 1;

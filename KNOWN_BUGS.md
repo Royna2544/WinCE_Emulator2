@@ -107,6 +107,10 @@ Status:
 
 - Known behavior gap. The fix direction is a window-region model, not
   app-specific modal or route-window handling.
+- Current scaffold status: `CeGwe` now owns a window-region shadow populated
+  from current window geometry/visibility and invalidate/validate calls. The
+  bug remains open until hit testing, z-order visibility, and paint/DC clipping
+  consume those regions as behavioral truth.
 
 ## Paint And ValidateRect Do Not Preserve CE Update Regions
 
@@ -136,6 +140,9 @@ Status:
 
 - Known behavior gap. Paint APIs should be backed by window update/client
   regions.
+- Current scaffold status: `InvalidateRect` and `ValidateRect` now update the
+  new `CeGwe` window-region shadow, but `BeginPaint` still reports the existing
+  paint rectangle until the next migration step consumes that shadow.
 
 ## GDI Clipping Is Not Yet A First-Class DC/Window Invariant
 

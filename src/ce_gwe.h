@@ -44,6 +44,33 @@ public:
         std::deque<GuestMessage> thread;
     };
 
+    struct Rect {
+        int32_t left{};
+        int32_t top{};
+        int32_t right{};
+        int32_t bottom{};
+    };
+
+    struct WindowRegionState {
+        uint32_t hwnd{};
+        uint32_t ownerThread{};
+        uint32_t parent{};
+        uint32_t style{};
+        uint32_t exStyle{};
+        Rect windowRect;
+        Rect clientRect;
+        Rect visibleRect;
+        Rect updateRect;
+        Rect clientVisibleRect;
+        Rect clientUpdateRect;
+        bool visible{};
+        bool destroyed{};
+        bool hasVisibleRegion{};
+        bool hasUpdateRegion{};
+        bool hasClientVisibleRegion{};
+        bool hasClientUpdateRegion{};
+    };
+
     static constexpr std::string_view name() noexcept { return "CE GWE"; }
     static constexpr std::string_view role() noexcept {
         return "Future owner for GWE message queues, windows, input, timers, and paint regions.";
@@ -62,10 +89,73 @@ public:
         if (ownerThread) ensureThreadQueue(ownerThread);
         windowOwners_[hwnd] = ownerThread;
     }
-    void unregisterWindow(uint32_t hwnd) { windowOwners_.erase(hwnd); }
+    void unregisterWindow(uint32_t hwnd) {
+        windowOwners_.erase(hwnd);
+        windowRegions_.erase(hwnd);
+    }
     uint32_t ownerForWindow(uint32_t hwnd) const {
         auto it = windowOwners_.find(hwnd);
         return it == windowOwners_.end() ? kNoOwnerThread : it->second;
+    }
+    void updateWindowState(uint32_t hwnd,
+                           uint32_t ownerThread,
+                           uint32_t parent,
+                           uint32_t style,
+                           uint32_t exStyle,
+                           int32_t x,
+                           int32_t y,
+                           int32_t width,
+                           int32_t height,
+                           bool visible,
+                           bool destroyed) {
+        if (!hwnd) return;
+        registerWindowOwner(hwnd, ownerThread);
+        auto& state = windowRegions_[hwnd];
+        state.hwnd = hwnd;
+        state.ownerThread = ownerThread;
+        state.parent = parent;
+        state.style = style;
+        state.exStyle = exStyle;
+        state.windowRect = Rect{x, y, x + width, y + height};
+        state.clientRect = Rect{0, 0, width, height};
+        state.visible = visible;
+        state.destroyed = destroyed;
+        state.hasVisibleRegion = visible && !destroyed;
+        state.visibleRect = state.hasVisibleRegion ? state.windowRect : Rect{};
+        state.hasClientVisibleRegion = state.hasVisibleRegion;
+        state.clientVisibleRect = state.hasClientVisibleRegion ? state.clientRect : Rect{};
+        if (destroyed) {
+            state.hasUpdateRegion = false;
+            state.hasClientUpdateRegion = false;
+            state.updateRect = Rect{};
+            state.clientUpdateRect = Rect{};
+        }
+    }
+    void invalidateWindow(uint32_t hwnd, std::optional<Rect> clientRect = std::nullopt) {
+        auto it = windowRegions_.find(hwnd);
+        if (it == windowRegions_.end()) return;
+        auto& state = it->second;
+        state.hasUpdateRegion = true;
+        state.hasClientUpdateRegion = true;
+        state.clientUpdateRect = clientRect.value_or(state.clientRect);
+        state.updateRect = Rect{
+            state.windowRect.left + state.clientUpdateRect.left,
+            state.windowRect.top + state.clientUpdateRect.top,
+            state.windowRect.left + state.clientUpdateRect.right,
+            state.windowRect.top + state.clientUpdateRect.bottom,
+        };
+    }
+    void validateWindow(uint32_t hwnd) {
+        auto it = windowRegions_.find(hwnd);
+        if (it == windowRegions_.end()) return;
+        it->second.hasUpdateRegion = false;
+        it->second.hasClientUpdateRegion = false;
+        it->second.updateRect = Rect{};
+        it->second.clientUpdateRect = Rect{};
+    }
+    const WindowRegionState* windowRegionState(uint32_t hwnd) const {
+        auto it = windowRegions_.find(hwnd);
+        return it == windowRegions_.end() ? nullptr : &it->second;
     }
     uint32_t ownerForMessage(const GuestMessage& message) const {
         const auto owner = messageOwners_.find(message.queueId);
@@ -307,6 +397,7 @@ private:
     std::deque<GuestMessage> messages_;
     std::map<uint32_t, ThreadQueue> threadQueues_;
     std::map<uint32_t, uint32_t> windowOwners_;
+    std::map<uint32_t, WindowRegionState> windowRegions_;
     std::map<uint64_t, uint32_t> messageOwners_;
     uint64_t nextMessageId_{kFirstMessageId};
 };
