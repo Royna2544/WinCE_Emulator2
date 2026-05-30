@@ -252,88 +252,40 @@ void SyntheticDllRuntime::wakeGuestThreadsWaitingForMessage() {
 void SyntheticDllRuntime::refreshSignaledGuestWaits() {
     refreshCompletedHostWaveBuffers();
 #if defined(_WIN32)
-    constexpr DWORD kWaitObject0 = WAIT_OBJECT_0;
-    constexpr DWORD kWaitTimeout = WAIT_TIMEOUT;
-    const uint64_t now = hostTickMilliseconds();
-    for (auto& [threadHandle, thread] : ceKernel_.threads()) {
-        if (thread.state != GuestThreadRunState::Waiting) continue;
-        if (thread.sleepUntilMs) {
-            if (now < thread.sleepUntilMs) continue;
-            thread.sleepUntilMs = 0;
-            thread.state = GuestThreadRunState::Runnable;
-            thread.waitHandle = 0;
-            thread.waitHandles.clear();
-            thread.context.registers[UC_MIPS_REG_V0] = 0;
+    auto hostWaitProbe = [](const GuestHandle& handle) {
+        const DWORD wait = ::WaitForSingleObject(reinterpret_cast<HANDLE>(handle.hostValue), 0);
+        if (wait == WAIT_OBJECT_0) return CeKernel::HostWaitResult{true, false, 0};
+        if (wait == WAIT_TIMEOUT) return CeKernel::HostWaitResult{false, false, 0};
+        return CeKernel::HostWaitResult{false, true, GetLastError()};
+    };
+    for (const auto& event : ceKernel_.refreshSignaledWaits(hostTickMilliseconds(),
+                                                           UC_MIPS_REG_V0,
+                                                           hostWaitProbe)) {
+        switch (event.kind) {
+        case CeKernel::WaitRefreshKind::SleepSatisfied:
             lastError_ = 0;
-            spdlog::debug("guest thread sleep satisfied handle=0x{:08x}", threadHandle);
-            continue;
-        }
-        std::vector<uint32_t> handles = thread.waitHandles;
-        if (handles.empty() && thread.waitHandle) handles.push_back(thread.waitHandle);
-        if (handles.empty()) continue;
-
-        bool allReady = true;
-        for (size_t i = 0; i < handles.size(); ++i) {
-            auto* handle = lookupGuestHandle(handles[i]);
-            if (!handle) {
-                thread.state = GuestThreadRunState::Runnable;
-                thread.waitHandle = 0;
-                thread.waitHandles.clear();
-                thread.context.registers[UC_MIPS_REG_V0] = 0xffffffffu;
-                lastError_ = 6;
-                spdlog::warn("guest thread wait invalid handle=0x{:08x} waitHandle=0x{:08x}",
-                             threadHandle, handles[i]);
-                break;
-            }
-
-            bool ready = false;
-            DWORD wait = kWaitObject0;
-            if (handle->hostValue &&
-                (handle->kind == GuestHandle::Kind::HostEvent ||
-                 handle->kind == GuestHandle::Kind::HostMutex ||
-                 handle->kind == GuestHandle::Kind::GuestProcess ||
-                 handle->kind == GuestHandle::Kind::GuestThread)) {
-                wait = ::WaitForSingleObject(reinterpret_cast<HANDLE>(handle->hostValue), 0);
-                ready = wait == kWaitObject0;
-            } else if (handle->kind == GuestHandle::Kind::GuestThread) {
-                auto waitedThread = ceKernel_.threads().find(handles[i]);
-                ready = waitedThread == ceKernel_.threads().end() ||
-                        waitedThread->second.state == GuestThreadRunState::Terminated;
-            } else {
-                ready = true;
-            }
-
-            if (!ready && wait != kWaitTimeout) {
-                thread.state = GuestThreadRunState::Runnable;
-                thread.waitHandle = 0;
-                thread.waitHandles.clear();
-                thread.context.registers[UC_MIPS_REG_V0] = 0xffffffffu;
-                lastError_ = GetLastError();
-                spdlog::warn("guest thread wait failed handle=0x{:08x} waitHandle=0x{:08x} error={}",
-                             threadHandle, handles[i], lastError_);
-                break;
-            }
-
-            allReady = allReady && ready;
-            if (!thread.waitAll && ready) {
-                thread.state = GuestThreadRunState::Runnable;
-                thread.waitHandle = 0;
-                thread.waitHandles.clear();
-                thread.context.registers[UC_MIPS_REG_V0] = uint32_t(i);
-                lastError_ = 0;
-                spdlog::info("guest thread wait satisfied handle=0x{:08x} waitHandle=0x{:08x} index={}",
-                             threadHandle, handles[i], i);
-                break;
-            }
-        }
-        if (thread.state == GuestThreadRunState::Waiting && thread.waitAll && allReady) {
-            thread.state = GuestThreadRunState::Runnable;
-            thread.waitHandle = 0;
-            thread.waitHandles.clear();
-            thread.context.registers[UC_MIPS_REG_V0] = 0;
+            spdlog::debug("guest thread sleep satisfied handle=0x{:08x}", event.threadHandle);
+            break;
+        case CeKernel::WaitRefreshKind::InvalidHandle:
+            lastError_ = event.error;
+            spdlog::warn("guest thread wait invalid handle=0x{:08x} waitHandle=0x{:08x}",
+                         event.threadHandle, event.waitHandle);
+            break;
+        case CeKernel::WaitRefreshKind::WaitFailed:
+            lastError_ = event.error;
+            spdlog::warn("guest thread wait failed handle=0x{:08x} waitHandle=0x{:08x} error={}",
+                         event.threadHandle, event.waitHandle, lastError_);
+            break;
+        case CeKernel::WaitRefreshKind::WaitSatisfied:
+            lastError_ = 0;
+            spdlog::info("guest thread wait satisfied handle=0x{:08x} waitHandle=0x{:08x} index={}",
+                         event.threadHandle, event.waitHandle, event.index);
+            break;
+        case CeKernel::WaitRefreshKind::WaitAllSatisfied:
             lastError_ = 0;
             spdlog::info("guest thread wait-all satisfied handle=0x{:08x} count={}",
-                         threadHandle, handles.size());
+                         event.threadHandle, event.count);
+            break;
         }
     }
 #endif

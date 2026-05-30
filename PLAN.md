@@ -50,12 +50,12 @@ file-name shortcuts, route-screen shortcuts, or coordinate-specific fixes.
     `guestThreads_` storage behind `CeKernel`.
   - [x] Move active-thread, parked main-thread context, scheduler cursor, and
     thread/process ID counters behind `CeKernel`.
-- [ ] Move wait/sleep bookkeeping and readiness checks behind `CeKernel`.
+- [x] Move wait/sleep bookkeeping and readiness checks behind `CeKernel`.
   Current source anchors: `refreshSignaledGuestWaits`,
   `switchToRunnableGuestThread`, `cooperateGuestThreadsAfterCall`.
   - [x] Move message-wait wakeup and runnable-thread detection into
     `CeKernel`.
-  - [ ] Move host-backed wait polling, sleep expiry, and wait result
+  - [x] Move host-backed wait polling, sleep expiry, and wait result
     assignment into `CeKernel`.
 - [ ] Keep host handles as backing values inside CE handles; never expose host
   handles as guest-visible truth.

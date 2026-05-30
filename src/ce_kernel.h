@@ -1,6 +1,8 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <string>
 #include <string_view>
@@ -84,6 +86,31 @@ public:
         GuestCpuContext context;
     };
 
+    struct HostWaitResult {
+        bool ready{};
+        bool failed{};
+        uint32_t error{};
+    };
+
+    enum class WaitRefreshKind {
+        SleepSatisfied,
+        InvalidHandle,
+        WaitFailed,
+        WaitSatisfied,
+        WaitAllSatisfied,
+    };
+
+    struct WaitRefreshEvent {
+        WaitRefreshKind kind{};
+        uint32_t threadHandle{};
+        uint32_t waitHandle{};
+        uint32_t error{};
+        size_t index{};
+        size_t count{};
+    };
+
+    using HostWaitProbe = std::function<HostWaitResult(const GuestHandle&)>;
+
     static constexpr std::string_view name() noexcept { return "CE virtual kernel"; }
     static constexpr std::string_view role() noexcept {
         return "Future owner for CE handles, processes, threads, waits, and kernel-call dispatch.";
@@ -96,6 +123,9 @@ public:
     bool containsHandle(uint32_t guestHandle) const;
     bool hasRunnableThread() const;
     std::vector<uint32_t> wakeThreadsWaitingForMessage();
+    std::vector<WaitRefreshEvent> refreshSignaledWaits(uint64_t nowMs,
+                                                       int resultRegister,
+                                                       const HostWaitProbe& hostWaitProbe);
 
     std::map<uint32_t, GuestHandle>& handles() noexcept { return guestHandles_; }
     const std::map<uint32_t, GuestHandle>& handles() const noexcept { return guestHandles_; }

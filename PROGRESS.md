@@ -54,12 +54,12 @@ Current emulator difference:
   algorithms and Unicorn register capture/restore. The 2026-05-30 Release
   build passed after this state move with the same Boost Beast warning from
   `remote_server.cpp`.
-- `CeKernel` now owns message-wait wakeup and runnable-thread detection helpers.
-  Host-backed wait polling, sleep expiry, and wait result assignment remain in
-  `SyntheticDllRuntime` because they still touch host wait handles, audio
-  completion refresh, and guest register return values. The 2026-05-30 Release
-  build passed after this helper move with the same Boost Beast warning from
-  `remote_server.cpp`.
+- `CeKernel` now owns message-wait wakeup, runnable-thread detection, sleep
+  expiry, wait-handle readiness decisions, and guest wait return-value
+  assignment. `SyntheticDllRuntime` still refreshes host audio completion first
+  and supplies the host wait-handle probe/logging adapter. The 2026-05-30
+  Release build passed after this wait-refresh migration with the same Boost
+  Beast warning from `remote_server.cpp`.
 
 ## Threading And Message Queues
 
