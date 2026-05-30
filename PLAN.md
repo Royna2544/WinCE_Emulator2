@@ -250,6 +250,11 @@ results, or timing thresholds.
   - [x] Mirror region bounds/ownership into `CeMgdi` for `CreateRectRgn`,
     `CombineRgn`, region `DeleteObject`, and `SetWindowRgn` transfer. Current
     source anchors: `src/ce_mgdi.h` and `src/coredll_named_dispatch.cpp`.
+  - [x] Add `CeMgdi::effectiveClipForDc`, make framebuffer drawing use the
+    system/app clip intersection, and implement `GetClipBox` from that MGDI DC
+    clip with bitmap/window fallbacks. Current source anchors:
+    `src/ce_mgdi.h`, `src/coredll_bitmap.cpp`, and
+    `src/coredll_named_dispatch.cpp`.
 - [ ] Add app clip, system clip, and actual device clip state before adding
   more blit optimizations. CE source anchor:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/MGDI/INC/dc.hpp:13`.

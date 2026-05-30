@@ -636,6 +636,20 @@ Current emulator difference:
   `captures/inavi_autodrive_20260530_214126`; `00_initial.png` was captured at
   816x519 and the high-signal capture scan found no new unsupported coredll
   ordinal, hard-error, invalid mapping, false zero-PC, or deadlock markers.
+- `CeMgdi::effectiveClipForDc` now intersects system and app clip state, the
+  framebuffer drawing helper uses that effective MGDI clip, and `GetClipBox`
+  now reports that clip to the guest with bitmap/window fallbacks and CE-style
+  null/simple region return codes. CE reference:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/MGDI/INC/dc.hpp:13`.
+  Current source references:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_mgdi.h:268`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_bitmap.cpp:500`, and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_named_dispatch.cpp:2582`.
+  The 2026-05-30 Release build passed with the pre-existing Boost Beast
+  warning from `remote_server.cpp`. Bounded autodrive wrote
+  `captures/inavi_autodrive_20260530_214532`; `00_initial.png` was captured at
+  816x519 and the high-signal capture scan found no new unsupported coredll
+  ordinal, hard-error, invalid mapping, false zero-PC, or deadlock markers.
 - The touched MGDI bitmap/DC path now uses named local constants for GDI stock
   object IDs and the `BITMAP` metadata byte count instead of raw values in the
   migrated code. Current source references:

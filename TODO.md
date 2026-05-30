@@ -120,9 +120,11 @@ Active refactor checklist: `PLAN.md`.
      ellipse, fill, pat-blit, rectangle, and line drawing now also read through
      MGDI object state. Region bounds/ownership now mirror into MGDI for
      `CreateRectRgn`, `CombineRgn`, region deletion, and `SetWindowRgn`
-     transfer. Next step is to move more pixel operations/DC object ownership
-     behind MGDI instead of keeping `GuestBitmap`, runtime GDI-object maps, and
-     saved backing layers as runtime-owned truth.
+     transfer. `GetClipBox` now reports an MGDI effective clip, and framebuffer
+     drawing now uses the system/app clip intersection. Next step is to move
+     more pixel operations/DC object ownership behind MGDI instead of keeping
+     `GuestBitmap`, runtime GDI-object maps, and saved backing layers as
+     runtime-owned truth.
 
 ## Next
 

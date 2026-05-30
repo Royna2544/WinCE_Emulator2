@@ -265,6 +265,24 @@ public:
         return state->systemClip;
     }
 
+    std::optional<Rect> effectiveClipForDc(uint32_t hdc) const {
+        const DcState* state = dcState(hdc);
+        if (!state) return std::nullopt;
+        std::optional<Rect> clip;
+        if (state->hasSystemClip) clip = state->systemClip;
+        if (state->hasAppClip) {
+            if (clip) {
+                clip->left = std::max(clip->left, state->appClip.left);
+                clip->top = std::max(clip->top, state->appClip.top);
+                clip->right = std::min(clip->right, state->appClip.right);
+                clip->bottom = std::min(clip->bottom, state->appClip.bottom);
+            } else {
+                clip = state->appClip;
+            }
+        }
+        return clip;
+    }
+
     const std::map<uint32_t, DcState>& dcStates() const noexcept { return dcStates_; }
 
     void trackBitmap(const BitmapState& bitmap) {

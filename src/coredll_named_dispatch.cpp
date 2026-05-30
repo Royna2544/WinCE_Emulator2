@@ -1489,6 +1489,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
         {ord(CoredllOrdinal::CreateSolidBrush)},
         {ord(CoredllOrdinal::CreateRectRgn)},
         {ord(CoredllOrdinal::CombineRgn)},
+        {ord(CoredllOrdinal::GetClipBox)},
         {ord(CoredllOrdinal::CreateFontIndirectW)},
         {ord(CoredllOrdinal::GetStockObject)},
         {ord(CoredllOrdinal::SelectObject)},
@@ -2576,6 +2577,44 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
         ret = 0;
         lastError_ = 120;
 #endif
+        break;
+    }
+    case ord(CoredllOrdinal::GetClipBox):
+    {
+        GuestDc* dc = lookupGuestDc(a0);
+        if (!dc || !a1) {
+            lastError_ = dc ? 87 : 6;
+            ret = 0;
+        } else {
+            constexpr uint32_t kNullRegion = 1;
+            constexpr uint32_t kSimpleRegion = 2;
+            std::optional<CeMgdi::Rect> clip = ceMgdi_.effectiveClipForDc(a0);
+            if (!clip) {
+                const uint32_t selectedBitmap = ceMgdi_.selectedBitmapForDc(a0, dc->selectedBitmap);
+                if (const CeMgdi::BitmapState* bitmap = ceMgdi_.bitmapState(selectedBitmap)) {
+                    const int32_t height = std::abs(bitmap->heightRaw);
+                    clip = CeMgdi::Rect{0, 0, bitmap->width, height};
+                } else if (dc->hwnd) {
+                    if (auto window = windows_.find(dc->hwnd); window != windows_.end()) {
+                        const auto [originX, originY] = guestWindowOrigin(dc->hwnd);
+                        clip = CeMgdi::Rect{
+                            originX,
+                            originY,
+                            originX + window->second.width,
+                            originY + window->second.height
+                        };
+                    }
+                }
+            }
+            if (!clip || clip->left >= clip->right || clip->top >= clip->bottom) {
+                writeGuestRect(a1, 0, 0, 0, 0);
+                ret = kNullRegion;
+            } else {
+                writeGuestRect(a1, clip->left, clip->top, clip->right, clip->bottom);
+                ret = kSimpleRegion;
+            }
+            lastError_ = 0;
+        }
         break;
     }
     case ord(CoredllOrdinal::CreateFontIndirectW):

@@ -497,7 +497,7 @@ void SyntheticDllRuntime::writeGuestRect(uint32_t address,
 }
 
 std::optional<CeMgdi::Rect> SyntheticDllRuntime::framebufferClipForDc(const GuestDc& dc) const {
-    auto clip = ceMgdi_.systemClip(dc.hdc);
+    auto clip = ceMgdi_.effectiveClipForDc(dc.hdc);
     if (!clip) return std::nullopt;
     clip->left = std::clamp<int32_t>(clip->left, 0, framebufferWidth_);
     clip->right = std::clamp<int32_t>(clip->right, 0, framebufferWidth_);
