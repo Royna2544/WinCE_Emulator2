@@ -198,6 +198,8 @@ Status:
   `GetPixel`, and palette-write paths now use a shared MGDI selected-bitmap
   accessor, and `SetDIBColorTable` now mutates the MGDI palette before
   mirroring to the runtime compatibility copy. `GetPixel` now overlays that
-  MGDI palette for indexed pixel decode. The bug remains open until more pixel
-  storage/DC object ownership moves behind MGDI instead of saved backing
-  heuristics remaining the clipping truth.
+  MGDI palette for indexed pixel decode, and bitmap rectangle/line/polygon and
+  host-text writes refresh the compatibility palette from MGDI before indexed
+  writes. The bug remains open until more pixel storage/DC object ownership
+  moves behind MGDI instead of saved backing heuristics remaining the clipping
+  truth.

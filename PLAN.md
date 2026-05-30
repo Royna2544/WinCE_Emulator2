@@ -220,6 +220,11 @@ results, or timing thresholds.
     source anchors: `src/ce_mgdi.h` and `src/coredll_bitmap.cpp`.
   - [x] Make `GetPixel` overlay the palette from `CeMgdi::BitmapState` before
     decoding indexed bitmap pixels. Current source anchor: `src/coredll_paint.cpp`.
+  - [x] Add `syncBitmapPaletteFromMgdi` so rectangle, line, polygon, host-text,
+    and `GetPixel` bitmap paths refresh the compatibility bitmap palette from
+    `CeMgdi::BitmapState` before indexed pixel reads/writes. Current source
+    anchors: `src/synthetic_dll.h`, `src/coredll_bitmap.cpp`, and
+    `src/coredll_paint.cpp`.
 - [ ] Add app clip, system clip, and actual device clip state before adding
   more blit optimizations. CE source anchor:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/MGDI/INC/dc.hpp:13`.

@@ -123,10 +123,7 @@ bool SyntheticDllRuntime::handleGetPixel(SyntheticExportCode code, const GuestCa
         }
 
         GuestBitmap bitmap = bitmapIt->second;
-        if (const CeMgdi::BitmapState* bitmapState = ceMgdi_.bitmapState(selectedBitmap);
-            bitmapState && !bitmapState->palette.empty()) {
-            bitmap.palette = bitmapState->palette;
-        }
+        syncBitmapPaletteFromMgdi(selectedBitmap, bitmap);
         const int32_t height = std::abs(bitmap.heightRaw);
         const uint64_t byteCount = uint64_t(bitmap.stride) * uint64_t(height);
         if (!byteCount || byteCount > 0x2000000ull) {

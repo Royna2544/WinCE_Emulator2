@@ -679,7 +679,10 @@ bool SyntheticDllRuntime::fillDcRect(const GuestDc& dc,
                                      uint32_t pixel) {
     const uint32_t selectedBitmap = ceMgdi_.selectedBitmapForDc(dc.hdc, dc.selectedBitmap);
     auto bitmap = bitmaps_.find(selectedBitmap);
-    if (bitmap != bitmaps_.end()) return fillBitmapRect(bitmap->second, left, top, right, bottom, pixel);
+    if (bitmap != bitmaps_.end()) {
+        syncBitmapPaletteFromMgdi(selectedBitmap, bitmap->second);
+        return fillBitmapRect(bitmap->second, left, top, right, bottom, pixel);
+    }
     fillFramebufferRect(dc, left, top, right, bottom, pixel);
     return true;
 }
@@ -692,7 +695,10 @@ bool SyntheticDllRuntime::drawDcLine(const GuestDc& dc,
                                      uint32_t pixel) {
     const uint32_t selectedBitmap = ceMgdi_.selectedBitmapForDc(dc.hdc, dc.selectedBitmap);
     auto bitmap = bitmaps_.find(selectedBitmap);
-    if (bitmap != bitmaps_.end()) return drawBitmapLine(bitmap->second, x0, y0, x1, y1, pixel);
+    if (bitmap != bitmaps_.end()) {
+        syncBitmapPaletteFromMgdi(selectedBitmap, bitmap->second);
+        return drawBitmapLine(bitmap->second, x0, y0, x1, y1, pixel);
+    }
     drawFramebufferLine(dc, x0, y0, x1, y1, pixel);
     return true;
 }
@@ -707,6 +713,7 @@ bool SyntheticDllRuntime::fillDcPolygon(const GuestDc& dc,
     auto bitmapIt = bitmaps_.find(selectedBitmap);
     if (bitmapIt != bitmaps_.end()) {
 #if defined(_WIN32)
+        syncBitmapPaletteFromMgdi(selectedBitmap, bitmapIt->second);
         const GuestBitmap& bitmap = bitmapIt->second;
         const int32_t bitmapHeight = std::abs(bitmap.heightRaw);
         if (!bitmap.bits || bitmap.width <= 0 || bitmapHeight <= 0 || bitmap.stride == 0) return false;
@@ -1025,6 +1032,7 @@ bool SyntheticDllRuntime::drawHostTextToDc(const GuestDc& dc,
     auto dstBitmap = bitmaps_.find(selectedBitmap);
     if (dstBitmap != bitmaps_.end()) {
         GuestBitmap& bitmap = dstBitmap->second;
+        syncBitmapPaletteFromMgdi(selectedBitmap, bitmap);
         if (!bitmap.bits || bitmap.width <= 0 || bitmap.heightRaw == 0 || bitmap.stride == 0) return false;
         const int32_t height = std::abs(bitmap.heightRaw);
         const uint64_t byteCount = uint64_t(bitmap.stride) * uint64_t(height);
@@ -1066,6 +1074,11 @@ bool SyntheticDllRuntime::drawHostTextToDc(const GuestDc& dc,
     (void)drawTextCall;
     return false;
 #endif
+}
+
+void SyntheticDllRuntime::syncBitmapPaletteFromMgdi(uint32_t hbitmap, GuestBitmap& bitmap) {
+    const CeMgdi::BitmapState* bitmapState = ceMgdi_.bitmapState(hbitmap);
+    if (bitmapState && !bitmapState->palette.empty()) bitmap.palette = bitmapState->palette;
 }
 
 bool SyntheticDllRuntime::readBitmapPixel(const GuestBitmap& bitmap,

@@ -1390,6 +1390,7 @@ private:
     bool drawHostTextToDc(const GuestDc& dc, int32_t x, int32_t y, uint32_t options,
                           uint32_t rectPtr, uint32_t textPtr, int32_t textChars,
                           uint32_t drawTextFormat, bool drawTextCall);
+    void syncBitmapPaletteFromMgdi(uint32_t hbitmap, GuestBitmap& bitmap);
     bool readBitmapPixel(const GuestBitmap& bitmap, const std::vector<uint8_t>& bits,
                          int32_t height, int32_t x, int32_t y, uint32_t& pixel) const;
     bool writeBitmapPixel(const GuestBitmap& bitmap, std::vector<uint8_t>& bits,
