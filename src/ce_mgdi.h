@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <map>
@@ -48,6 +49,27 @@ public:
         uint32_t blueMask{};
         size_t paletteEntries{};
         std::vector<uint32_t> palette;
+        bool stock{};
+    };
+
+    struct BrushState {
+        uint32_t hbrush{};
+        uint32_t colorRef{};
+        uint32_t patternBitmap{};
+        bool stock{};
+    };
+
+    struct PenState {
+        uint32_t hpen{};
+        uint32_t style{};
+        uint32_t width{};
+        uint32_t colorRef{};
+        bool stock{};
+    };
+
+    struct FontState {
+        uint32_t hfont{};
+        std::array<uint8_t, 92> logFont{};
         bool stock{};
     };
 
@@ -271,6 +293,67 @@ public:
 
     const std::map<uint32_t, BitmapState>& bitmapStates() const noexcept { return bitmapStates_; }
 
+    void trackBrush(const BrushState& brush) {
+        if (!brush.hbrush) return;
+        brushStates_[brush.hbrush] = brush;
+    }
+
+    void setBrushPatternBitmap(uint32_t hbrush, uint32_t hbitmap) {
+        if (auto* state = brushState(hbrush)) state->patternBitmap = hbitmap;
+    }
+
+    void destroyBrush(uint32_t hbrush) {
+        brushStates_.erase(hbrush);
+    }
+
+    BrushState* brushState(uint32_t hbrush) {
+        auto it = brushStates_.find(hbrush);
+        return it == brushStates_.end() ? nullptr : &it->second;
+    }
+
+    const BrushState* brushState(uint32_t hbrush) const {
+        auto it = brushStates_.find(hbrush);
+        return it == brushStates_.end() ? nullptr : &it->second;
+    }
+
+    void trackPen(const PenState& pen) {
+        if (!pen.hpen) return;
+        penStates_[pen.hpen] = pen;
+    }
+
+    void destroyPen(uint32_t hpen) {
+        penStates_.erase(hpen);
+    }
+
+    PenState* penState(uint32_t hpen) {
+        auto it = penStates_.find(hpen);
+        return it == penStates_.end() ? nullptr : &it->second;
+    }
+
+    const PenState* penState(uint32_t hpen) const {
+        auto it = penStates_.find(hpen);
+        return it == penStates_.end() ? nullptr : &it->second;
+    }
+
+    void trackFont(const FontState& font) {
+        if (!font.hfont) return;
+        fontStates_[font.hfont] = font;
+    }
+
+    void destroyFont(uint32_t hfont) {
+        fontStates_.erase(hfont);
+    }
+
+    FontState* fontState(uint32_t hfont) {
+        auto it = fontStates_.find(hfont);
+        return it == fontStates_.end() ? nullptr : &it->second;
+    }
+
+    const FontState* fontState(uint32_t hfont) const {
+        auto it = fontStates_.find(hfont);
+        return it == fontStates_.end() ? nullptr : &it->second;
+    }
+
     void updateWindowBitmap(uint32_t hwnd, Rect viewport, std::optional<Rect> systemClip) {
         if (!hwnd) return;
         auto& state = windowBitmapStates_[hwnd];
@@ -314,5 +397,8 @@ private:
 
     std::map<uint32_t, DcState> dcStates_;
     std::map<uint32_t, BitmapState> bitmapStates_;
+    std::map<uint32_t, BrushState> brushStates_;
+    std::map<uint32_t, PenState> penStates_;
+    std::map<uint32_t, FontState> fontStates_;
     std::map<uint32_t, WindowBitmapState> windowBitmapStates_;
 };

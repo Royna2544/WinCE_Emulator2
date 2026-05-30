@@ -2621,35 +2621,38 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             ret = 0;
             lastError_ = 6;
         } else if (object->second.kind == GuestHandle::Kind::GuestBrush) {
-            auto brush = brushes_.find(a0);
-            if (brush != brushes_.end() && brush->second.stock) {
+            const CeMgdi::BrushState* brushState = ceMgdi_.brushState(a0);
+            if (brushState && brushState->stock) {
                 ret = 1;
                 lastError_ = 0;
                 return true;
             }
             brushes_.erase(a0);
+            ceMgdi_.destroyBrush(a0);
             ceKernel_.handles().erase(object);
             ret = 1;
             lastError_ = 0;
         } else if (object->second.kind == GuestHandle::Kind::GuestPen) {
-            auto pen = pens_.find(a0);
-            if (pen != pens_.end() && pen->second.stock) {
+            const CeMgdi::PenState* penState = ceMgdi_.penState(a0);
+            if (penState && penState->stock) {
                 ret = 1;
                 lastError_ = 0;
                 return true;
             }
             pens_.erase(a0);
+            ceMgdi_.destroyPen(a0);
             ceKernel_.handles().erase(object);
             ret = 1;
             lastError_ = 0;
         } else if (object->second.kind == GuestHandle::Kind::GuestFont) {
-            auto font = fonts_.find(a0);
-            if (font != fonts_.end() && font->second.stock) {
+            const CeMgdi::FontState* fontState = ceMgdi_.fontState(a0);
+            if (fontState && fontState->stock) {
                 ret = 1;
                 lastError_ = 0;
                 return true;
             }
             fonts_.erase(a0);
+            ceMgdi_.destroyFont(a0);
             ceKernel_.handles().erase(object);
             ret = 1;
             lastError_ = 0;

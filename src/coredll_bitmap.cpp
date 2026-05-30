@@ -311,6 +311,7 @@ void SyntheticDllRuntime::mirrorMgdiBitmap(uint32_t handle, const GuestBitmap& b
 uint32_t SyntheticDllRuntime::makeGuestBrush(uint32_t colorRef, bool stock) {
     const uint32_t handle = makeGuestHandle({GuestHandle::Kind::GuestBrush, 0, stock ? 1u : 0u});
     brushes_[handle] = GuestBrush{colorRef, 0, stock};
+    ceMgdi_.trackBrush(CeMgdi::BrushState{handle, colorRef, 0, stock});
     return handle;
 }
 
@@ -344,18 +345,21 @@ uint32_t SyntheticDllRuntime::createPatternBrushFromBitmap(uint32_t bitmapHandle
     }
     const uint32_t brush = makeGuestBrush(colorRef);
     brushes_[brush].patternBitmap = bitmapHandle;
+    ceMgdi_.setBrushPatternBitmap(brush, bitmapHandle);
     return brush;
 }
 
 uint32_t SyntheticDllRuntime::makeGuestPen(uint32_t style, uint32_t width, uint32_t colorRef, bool stock) {
     const uint32_t handle = makeGuestHandle({GuestHandle::Kind::GuestPen, 0, stock ? 1u : 0u});
     pens_[handle] = GuestPen{style, width, colorRef, stock};
+    ceMgdi_.trackPen(CeMgdi::PenState{handle, style, width, colorRef, stock});
     return handle;
 }
 
 uint32_t SyntheticDllRuntime::makeGuestFont(const std::array<uint8_t, 92>& logFont, bool stock) {
     const uint32_t handle = makeGuestHandle({GuestHandle::Kind::GuestFont, 0, stock ? 1u : 0u});
     fonts_[handle] = GuestFont{logFont, stock};
+    ceMgdi_.trackFont(CeMgdi::FontState{handle, logFont, stock});
     return handle;
 }
 
@@ -961,15 +965,15 @@ bool SyntheticDllRuntime::drawHostTextToDc(const GuestDc& dc,
     auto selectedFont = [&]() -> HFONT {
         LOGFONTW logFont{};
         const uint32_t selectedFontHandle = ceMgdi_.selectedFontForDc(dc.hdc, dc.selectedFont);
-        auto font = fonts_.find(selectedFontHandle);
-        if (font == fonts_.end() || font->second.stock) {
+        const CeMgdi::FontState* font = ceMgdi_.fontState(selectedFontHandle);
+        if (!font || font->stock) {
             HFONT stockFont = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
             if (!stockFont || GetObjectW(stockFont, sizeof(logFont), &logFont) != sizeof(logFont)) {
                 return stockFont;
             }
         } else {
-            const size_t bytes = std::min(sizeof(logFont), font->second.logFont.size());
-            std::memcpy(&logFont, font->second.logFont.data(), bytes);
+            const size_t bytes = std::min(sizeof(logFont), font->logFont.size());
+            std::memcpy(&logFont, font->logFont.data(), bytes);
         }
         logFont.lfQuality = NONANTIALIASED_QUALITY;
         HFONT hostFont = CreateFontIndirectW(&logFont);

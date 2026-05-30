@@ -206,6 +206,8 @@ Status:
   values now also read through the MGDI DC shadow. Text color, background
   color/mode, text alignment, and current drawing position reads now also go
   through the MGDI DC shadow for text drawing, setter return values,
-  `MoveToEx`, and `LineTo`. The bug remains open until more pixel storage/DC
-  object ownership moves behind MGDI instead of saved backing heuristics
-  remaining the clipping truth.
+  `MoveToEx`, and `LineTo`. Brush, pen, and font metadata now mirrors into
+  MGDI, with host text font selection and brush/pen/font `DeleteObject` stock
+  checks reading that MGDI metadata. The bug remains open until more pixel
+  storage/DC object ownership moves behind MGDI instead of runtime GDI-object
+  maps and saved backing heuristics remaining the clipping truth.

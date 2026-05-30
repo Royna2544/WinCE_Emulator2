@@ -238,6 +238,11 @@ results, or timing thresholds.
     drawing, setter return values, `MoveToEx`, `LineTo`, `Polygon`, and
     `Polyline`. Current source anchors: `src/ce_mgdi.h`,
     `src/coredll_named_dispatch.cpp`, and `src/coredll_bitmap.cpp`.
+  - [x] Mirror brush, pen, and font metadata into `CeMgdi`; route host text
+    font selection and brush/pen/font `DeleteObject` stock checks through that
+    metadata while retaining runtime maps as compatibility copies. Current
+    source anchors: `src/ce_mgdi.h`, `src/coredll_bitmap.cpp`, and
+    `src/coredll_named_dispatch.cpp`.
 - [ ] Add app clip, system clip, and actual device clip state before adding
   more blit optimizations. CE source anchor:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/MGDI/INC/dc.hpp:13`.
