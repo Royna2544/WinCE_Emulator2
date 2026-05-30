@@ -754,6 +754,15 @@ struct RemoteServerHandle {
         beast::error_code ec;
         ws.accept(req, ec);
         if (ec) return;
+        struct AudioClientRegistration {
+            SyntheticDllRuntime& runtime;
+            explicit AudioClientRegistration(SyntheticDllRuntime& owner) : runtime(owner) {
+                runtime.registerRemoteAudioClient();
+            }
+            ~AudioClientRegistration() {
+                runtime.unregisterRemoteAudioClient();
+            }
+        } audioClient{runtime};
         ws.binary(true);
         const int chunkMs = queryInt(req, "chunkMs", 20, 5, 250);
         while (!stopping.load()) {
@@ -952,11 +961,20 @@ void SyntheticDllRuntime::publishRemoteAudioChunk(const std::vector<uint8_t>& pc
                                                   uint16_t sourceChannels,
                                                   uint16_t sourceBlockAlign,
                                                   uint16_t sourceBitsPerSample) {
-    if (!remoteConfig_.audioEnabled || pcm.empty()) return;
+    if (pcm.empty()) return;
 
-    const uint32_t targetSampleRate = static_cast<uint32_t>(std::max(1, remoteConfig_.audioSampleRate));
-    const uint16_t targetChannels = static_cast<uint16_t>(std::max(1, remoteConfig_.audioChannels));
-    const ma_format targetFormat = remoteAudioFormat(remoteConfig_.audioFormat);
+    uint32_t targetSampleRate = 0;
+    uint16_t targetChannels = 0;
+    std::string targetFormatName;
+    {
+        std::lock_guard<std::mutex> lock(remoteMutex_);
+        if (!remoteConfig_.audioEnabled || remoteAudioClientCount_ == 0) return;
+        targetSampleRate = static_cast<uint32_t>(std::max(1, remoteConfig_.audioSampleRate));
+        targetChannels = static_cast<uint16_t>(std::max(1, remoteConfig_.audioChannels));
+        targetFormatName = remoteConfig_.audioFormat;
+    }
+
+    const ma_format targetFormat = remoteAudioFormat(targetFormatName);
     const size_t targetSampleBytes = ma_get_bytes_per_sample(targetFormat);
     if (targetFormat == ma_format_unknown || !targetSampleBytes) return;
 
@@ -966,7 +984,7 @@ void SyntheticDllRuntime::publishRemoteAudioChunk(const std::vector<uint8_t>& pc
                                                       sourceChannels,
                                                       sourceBlockAlign,
                                                       sourceBitsPerSample,
-                                                      remoteConfig_.audioFormat,
+                                                      targetFormatName,
                                                       targetSampleRate,
                                                       targetChannels);
     const std::vector<uint8_t>& payload = converted.empty() ? pcm : converted;
@@ -976,6 +994,10 @@ void SyntheticDllRuntime::publishRemoteAudioChunk(const std::vector<uint8_t>& pc
         (size_t(targetSampleRate) * remoteFrameBytes * 20u) / 1000u);
 
     std::lock_guard<std::mutex> lock(remoteMutex_);
+    if (remoteAudioClientCount_ == 0) {
+        remoteAudioChunks_.clear();
+        return;
+    }
     for (size_t offset = 0; offset < payload.size(); offset += chunkBytes) {
         const size_t count = std::min(chunkBytes, payload.size() - offset);
         RemoteAudioChunk chunk;
@@ -989,6 +1011,24 @@ void SyntheticDllRuntime::publishRemoteAudioChunk(const std::vector<uint8_t>& pc
     }
     constexpr size_t kMaxAudioChunks = 600;
     while (remoteAudioChunks_.size() > kMaxAudioChunks) remoteAudioChunks_.pop_front();
+}
+
+void SyntheticDllRuntime::registerRemoteAudioClient() {
+    std::lock_guard<std::mutex> lock(remoteMutex_);
+    if (remoteAudioClientCount_ == 0) {
+        remoteAudioChunks_.clear();
+        remoteAudioNextPtsMs_ = 0;
+    }
+    ++remoteAudioClientCount_;
+}
+
+void SyntheticDllRuntime::unregisterRemoteAudioClient() {
+    std::lock_guard<std::mutex> lock(remoteMutex_);
+    if (remoteAudioClientCount_ > 0) --remoteAudioClientCount_;
+    if (remoteAudioClientCount_ == 0) {
+        remoteAudioChunks_.clear();
+        remoteAudioNextPtsMs_ = 0;
+    }
 }
 
 void SyntheticDllRuntime::clearRemoteAudioChunks() {
@@ -1080,6 +1120,8 @@ void SyntheticDllRuntime::publishRemoteAudioChunk(const std::vector<uint8_t>&,
                                                   uint16_t,
                                                   uint16_t,
                                                   uint16_t) {}
+void SyntheticDllRuntime::registerRemoteAudioClient() {}
+void SyntheticDllRuntime::unregisterRemoteAudioClient() {}
 void SyntheticDllRuntime::clearRemoteAudioChunks() {}
 std::vector<SyntheticDllRuntime::RemoteAudioChunk> SyntheticDllRuntime::takeRemoteAudioChunks(size_t) { return {}; }
 std::vector<uint32_t> SyntheticDllRuntime::copyRemoteFramebuffer(int& width, int& height) const {

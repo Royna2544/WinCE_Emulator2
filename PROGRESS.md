@@ -124,13 +124,13 @@ Current emulator difference:
   2026-05-31 Release and Debug builds passed with zero warnings after this
   logging-hygiene change.
 - Remote-server audio is enabled by default for `tools/autodrive_inavi.ps1`
-  remote runs unless `-NoRemoteAudio` is passed. The remote audio websocket no
-  longer clears buffered PCM on connect, so a client that attaches after the
-  startup `waveOutWrite` can still drain the bounded recent audio buffer.
-  Current source anchors:
+  remote runs unless `-NoRemoteAudio` is passed. Remote PCM is now queued only
+  while at least one audio websocket client is connected; the queue is cleared
+  when the first client connects and again when the last client disconnects, so
+  late clients do not hear delayed startup audio. Current source anchors:
   `/mnt/d/GitHub/WinCE_Emulator_v2/tools/autodrive_inavi.ps1:20` and
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/remote_server.cpp:759`. The
-  2026-05-31 Release build passed with the existing Boost Beast warning from
+  2026-05-31 Release builds passed with the existing Boost Beast warning from
   `remote_server.cpp`.
 - Host-backed serial open no longer retries a missing/unavailable Win32 COM
   port inside the guest `CreateFileW` path. A mapped `win32_com` backend gets

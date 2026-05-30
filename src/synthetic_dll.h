@@ -816,6 +816,7 @@ private:
     std::deque<RemoteKeyEvent> remoteKeyEvents_;
     std::deque<uint8_t> remoteSerialBytes_;
     std::deque<RemoteAudioChunk> remoteAudioChunks_;
+    size_t remoteAudioClientCount_{};
     uint64_t remoteAudioSequence_{};
     uint64_t remoteAudioNextPtsMs_{};
     nlohmann::json remoteImuState_;
@@ -1275,6 +1276,8 @@ private:
                                  uint16_t sourceChannels,
                                  uint16_t sourceBlockAlign,
                                  uint16_t sourceBitsPerSample);
+    void registerRemoteAudioClient();
+    void unregisterRemoteAudioClient();
     void clearRemoteAudioChunks();
     std::vector<RemoteAudioChunk> takeRemoteAudioChunks(size_t maxChunks);
     std::vector<uint32_t> copyRemoteFramebuffer(int& width, int& height) const;

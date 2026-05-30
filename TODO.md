@@ -51,8 +51,9 @@ Active refactor checklist: `PLAN.md`.
      a schedulable GWE owner. Next run should verify buttons no longer remain
      visually pressed when remote endpoint clicks arrive faster than the guest
      message pump drains them. Remote audio is now enabled by default in
-     remote-server autodrive runs and the websocket keeps the bounded recent
-     PCM buffer instead of clearing startup audio on connect. Host-backed
+     remote-server autodrive runs, but remote PCM is only buffered while an
+     audio websocket client is connected so late clients do not receive stale
+     startup audio. Host-backed
      mapped serial open now does only one immediate host COM probe before
      falling back to the virtual serial device, so missing host COM devices no
      longer add multi-retry startup delay.

@@ -143,27 +143,28 @@ Status:
   info logging no longer amplifies that churn; the remaining question is how
   much of the visible delay is guest work versus emulator scheduling/rendering.
 
-## Resolved: Remote Audio WebSocket Had No Startup Audio In Autodrive Runs
+## Resolved: Remote Audio WebSocket Was Disabled Or Could Replay Stale Startup Audio
 
 Symptom:
 
 - Debug remote-server runs could show guest `waveOutOpen`/`waveOutWrite` while
-  `/api/v1/audio/ws` produced no useful audio.
+  `/api/v1/audio/ws` produced no useful audio when remote audio was disabled.
+- Keeping a bounded startup PCM queue without a connected websocket client
+  would be wrong because a late client could hear stale delayed audio.
 
 Evidence:
 
-- Current run `captures/inavi_autodrive_20260531_081857/emulator.stdout.log`
+- Run `captures/inavi_autodrive_20260531_081857/emulator.stdout.log`
   logged `remote server: 192.168.0.39:8765 ... audio=0`, then later logged a
-  startup `waveOutWrite` with an 11.2s buffer. The websocket handler also
-  cleared the audio queue on connect, so even enabled clients attaching after
-  startup could discard buffered PCM.
+  startup `waveOutWrite` with an 11.2s buffer.
 
 Status:
 
 - Fixed on 2026-05-31. `tools/autodrive_inavi.ps1` now enables remote audio by
   default when `-RemoteServer` is used, with `-NoRemoteAudio` available for
-  explicit opt-out. The audio websocket now drains the bounded recent PCM
-  buffer instead of clearing it on connect.
+  explicit opt-out. Remote PCM is only queued while at least one audio
+  websocket client is connected, and stale queued audio is dropped on first
+  connect and last disconnect.
 
 ## Resolved: Missing Host Serial Port Added Startup Delay
 
