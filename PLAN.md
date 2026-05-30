@@ -174,6 +174,12 @@ results, or timing thresholds.
   creation, and selected-object state behind `CeMgdi`.
   Current source anchors: `src/synthetic_dll.h`, `src/coredll_bitmap.cpp`,
   `src/coredll_paint.cpp`, `src/coredll_named_dispatch.cpp`.
+  - [x] Add a `CeMgdi` DC-state shadow and mirror DC create/destroy,
+    selected objects, text state, current drawing position, and initial
+    system clip from GWE visible rectangles without changing drawing
+    enforcement yet. Current source anchors: `src/ce_mgdi.h`,
+    `src/coredll_bitmap.cpp`, `src/coredll_paint.cpp`, and
+    `src/coredll_named_dispatch.cpp`.
 - [ ] Add app clip, system clip, and actual device clip state before adding
   more blit optimizations. CE source anchor:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/MGDI/INC/dc.hpp:13`.

@@ -71,6 +71,7 @@ bool SyntheticDllRuntime::handleEndPaint(SyntheticExportCode code, const GuestCa
     uint32_t hdc = 0;
     if (args.a1) uc_mem_read(uc_, args.a1, &hdc, sizeof(hdc));
     if (hdc) {
+        ceMgdi_.destroyDc(hdc);
         dcs_.erase(hdc);
         ceKernel_.handles().erase(hdc);
     }
@@ -159,6 +160,7 @@ bool SyntheticDllRuntime::handleReleaseDC(SyntheticExportCode code, const GuestC
         lastError_ = 6;
         ret = 0;
     } else {
+        ceMgdi_.destroyDc(args.a1);
         dcs_.erase(args.a1);
         ceKernel_.handles().erase(handle);
         lastError_ = 0;

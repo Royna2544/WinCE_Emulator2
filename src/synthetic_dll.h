@@ -4,6 +4,7 @@
 
 #include "ce_gwe.h"
 #include "ce_kernel.h"
+#include "ce_mgdi.h"
 
 #include <nlohmann/json.hpp>
 
@@ -741,6 +742,7 @@ private:
     uint32_t lastError_ = 0;
     CeKernel ceKernel_;
     CeGwe ceGwe_;
+    CeMgdi ceMgdi_;
     uint32_t processHeapHandle_ = 0;
     uint64_t tick_ = 0;
     uint64_t windowZOrder_ = 0;

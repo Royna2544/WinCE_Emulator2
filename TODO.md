@@ -89,6 +89,11 @@ Active refactor checklist: `PLAN.md`.
      `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_bitmap.cpp:1743`.
    - Goal: put system clip/app clip/DC clip in one clear model before adding
      more drawing optimizations.
+   - Current status: `CeMgdi` now has a DC-state shadow for DC lifetime,
+     selected objects, text state, current drawing position, app/system clip
+     storage, and window-DC system clips seeded from GWE visible rectangles.
+     Next step is to make drawing helpers consult MGDI clipping instead of
+     relying on framebuffer/backing checks alone.
 
 ## Next
 

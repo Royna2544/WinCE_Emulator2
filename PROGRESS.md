@@ -32,10 +32,10 @@ Current emulator difference:
   state, scheduling, host presentation, and several device shims inside
   `SyntheticDllRuntime`. This is acceptable for emulation, but it means CE's
   subsystem boundaries are currently flattened.
-- Build-only `CeKernel`, `CeGwe`, and `CeMgdi` scaffolds now exist and are
-  wired into `iNavi_Unicorn_Emulator.vcxproj`. No runtime behavior has moved
-  into those scaffolds yet. The 2026-05-30 Release build passed with one
-  pre-existing Boost Beast warning from `remote_server.cpp`.
+- Initial build-only `CeKernel`, `CeGwe`, and `CeMgdi` scaffolds were added
+  and wired into `iNavi_Unicorn_Emulator.vcxproj` before the staged runtime
+  migrations below. The 2026-05-30 Release build passed with one pre-existing
+  Boost Beast warning from `remote_server.cpp`.
 - `GuestHandle`, the guest handle table, and the next-handle counter now live
   behind `CeKernel`. `SyntheticDllRuntime` still orchestrates handle cleanup
   for windows, DCs, host resources, mappings, and guest threads while later
@@ -317,6 +317,28 @@ Current emulator difference:
   was captured at 816x519 and the high-signal log scan found no new
   unsupported coredll ordinal, hard-error, invalid mapping, false zero-PC,
   modal/input discard, or deadlock markers.
+- `CeMgdi` now owns the first DC-state shadow. Existing `GuestDc` remains the
+  drawing source of truth, but DC creation/destruction and state changes now
+  mirror into `CeMgdi::DcState`: selected brush/pen/font/bitmap, text and
+  background colors/mode/alignment, current drawing position, and a system
+  clip seeded from GWE visible rectangles for window DCs. This is a scaffold
+  step toward CE MGDI clipping; drawing paths do not enforce the MGDI clip
+  yet. CE references:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/MGDI/INC/dc.hpp:13`
+  and
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/MGDI/INC/dc.hpp:203`.
+  Current source references:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_mgdi.h:17`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_bitmap.cpp:253`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_paint.cpp:69`,
+  and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_named_dispatch.cpp:2565`.
+  The 2026-05-30 Release build passed with the pre-existing Boost Beast
+  warning from `remote_server.cpp`. Bounded autodrive with the companion
+  enabled wrote `captures/inavi_autodrive_20260530_200752`; `00_initial.png`
+  was captured at 816x519 and the high-signal log scan found no new
+  unsupported coredll ordinal, hard-error, invalid mapping, false zero-PC, or
+  deadlock markers.
 
 ## Threading And Message Queues
 

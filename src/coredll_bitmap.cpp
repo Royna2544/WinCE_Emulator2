@@ -258,6 +258,15 @@ uint32_t SyntheticDllRuntime::makeGuestDc(uint32_t hwnd) {
     dc.selectedFont = makeStockObject(17); // DEFAULT_GUI_FONT
     const uint32_t handle = makeGuestHandle({GuestHandle::Kind::GuestDc, 0, 0});
     dcs_[handle] = dc;
+    ceMgdi_.createDc(handle, hwnd);
+    ceMgdi_.updateSelectedObjects(handle, dc.selectedBrush, dc.selectedPen, dc.selectedFont, dc.selectedBitmap);
+    if (const auto visibleRect = ceGwe_.visibleRectForWindow(hwnd)) {
+        ceMgdi_.setSystemClip(handle,
+                              CeMgdi::Rect{visibleRect->left,
+                                           visibleRect->top,
+                                           visibleRect->right,
+                                           visibleRect->bottom});
+    }
     return handle;
 }
 

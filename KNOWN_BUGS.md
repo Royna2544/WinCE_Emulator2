@@ -181,3 +181,8 @@ Status:
 
 - Known behavior gap. Add a CE-shaped clipping/window-bitmap layer before
   treating current blit behavior as faithful.
+- Current scaffold status: `CeMgdi` now mirrors DC lifetime, selected object
+  state, text state, current drawing position, and app/system clip storage,
+  with window DC system clips seeded from GWE visible rectangles. The bug
+  remains open until drawing paths enforce MGDI clipping and the window-bitmap
+  model replaces saved backing heuristics as the clipping truth.

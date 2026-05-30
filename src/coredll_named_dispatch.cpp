@@ -2572,18 +2572,22 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
         } else if (object->second.kind == GuestHandle::Kind::GuestBrush) {
             ret = dc->selectedBrush;
             dc->selectedBrush = a1;
+            ceMgdi_.setSelectedBrush(a0, a1);
             lastError_ = 0;
         } else if (object->second.kind == GuestHandle::Kind::GuestPen) {
             ret = dc->selectedPen;
             dc->selectedPen = a1;
+            ceMgdi_.setSelectedPen(a0, a1);
             lastError_ = 0;
         } else if (object->second.kind == GuestHandle::Kind::GuestFont) {
             ret = dc->selectedFont;
             dc->selectedFont = a1;
+            ceMgdi_.setSelectedFont(a0, a1);
             lastError_ = 0;
         } else if (object->second.kind == GuestHandle::Kind::HostBitmap && bitmaps_.count(a1)) {
             ret = dc->selectedBitmap;
             dc->selectedBitmap = a1;
+            ceMgdi_.setSelectedBitmap(a0, a1);
             lastError_ = 0;
         } else {
             lastError_ = 6;
@@ -2675,18 +2679,22 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             case ord(CoredllOrdinal::SetBkColor):
                 ret = dc->bkColor;
                 dc->bkColor = a1;
+                ceMgdi_.setBkColor(a0, a1);
                 break;
             case ord(CoredllOrdinal::SetTextColor):
                 ret = dc->textColor;
                 dc->textColor = a1;
+                ceMgdi_.setTextColor(a0, a1);
                 break;
             case ord(CoredllOrdinal::SetBkMode):
                 ret = dc->bkMode;
                 dc->bkMode = a1;
+                ceMgdi_.setBkMode(a0, a1);
                 break;
             default:
                 ret = dc->textAlign;
                 dc->textAlign = a1;
+                ceMgdi_.setTextAlign(a0, a1);
                 break;
             }
             lastError_ = 0;
@@ -2831,6 +2839,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             }
             dc->x = int32_t(a1);
             dc->y = int32_t(a2);
+            ceMgdi_.setCurrentPosition(a0, dc->x, dc->y);
             lastError_ = 0;
             ret = 1;
         }
@@ -2850,6 +2859,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             }
             dc->x = int32_t(a1);
             dc->y = int32_t(a2);
+            ceMgdi_.setCurrentPosition(a0, dc->x, dc->y);
             lastError_ = 0;
             ret = 1;
         }
@@ -3034,6 +3044,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
         ret = makeGuestDc(0);
         if (GuestDc* dc = lookupGuestDc(ret)) {
             dc->selectedBitmap = makeStockObject(21); // DEFAULT_BITMAP
+            ceMgdi_.setSelectedBitmap(ret, dc->selectedBitmap);
         }
         lastError_ = ret ? 0 : 8;
         break;
@@ -3045,6 +3056,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             lastError_ = 6;
             ret = 0;
         } else {
+            ceMgdi_.destroyDc(a0);
             dcs_.erase(a0);
             ceKernel_.handles().erase(handle);
             lastError_ = 0;
