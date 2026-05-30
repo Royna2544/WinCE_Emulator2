@@ -431,6 +431,18 @@ Current emulator difference:
   was captured at 816x519 and the high-signal log scan found no new
   unsupported coredll ordinal, hard-error, invalid mapping, false zero-PC, or
   deadlock markers.
+- `SetDIBColorTable` now uses `CeMgdi::BitmapState` for selected-bitmap
+  existence, bpp validation, and palette bounds. The palette vector itself
+  still lives in `GuestBitmap` until the later palette/pixel-storage migration.
+  CE reference:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/MGDI/INC/gdiobj.h:358`.
+  Current source reference:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_bitmap.cpp:1391`.
+  The 2026-05-30 Release build passed with no warnings. Bounded autodrive with
+  the companion enabled wrote `captures/inavi_autodrive_20260530_203731`;
+  `00_initial.png` was captured at 816x519 and the high-signal log scan found
+  no new unsupported coredll ordinal, hard-error, invalid mapping, false
+  zero-PC, or deadlock markers.
 - The touched MGDI bitmap/DC path now uses named local constants for GDI stock
   object IDs and the `BITMAP` metadata byte count instead of raw values in the
   migrated code. Current source references:

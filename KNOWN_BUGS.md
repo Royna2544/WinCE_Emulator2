@@ -189,6 +189,7 @@ Status:
   mirrors bitmap metadata for created/deleted bitmaps and a window-bitmap
   scaffold for published guest windows, and `GetObjectW` bitmap metadata now
   reads through MGDI. `SetBitmapBits` now also uses MGDI metadata for storage
-  size and guest bits lookup. The bug remains open until more pixel storage/DC
-  object ownership moves behind MGDI instead of saved backing heuristics
-  remaining the clipping truth.
+  size and guest bits lookup, while `SetDIBColorTable` validates palette
+  bounds through MGDI metadata. The bug remains open until more pixel
+  storage/DC object ownership moves behind MGDI instead of saved backing
+  heuristics remaining the clipping truth.

@@ -1390,18 +1390,19 @@ bool SyntheticDllRuntime::handleGetObjectW(const GuestCallArgs& args, uint32_t& 
 
 bool SyntheticDllRuntime::handleSetDIBColorTable(const GuestCallArgs& args, uint32_t& ret) {
     GuestDc* dc = lookupGuestDc(args.a0);
+    const CeMgdi::BitmapState* bitmapState = dc ? ceMgdi_.bitmapState(dc->selectedBitmap) : nullptr;
     auto bitmap = dc ? bitmaps_.find(dc->selectedBitmap) : bitmaps_.end();
-    if (!dc || bitmap == bitmaps_.end() || !args.a3 || bitmap->second.bpp > 8) {
+    if (!dc || !bitmapState || bitmap == bitmaps_.end() || !args.a3 || bitmapState->bpp > 8) {
         lastError_ = dc ? 87 : 6;
         ret = 0;
         return true;
     }
 
     GuestBitmap& bm = bitmap->second;
-    const uint32_t maxColors = 1u << bm.bpp;
+    const uint32_t maxColors = 1u << bitmapState->bpp;
     const uint32_t start = std::min<uint32_t>(args.a1, maxColors);
     const uint32_t count = std::min<uint32_t>(args.a2, maxColors - start);
-    if (bm.palette.empty()) bm.palette = defaultIndexedPalette(bm.bpp);
+    if (bm.palette.empty()) bm.palette = defaultIndexedPalette(bitmapState->bpp);
     if (bm.palette.size() < maxColors) bm.palette.resize(maxColors, 0xff000000u);
 
     std::vector<uint8_t> raw(size_t(count) * 4);
