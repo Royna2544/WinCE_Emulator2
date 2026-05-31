@@ -758,15 +758,15 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(uint16_t ordinal,
 
 
 std::filesystem::path SyntheticDllRuntime::ensureCrossProcessWindowRegistryPath() {
-    if (!crossProcessWindowRegistryPath_.empty()) {
-        return crossProcessWindowRegistryPath_;
+    if (!crossProcessBroker_.windowRegistryPath().empty()) {
+        return crossProcessBroker_.windowRegistryPath();
     }
 #if defined(_WIN32)
     wchar_t buffer[32768]{};
     const DWORD chars = GetEnvironmentVariableW(L"INAVI_EMU_WINDOW_REGISTRY", buffer, DWORD(std::size(buffer)));
     if (chars && chars < DWORD(std::size(buffer))) {
-        crossProcessWindowRegistryPath_ = std::filesystem::path(buffer);
-        return crossProcessWindowRegistryPath_;
+        crossProcessBroker_.setWindowRegistryPath(std::filesystem::path(buffer));
+        return crossProcessBroker_.windowRegistryPath();
     }
 #endif
     std::filesystem::path directory = childLogDirectoryFromEnvironment();
@@ -777,13 +777,13 @@ std::filesystem::path SyntheticDllRuntime::ensureCrossProcessWindowRegistryPath(
     if (directory.empty()) {
         return {};
     }
-    crossProcessWindowRegistryPath_ =
-        directory / ("inavi_emu_windows_" + std::to_string(hostProcessId()) + ".json");
+    crossProcessBroker_.setWindowRegistryPath(
+        directory / ("inavi_emu_windows_" + std::to_string(hostProcessId()) + ".json"));
 #if defined(_WIN32)
     SetEnvironmentVariableW(L"INAVI_EMU_WINDOW_REGISTRY",
-                            crossProcessWindowRegistryPath_.wstring().c_str());
+                            crossProcessBroker_.windowRegistryPath().wstring().c_str());
 #endif
-    return crossProcessWindowRegistryPath_;
+    return crossProcessBroker_.windowRegistryPath();
 }
 
 void SyntheticDllRuntime::publishGuestWindowState(uint32_t hwnd) {
@@ -968,17 +968,15 @@ std::optional<uint32_t> SyntheticDllRuntime::findExternalGuestWindow(const std::
             continue;
         }
 
-        const auto key = std::make_pair(processId, externalHwnd);
-        auto existing = externalWindowHandles_.find(key);
-        if (existing != externalWindowHandles_.end()) {
-            auto existingWindow = windows_.find(existing->second);
+        if (auto existing = crossProcessBroker_.importedGuestWindow(processId, externalHwnd)) {
+            auto existingWindow = windows_.find(*existing);
             if (existingWindow != windows_.end() && !existingWindow->second.destroyed) {
                 existingWindow->second.className = entryClass;
                 existingWindow->second.title = entryTitle;
                 existingWindow->second.visible = it->value("visible", false);
                 existingWindow->second.zOrder = std::max<uint64_t>(existingWindow->second.zOrder,
                                                                    it->value("tick", 0ull));
-                return existing->second;
+                return *existing;
             }
         }
 
@@ -1002,7 +1000,7 @@ std::optional<uint32_t> SyntheticDllRuntime::findExternalGuestWindow(const std::
         window.externalHwnd = externalHwnd;
         windows_[hwnd] = window;
         ceGwe_.registerWindowOwner(hwnd, window.ownerThread);
-        externalWindowHandles_[key] = hwnd;
+        crossProcessBroker_.rememberImportedWindow(processId, externalHwnd, hwnd);
         spdlog::info("FindWindowW imported external guest window hwnd=0x{:08x} remotePid={} remoteHwnd=0x{:08x} class=\"{}\" title=\"{}\"",
                      hwnd, processId, externalHwnd, entryClass, entryTitle);
         return hwnd;
@@ -1011,15 +1009,15 @@ std::optional<uint32_t> SyntheticDllRuntime::findExternalGuestWindow(const std::
 }
 
 std::filesystem::path SyntheticDllRuntime::crossProcessMessageQueuePath() {
-    if (!crossProcessMessageQueuePath_.empty()) {
-        return crossProcessMessageQueuePath_;
+    if (!crossProcessBroker_.messageQueuePath().empty()) {
+        return crossProcessBroker_.messageQueuePath();
     }
     const std::filesystem::path registryPath = ensureCrossProcessWindowRegistryPath();
     if (registryPath.empty()) {
         return {};
     }
-    crossProcessMessageQueuePath_ = std::filesystem::path(registryPath.string() + ".messages.json");
-    return crossProcessMessageQueuePath_;
+    crossProcessBroker_.setMessageQueuePath(std::filesystem::path(registryPath.string() + ".messages.json"));
+    return crossProcessBroker_.messageQueuePath();
 }
 
 bool SyntheticDllRuntime::postCrossProcessGuestMessage(uint32_t processId,
@@ -1174,26 +1172,26 @@ void SyntheticDllRuntime::pollCrossProcessGuestMessages() {
     }
 
     const auto now = std::chrono::steady_clock::now();
-    if (lastCrossProcessMessagePollAt_ != std::chrono::steady_clock::time_point{} &&
-        now - lastCrossProcessMessagePollAt_ < std::chrono::milliseconds(2)) {
+    if (crossProcessBroker_.lastMessagePollAt() != std::chrono::steady_clock::time_point{} &&
+        now - crossProcessBroker_.lastMessagePollAt() < std::chrono::milliseconds(2)) {
         return;
     }
-    lastCrossProcessMessagePollAt_ = now;
+    crossProcessBroker_.setLastMessagePollAt(now);
 
     std::error_code statError;
     const auto currentWrite = std::filesystem::last_write_time(queuePath, statError);
     if (statError) {
-        hasCrossProcessMessageQueueStat_ = false;
+        crossProcessBroker_.setHasMessageQueueStat(false);
         return;
     }
     const std::uintmax_t currentSize = std::filesystem::file_size(queuePath, statError);
     if (statError) {
-        hasCrossProcessMessageQueueStat_ = false;
+        crossProcessBroker_.setHasMessageQueueStat(false);
         return;
     }
-    if (hasCrossProcessMessageQueueStat_ &&
-        currentWrite == lastCrossProcessMessageQueueWrite_ &&
-        currentSize == lastCrossProcessMessageQueueSize_) {
+    if (crossProcessBroker_.hasMessageQueueStat() &&
+        currentWrite == crossProcessBroker_.lastMessageQueueWrite() &&
+        currentSize == crossProcessBroker_.lastMessageQueueSize()) {
         return;
     }
 #if defined(_WIN32)
@@ -1213,9 +1211,9 @@ void SyntheticDllRuntime::pollCrossProcessGuestMessages() {
         }
     }
     if (queue.value("version", 0) != 1 || !queue["messages"].is_array()) {
-        hasCrossProcessMessageQueueStat_ = true;
-        lastCrossProcessMessageQueueWrite_ = currentWrite;
-        lastCrossProcessMessageQueueSize_ = currentSize;
+        crossProcessBroker_.setHasMessageQueueStat(true);
+        crossProcessBroker_.setLastMessageQueueWrite(currentWrite);
+        crossProcessBroker_.setLastMessageQueueSize(currentSize);
         return;
     }
     syncNamedMappedViews();
@@ -1225,12 +1223,10 @@ void SyntheticDllRuntime::pollCrossProcessGuestMessages() {
         if (!processId || !externalHwnd || processId == currentPid || !isHostProcessAlive(processId)) {
             return 0;
         }
-        const auto key = std::make_pair(processId, externalHwnd);
-        auto existing = externalWindowHandles_.find(key);
-        if (existing != externalWindowHandles_.end()) {
-            auto existingWindow = windows_.find(existing->second);
+        if (auto existing = crossProcessBroker_.importedGuestWindow(processId, externalHwnd)) {
+            auto existingWindow = windows_.find(*existing);
             if (existingWindow != windows_.end() && !existingWindow->second.destroyed) {
-                return existing->second;
+                return *existing;
             }
         }
 
@@ -1280,7 +1276,7 @@ void SyntheticDllRuntime::pollCrossProcessGuestMessages() {
             window.externalHwnd = externalHwnd;
             windows_[hwnd] = window;
             ceGwe_.registerWindowOwner(hwnd, window.ownerThread);
-            externalWindowHandles_[key] = hwnd;
+            crossProcessBroker_.rememberImportedWindow(processId, externalHwnd, hwnd);
             spdlog::info("imported external guest window hwnd=0x{:08x} remotePid={} remoteHwnd=0x{:08x} class=\"{}\" title=\"{}\"",
                          hwnd, processId, externalHwnd, window.className, window.title);
             return hwnd;
@@ -1375,9 +1371,9 @@ void SyntheticDllRuntime::pollCrossProcessGuestMessages() {
     }
 
     if (!changed) {
-        hasCrossProcessMessageQueueStat_ = true;
-        lastCrossProcessMessageQueueWrite_ = currentWrite;
-        lastCrossProcessMessageQueueSize_ = currentSize;
+        crossProcessBroker_.setHasMessageQueueStat(true);
+        crossProcessBroker_.setLastMessageQueueWrite(currentWrite);
+        crossProcessBroker_.setLastMessageQueueSize(currentSize);
         return;
     }
     std::error_code ignored;
@@ -1398,10 +1394,10 @@ void SyntheticDllRuntime::pollCrossProcessGuestMessages() {
     std::error_code refreshError;
     const auto refreshedWrite = std::filesystem::last_write_time(queuePath, refreshError);
     const std::uintmax_t refreshedSize = refreshError ? 0 : std::filesystem::file_size(queuePath, refreshError);
-    hasCrossProcessMessageQueueStat_ = !refreshError;
-    if (hasCrossProcessMessageQueueStat_) {
-        lastCrossProcessMessageQueueWrite_ = refreshedWrite;
-        lastCrossProcessMessageQueueSize_ = refreshedSize;
+    crossProcessBroker_.setHasMessageQueueStat(!refreshError);
+    if (crossProcessBroker_.hasMessageQueueStat()) {
+        crossProcessBroker_.setLastMessageQueueWrite(refreshedWrite);
+        crossProcessBroker_.setLastMessageQueueSize(refreshedSize);
     }
 }
 

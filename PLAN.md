@@ -493,6 +493,10 @@ results, or timing thresholds.
   mapping backing files.
   Current source anchors: `src/cross_process_broker.h` and
   `src/cross_process_broker.cpp`.
+  - [x] Move runtime-owned registry/message-queue paths, imported external
+    HWND table, cross-process message stat cache, poll timestamp, and shared
+    mapping directory state behind `CrossProcessBroker` without changing the
+    JSON transport format.
 - [x] Add a `RuntimeDiagnostics` owner for rate-limited logs, dump flags,
   message latency watchdogs, route/search timing, GWE owner queue summaries,
   and host-present/mapping-sync counters.

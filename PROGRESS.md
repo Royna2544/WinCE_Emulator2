@@ -227,6 +227,16 @@ Current emulator difference:
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp`, and
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_thread_runtime.cpp`. The
   2026-05-31 Release build passed with the existing vcpkg/Boost warnings.
+- Cross-process transport bookkeeping started moving out of
+  `SyntheticDllRuntime`: companion window registry/message-queue paths,
+  imported external HWND mappings, message-queue stat cache, poll timestamp,
+  and shared-mapping directory state now live behind `CrossProcessBroker`.
+  The JSON registry/message queue format and named shared mapping backing
+  behavior are unchanged. Current source anchors:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/cross_process_broker.h`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_named_dispatch.cpp`, and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_mapping.cpp`. The 2026-05-31
+  Release build passed with the existing vcpkg/Boost warnings.
 - A follow-up live report showed the startup safety/fullscreen surface could
   visually overlap with the bottom strip again: stale fullscreen-popup pixels
   remained while exposed owner/child UI repainted. Log evidence from Debug run

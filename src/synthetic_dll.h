@@ -7,6 +7,7 @@
 #include "ce_gwe.h"
 #include "ce_kernel.h"
 #include "ce_mgdi.h"
+#include "cross_process_broker.h"
 #include "ordinal_dispatch_table.h"
 #include "runtime_diagnostics.h"
 
@@ -764,6 +765,7 @@ private:
     CeAudio ceAudio_;
     CeGwe ceGwe_;
     CeMgdi ceMgdi_;
+    CrossProcessBroker crossProcessBroker_;
     RuntimeDiagnostics diagnostics_;
     uint32_t processHeapHandle_ = 0;
     uint64_t tick_ = 0;
@@ -795,13 +797,6 @@ private:
     std::string sdmmcGuestRoot_ = "\\SDMMC Disk";
     std::filesystem::path sdmmcHostRoot_;
     std::filesystem::path hostMainModulePath_;
-    std::filesystem::path crossProcessWindowRegistryPath_;
-    std::filesystem::path crossProcessMessageQueuePath_;
-    std::filesystem::file_time_type lastCrossProcessMessageQueueWrite_{};
-    std::uintmax_t lastCrossProcessMessageQueueSize_ = 0;
-    std::chrono::steady_clock::time_point lastCrossProcessMessagePollAt_{};
-    bool hasCrossProcessMessageQueueStat_ = false;
-    std::filesystem::path sharedMappingDirectory_;
     uint32_t mainModuleBase_ = 0;
     std::filesystem::path hostBaseDir_;
     uint16_t nextAtom_ = 0xc000;
@@ -816,7 +811,6 @@ private:
     std::map<std::string, GuestWindowClass> windowClassesByName_;
     std::map<uint16_t, std::string> windowClassNamesByAtom_;
     std::map<uint32_t, GuestWindow> windows_;
-    std::map<std::pair<uint32_t, uint32_t>, uint32_t> externalWindowHandles_;
     std::unordered_map<uint32_t, GuestDc> dcs_;
     std::unordered_map<uint32_t, GuestBrush> brushes_;
     std::unordered_map<uint32_t, GuestPen> pens_;

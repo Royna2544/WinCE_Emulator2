@@ -655,6 +655,7 @@ uint32_t SyntheticDllRuntime::closeGuestHandle(uint32_t guestHandle) {
         auto window = windows_.find(guestHandle);
         if (window != windows_.end()) destroyHostWindow(window->second);
         windows_.erase(guestHandle);
+        crossProcessBroker_.forgetImportedWindow(guestHandle);
     } else if (it->second.kind == GuestHandle::Kind::GuestDc) {
         dcs_.erase(guestHandle);
     } else if (it->second.kind == GuestHandle::Kind::GuestBrush) {

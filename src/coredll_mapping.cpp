@@ -62,38 +62,41 @@ std::string sanitizeFileNameFragment(std::string_view text) {
 }
 
 std::filesystem::path SyntheticDllRuntime::ensureSharedMappingDirectory() {
-    if (!sharedMappingDirectory_.empty()) {
-        return sharedMappingDirectory_;
+    if (!crossProcessBroker_.sharedMappingDirectory().empty()) {
+        return crossProcessBroker_.sharedMappingDirectory();
     }
+    std::filesystem::path directory;
 #if defined(_WIN32)
     wchar_t buffer[32768]{};
     DWORD chars = GetEnvironmentVariableW(L"INAVI_EMU_SHARED_MAPPING_DIR", buffer, DWORD(std::size(buffer)));
     if (chars && chars < DWORD(std::size(buffer))) {
-        sharedMappingDirectory_ = std::filesystem::path(buffer);
+        directory = std::filesystem::path(buffer);
     }
-    if (sharedMappingDirectory_.empty()) {
+    if (directory.empty()) {
         chars = GetEnvironmentVariableW(L"INAVI_EMU_WINDOW_REGISTRY", buffer, DWORD(std::size(buffer)));
         if (chars && chars < DWORD(std::size(buffer))) {
-            sharedMappingDirectory_ = std::filesystem::path(buffer).parent_path() / L"shared_mappings";
+            directory = std::filesystem::path(buffer).parent_path() / L"shared_mappings";
         }
     }
-    if (sharedMappingDirectory_.empty()) {
+    if (directory.empty()) {
         chars = GetEnvironmentVariableW(L"INAVI_EMU_CHILD_LOG_DIR", buffer, DWORD(std::size(buffer)));
         if (chars && chars < DWORD(std::size(buffer))) {
-            sharedMappingDirectory_ = std::filesystem::path(buffer) / L"shared_mappings";
+            directory = std::filesystem::path(buffer) / L"shared_mappings";
         }
     }
 #endif
-    if (sharedMappingDirectory_.empty()) {
+    if (directory.empty()) {
         std::error_code ignored;
-        sharedMappingDirectory_ = std::filesystem::temp_directory_path(ignored) / "inavi_emu_shared_mappings";
+        directory = std::filesystem::temp_directory_path(ignored) / "inavi_emu_shared_mappings";
     }
+    crossProcessBroker_.setSharedMappingDirectory(directory);
     std::error_code ignored;
-    std::filesystem::create_directories(sharedMappingDirectory_, ignored);
+    std::filesystem::create_directories(crossProcessBroker_.sharedMappingDirectory(), ignored);
 #if defined(_WIN32)
-    SetEnvironmentVariableW(L"INAVI_EMU_SHARED_MAPPING_DIR", sharedMappingDirectory_.wstring().c_str());
+    SetEnvironmentVariableW(L"INAVI_EMU_SHARED_MAPPING_DIR",
+                            crossProcessBroker_.sharedMappingDirectory().wstring().c_str());
 #endif
-    return sharedMappingDirectory_;
+    return crossProcessBroker_.sharedMappingDirectory();
 }
 
 std::filesystem::path SyntheticDllRuntime::sharedMappingBackingPath(const std::string& name) {
