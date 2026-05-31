@@ -495,6 +495,11 @@ results, or timing thresholds.
   - [x] Move legacy runtime DC, bitmap, brush, pen, font, and bitmap-probe type
     definitions into `CeMgdi`, keeping runtime aliases and storage unchanged
     for this buildable step.
+  - [x] Move runtime DC, bitmap, brush, pen, font, and stock-object storage
+    behind `CeMgdi`, preserving existing runtime drawing/orchestration call
+    paths.
+    Current source anchors: `src/ce_mgdi.h`, `src/coredll_bitmap.cpp`,
+    `src/coredll_named_dispatch.cpp`, and `src/coredll_paint.cpp`.
 - [ ] Move wave-output state, host backend queue state, and live websocket tap
   cursor behind `CeAudio`; host WinMM and websocket remain backing services.
   - [x] Move legacy host wave-buffer, host audio backend chunk, guest waveOut

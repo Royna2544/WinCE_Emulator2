@@ -535,14 +535,14 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(uint16_t ordinal,
                 if (bitmap.palette.empty() && (bitsPerPixel == 1 || bitsPerPixel == 4 || bitsPerPixel == 8)) {
                     bitmap.palette = defaultIndexedPalette(uint16_t(bitsPerPixel));
                 }
-                bitmaps_[ret] = std::move(bitmap);
-                mirrorMgdiBitmap(ret, bitmaps_[ret]);
+                ceMgdi_.bitmaps()[ret] = std::move(bitmap);
+                mirrorMgdiBitmap(ret, ceMgdi_.bitmaps()[ret]);
             }
             spdlog::debug("CreateDIBSection {}x{} bpp={} compression={} masks={:08x}/{:08x}/{:08x} stride={} bits=0x{:08x} bitmap=0x{:08x}",
                           width, heightRaw, bitsPerPixel, compression,
-                          ret && bitmaps_.count(ret) ? bitmaps_[ret].redMask : 0,
-                          ret && bitmaps_.count(ret) ? bitmaps_[ret].greenMask : 0,
-                          ret && bitmaps_.count(ret) ? bitmaps_[ret].blueMask : 0,
+                          ret && ceMgdi_.bitmaps().count(ret) ? ceMgdi_.bitmaps()[ret].redMask : 0,
+                          ret && ceMgdi_.bitmaps().count(ret) ? ceMgdi_.bitmaps()[ret].greenMask : 0,
+                          ret && ceMgdi_.bitmaps().count(ret) ? ceMgdi_.bitmaps()[ret].blueMask : 0,
                           stride, bits, ret);
         }
         break;
@@ -556,9 +556,9 @@ bool SyntheticDllRuntime::dispatchGuestMemoryApi(uint16_t ordinal,
         const uint32_t bits = allocate(std::max<uint32_t>(stride * height, 4), true);
         ret = makeGuestHandle({GuestHandle::Kind::HostBitmap, 0, bits});
         if (ret) {
-            bitmaps_[ret] = GuestBitmap{int32_t(width), -int32_t(height), uint16_t(bpp), stride, bits,
+            ceMgdi_.bitmaps()[ret] = GuestBitmap{int32_t(width), -int32_t(height), uint16_t(bpp), stride, bits,
                                         0, 0, 0, {}};
-            mirrorMgdiBitmap(ret, bitmaps_[ret]);
+            mirrorMgdiBitmap(ret, ceMgdi_.bitmaps()[ret]);
         }
         lastError_ = ret ? 0 : 8;
         spdlog::info("CreateCompatibleBitmap {}x{} bits=0x{:08x} bitmap=0x{:08x}",
@@ -2652,7 +2652,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                    region && region->hasBounds) {
             CeMgdi::Rect clip = region->bounds;
             const uint32_t selectedBitmap = ceMgdi_.selectedBitmapForDc(a0, dc->selectedBitmap);
-            if (bitmaps_.find(selectedBitmap) == bitmaps_.end() && dc->hwnd) {
+            if (ceMgdi_.bitmaps().find(selectedBitmap) == ceMgdi_.bitmaps().end() && dc->hwnd) {
                 const auto [originX, originY] = guestWindowOrigin(dc->hwnd);
                 clip.left += originX;
                 clip.right += originX;
@@ -2773,7 +2773,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                 lastError_ = 0;
                 return true;
             }
-            brushes_.erase(a0);
+            ceMgdi_.brushes().erase(a0);
             ceMgdi_.destroyBrush(a0);
             ceKernel_.handles().erase(object);
             ret = 1;
@@ -2785,7 +2785,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                 lastError_ = 0;
                 return true;
             }
-            pens_.erase(a0);
+            ceMgdi_.pens().erase(a0);
             ceMgdi_.destroyPen(a0);
             ceKernel_.handles().erase(object);
             ret = 1;
@@ -2797,7 +2797,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                 lastError_ = 0;
                 return true;
             }
-            fonts_.erase(a0);
+            ceMgdi_.fonts().erase(a0);
             ceMgdi_.destroyFont(a0);
             ceKernel_.handles().erase(object);
             ret = 1;
@@ -2813,7 +2813,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             if (object->second.hostValue) DeleteObject(reinterpret_cast<HGDIOBJ>(object->second.hostValue));
 #endif
             ceMgdi_.destroyBitmap(a0);
-            bitmaps_.erase(a0);
+            ceMgdi_.bitmaps().erase(a0);
             if (object->second.filePointer) releaseAllocation(object->second.filePointer);
             ceKernel_.handles().erase(object);
             ret = 1;
@@ -3133,9 +3133,9 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             const bool supported = stackArg(11) == 0 && stackArg(12) == 0x00cc0020u;
             const CeMgdi::DcState* dcState = ceMgdi_.dcState(a0);
             const uint32_t selectedBitmap = dcState ? dcState->selectedBitmap : dc->selectedBitmap;
-            auto dstBitmap = bitmaps_.find(selectedBitmap);
-            if (dstBitmap != bitmaps_.end()) syncBitmapPaletteFromMgdi(selectedBitmap, dstBitmap->second);
-            const bool ok = supported && (dstBitmap != bitmaps_.end()
+            auto dstBitmap = ceMgdi_.bitmaps().find(selectedBitmap);
+            if (dstBitmap != ceMgdi_.bitmaps().end()) syncBitmapPaletteFromMgdi(selectedBitmap, dstBitmap->second);
+            const bool ok = supported && (dstBitmap != ceMgdi_.bitmaps().end()
                 ? stretchDibToBitmap(dstBitmap->second, int32_t(a1), int32_t(a2), int32_t(a3),
                                      int32_t(stackArg(4)), int32_t(stackArg(5)),
                                      int32_t(stackArg(6)), int32_t(stackArg(7)),
@@ -3177,17 +3177,17 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                                                       : (dstDc ? dstDc->selectedBitmap : 0);
         const uint32_t srcSelectedBitmap = srcDcState ? srcDcState->selectedBitmap
                                                       : (srcDc ? srcDc->selectedBitmap : 0);
-        auto srcBitmap = srcDc ? bitmaps_.find(srcSelectedBitmap) : bitmaps_.end();
-        auto dstBitmap = dstDc ? bitmaps_.find(dstSelectedBitmap) : bitmaps_.end();
-        if (srcBitmap != bitmaps_.end()) syncBitmapPaletteFromMgdi(srcSelectedBitmap, srcBitmap->second);
-        if (dstBitmap != bitmaps_.end()) syncBitmapPaletteFromMgdi(dstSelectedBitmap, dstBitmap->second);
+        auto srcBitmap = srcDc ? ceMgdi_.bitmaps().find(srcSelectedBitmap) : ceMgdi_.bitmaps().end();
+        auto dstBitmap = dstDc ? ceMgdi_.bitmaps().find(dstSelectedBitmap) : ceMgdi_.bitmaps().end();
+        if (srcBitmap != ceMgdi_.bitmaps().end()) syncBitmapPaletteFromMgdi(srcSelectedBitmap, srcBitmap->second);
+        if (dstBitmap != ceMgdi_.bitmaps().end()) syncBitmapPaletteFromMgdi(dstSelectedBitmap, dstBitmap->second);
         const int32_t dstH = int32_t(stackArg(4));
         const int32_t srcX = int32_t(stackArg(6));
         const int32_t srcY = int32_t(stackArg(7));
         const int32_t srcW = int32_t(stackArg(8));
         const int32_t srcH = int32_t(stackArg(9));
         const uint32_t transparentColor = stackArg(10);
-        if (!dstDc || !srcDc || srcBitmap == bitmaps_.end()) {
+        if (!dstDc || !srcDc || srcBitmap == ceMgdi_.bitmaps().end()) {
             spdlog::info("TransparentImage unsupported dst=0x{:08x} dstBitmap=0x{:08x} src=0x{:08x} "
                          "srcBitmap=0x{:08x} dst={}x{} src={}x{} srcOrigin={},{} color=0x{:08x}",
                          a0, dstSelectedBitmap, stackArg(5),
@@ -3198,7 +3198,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
         } else if (int32_t(a3) == 0 || dstH == 0 || srcW == 0 || srcH == 0) {
             lastError_ = 0;
             ret = 1;
-        } else if (dstBitmap != bitmaps_.end()) {
+        } else if (dstBitmap != ceMgdi_.bitmaps().end()) {
             const bool ok = transparentImageToBitmap(dstBitmap->second, srcBitmap->second,
                                                      int32_t(a1), int32_t(a2), int32_t(a3), dstH,
                                                      srcX, srcY, srcW, srcH, transparentColor);
@@ -3326,7 +3326,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             ret = 0;
         } else {
             ceMgdi_.destroyDc(a0);
-            dcs_.erase(a0);
+            ceMgdi_.dcs().erase(a0);
             ceKernel_.handles().erase(handle);
             lastError_ = 0;
             ret = 1;
@@ -3356,11 +3356,11 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                                                       : (dstDc ? dstDc->selectedBitmap : 0);
         const uint32_t srcSelectedBitmap = srcDcState ? srcDcState->selectedBitmap
                                                       : (srcDc ? srcDc->selectedBitmap : 0);
-        auto srcBitmap = srcDc ? bitmaps_.find(srcSelectedBitmap) : bitmaps_.end();
-        auto dstBitmap = dstDc ? bitmaps_.find(dstSelectedBitmap) : bitmaps_.end();
-        if (srcBitmap != bitmaps_.end()) syncBitmapPaletteFromMgdi(srcSelectedBitmap, srcBitmap->second);
-        if (dstBitmap != bitmaps_.end()) syncBitmapPaletteFromMgdi(dstSelectedBitmap, dstBitmap->second);
-        if (!dstDc || !srcDc || srcBitmap == bitmaps_.end() || !supportedSourceRasterOp(rop)) {
+        auto srcBitmap = srcDc ? ceMgdi_.bitmaps().find(srcSelectedBitmap) : ceMgdi_.bitmaps().end();
+        auto dstBitmap = dstDc ? ceMgdi_.bitmaps().find(dstSelectedBitmap) : ceMgdi_.bitmaps().end();
+        if (srcBitmap != ceMgdi_.bitmaps().end()) syncBitmapPaletteFromMgdi(srcSelectedBitmap, srcBitmap->second);
+        if (dstBitmap != ceMgdi_.bitmaps().end()) syncBitmapPaletteFromMgdi(dstSelectedBitmap, dstBitmap->second);
+        if (!dstDc || !srcDc || srcBitmap == ceMgdi_.bitmaps().end() || !supportedSourceRasterOp(rop)) {
             spdlog::info("{} unsupported dst=0x{:08x} dstBitmap=0x{:08x} src=0x{:08x} srcBitmap=0x{:08x} "
                          "dst={}x{} src={}x{} srcOrigin={},{} rop=0x{:08x}",
                          name, a0, dstSelectedBitmap, stackArg(5),
@@ -3371,7 +3371,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
         } else if (dstW == 0 || dstH == 0 || srcW == 0 || srcH == 0) {
             lastError_ = 0;
             ret = 1;
-        } else if (dstBitmap != bitmaps_.end()) {
+        } else if (dstBitmap != ceMgdi_.bitmaps().end()) {
             const bool ok = bitBltToBitmap(dstBitmap->second, srcBitmap->second,
                                            int32_t(a1), int32_t(a2), dstW, dstH,
                                            srcX, srcY, srcW, srcH, rop);

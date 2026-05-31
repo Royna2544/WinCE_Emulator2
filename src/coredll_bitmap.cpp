@@ -279,7 +279,7 @@ uint32_t SyntheticDllRuntime::makeGuestDc(uint32_t hwnd) {
     dc.selectedFont = makeStockObject(kStockDefaultGuiFont);
     const uint32_t handle = makeGuestHandle({GuestHandle::Kind::GuestDc, 0, 0});
     dc.hdc = handle;
-    dcs_[handle] = dc;
+    ceMgdi_.dcs()[handle] = dc;
     ceMgdi_.createDc(handle, hwnd);
     ceMgdi_.updateSelectedObjects(handle, dc.selectedBrush, dc.selectedPen, dc.selectedFont, dc.selectedBitmap);
     if (const auto visibleRect = ceGwe_.visibleRectForWindow(hwnd)) {
@@ -295,8 +295,8 @@ uint32_t SyntheticDllRuntime::makeGuestDc(uint32_t hwnd) {
 SyntheticDllRuntime::GuestDc* SyntheticDllRuntime::lookupGuestDc(uint32_t hdc) {
     auto handle = ceKernel_.handles().find(hdc);
     if (handle == ceKernel_.handles().end() || handle->second.kind != GuestHandle::Kind::GuestDc) return nullptr;
-    auto dc = dcs_.find(hdc);
-    return dc == dcs_.end() ? nullptr : &dc->second;
+    auto dc = ceMgdi_.dcs().find(hdc);
+    return dc == ceMgdi_.dcs().end() ? nullptr : &dc->second;
 }
 
 void SyntheticDllRuntime::mirrorMgdiBitmap(uint32_t handle, const GuestBitmap& bitmap) {
@@ -318,15 +318,15 @@ void SyntheticDllRuntime::mirrorMgdiBitmap(uint32_t handle, const GuestBitmap& b
 
 uint32_t SyntheticDllRuntime::makeGuestBrush(uint32_t colorRef, bool stock) {
     const uint32_t handle = makeGuestHandle({GuestHandle::Kind::GuestBrush, 0, stock ? 1u : 0u});
-    brushes_[handle] = GuestBrush{colorRef, 0, stock};
+    ceMgdi_.brushes()[handle] = GuestBrush{colorRef, 0, stock};
     ceMgdi_.trackBrush(CeMgdi::BrushState{handle, colorRef, 0, stock});
     return handle;
 }
 
 uint32_t SyntheticDllRuntime::createPatternBrushFromBitmap(uint32_t bitmapHandle) {
     uint32_t colorRef = 0;
-    auto bitmapIt = bitmaps_.find(bitmapHandle);
-    if (bitmapIt != bitmaps_.end()) {
+    auto bitmapIt = ceMgdi_.bitmaps().find(bitmapHandle);
+    if (bitmapIt != ceMgdi_.bitmaps().end()) {
         const GuestBitmap& bitmap = bitmapIt->second;
         const int32_t height = std::abs(bitmap.heightRaw);
         const uint64_t byteCount = uint64_t(bitmap.stride) * uint64_t(height);
@@ -352,28 +352,28 @@ uint32_t SyntheticDllRuntime::createPatternBrushFromBitmap(uint32_t bitmapHandle
         }
     }
     const uint32_t brush = makeGuestBrush(colorRef);
-    brushes_[brush].patternBitmap = bitmapHandle;
+    ceMgdi_.brushes()[brush].patternBitmap = bitmapHandle;
     ceMgdi_.setBrushPatternBitmap(brush, bitmapHandle);
     return brush;
 }
 
 uint32_t SyntheticDllRuntime::makeGuestPen(uint32_t style, uint32_t width, uint32_t colorRef, bool stock) {
     const uint32_t handle = makeGuestHandle({GuestHandle::Kind::GuestPen, 0, stock ? 1u : 0u});
-    pens_[handle] = GuestPen{style, width, colorRef, stock};
+    ceMgdi_.pens()[handle] = GuestPen{style, width, colorRef, stock};
     ceMgdi_.trackPen(CeMgdi::PenState{handle, style, width, colorRef, stock});
     return handle;
 }
 
 uint32_t SyntheticDllRuntime::makeGuestFont(const std::array<uint8_t, 92>& logFont, bool stock) {
     const uint32_t handle = makeGuestHandle({GuestHandle::Kind::GuestFont, 0, stock ? 1u : 0u});
-    fonts_[handle] = GuestFont{logFont, stock};
+    ceMgdi_.fonts()[handle] = GuestFont{logFont, stock};
     ceMgdi_.trackFont(CeMgdi::FontState{handle, logFont, stock});
     return handle;
 }
 
 uint32_t SyntheticDllRuntime::makeStockObject(int32_t index) {
-    auto existing = stockObjects_.find(index);
-    if (existing != stockObjects_.end()) return existing->second;
+    auto existing = ceMgdi_.stockObjects().find(index);
+    if (existing != ceMgdi_.stockObjects().end()) return existing->second;
 
     uint32_t handle = 0;
     switch (index) {
@@ -401,14 +401,14 @@ uint32_t SyntheticDllRuntime::makeStockObject(int32_t index) {
         bitmap.stride = 4;
         bitmap.palette = defaultIndexedPalette(1);
         bitmap.stock = true;
-        bitmaps_[handle] = std::move(bitmap);
-        mirrorMgdiBitmap(handle, bitmaps_[handle]);
+        ceMgdi_.bitmaps()[handle] = std::move(bitmap);
+        mirrorMgdiBitmap(handle, ceMgdi_.bitmaps()[handle]);
         break;
     }
     default:
         return 0;
     }
-    stockObjects_[index] = handle;
+    ceMgdi_.stockObjects()[index] = handle;
     return handle;
 }
 
@@ -708,8 +708,8 @@ bool SyntheticDllRuntime::fillDcRect(const GuestDc& dc,
                                      int32_t bottom,
                                      uint32_t pixel) {
     const uint32_t selectedBitmap = ceMgdi_.selectedBitmapForDc(dc.hdc, dc.selectedBitmap);
-    auto bitmap = bitmaps_.find(selectedBitmap);
-    if (bitmap != bitmaps_.end()) {
+    auto bitmap = ceMgdi_.bitmaps().find(selectedBitmap);
+    if (bitmap != ceMgdi_.bitmaps().end()) {
         syncBitmapPaletteFromMgdi(selectedBitmap, bitmap->second);
         return fillBitmapRect(bitmap->second, left, top, right, bottom, pixel);
     }
@@ -725,8 +725,8 @@ bool SyntheticDllRuntime::drawDcLine(const GuestDc& dc,
                                      uint32_t pixel,
                                      uint32_t width) {
     const uint32_t selectedBitmap = ceMgdi_.selectedBitmapForDc(dc.hdc, dc.selectedBitmap);
-    auto bitmap = bitmaps_.find(selectedBitmap);
-    if (bitmap != bitmaps_.end()) {
+    auto bitmap = ceMgdi_.bitmaps().find(selectedBitmap);
+    if (bitmap != ceMgdi_.bitmaps().end()) {
         syncBitmapPaletteFromMgdi(selectedBitmap, bitmap->second);
         return drawBitmapLine(bitmap->second, x0, y0, x1, y1, pixel, width);
     }
@@ -741,8 +741,8 @@ bool SyntheticDllRuntime::fillDcPolygon(const GuestDc& dc,
 
     std::vector<std::pair<int32_t, int32_t>> translatedPoints = points;
     const uint32_t selectedBitmap = ceMgdi_.selectedBitmapForDc(dc.hdc, dc.selectedBitmap);
-    auto bitmapIt = bitmaps_.find(selectedBitmap);
-    if (bitmapIt != bitmaps_.end()) {
+    auto bitmapIt = ceMgdi_.bitmaps().find(selectedBitmap);
+    if (bitmapIt != ceMgdi_.bitmaps().end()) {
 #if defined(_WIN32)
         syncBitmapPaletteFromMgdi(selectedBitmap, bitmapIt->second);
         const GuestBitmap& bitmap = bitmapIt->second;
@@ -855,7 +855,7 @@ bool SyntheticDllRuntime::fillDcPolygon(const GuestDc& dc,
 #endif
     }
 
-    if (bitmapIt == bitmaps_.end()) {
+    if (bitmapIt == ceMgdi_.bitmaps().end()) {
         int32_t originX = 0;
         int32_t originY = 0;
         if (dc.hwnd) std::tie(originX, originY) = guestWindowOrigin(dc.hwnd);
@@ -880,7 +880,7 @@ bool SyntheticDllRuntime::fillDcPolygon(const GuestDc& dc,
     std::vector<uint8_t> raw;
     std::optional<CeMgdi::Rect> framebufferClip;
     int32_t bitmapHeight = 0;
-    if (bitmapIt != bitmaps_.end()) {
+    if (bitmapIt != ceMgdi_.bitmaps().end()) {
         const GuestBitmap& bitmap = bitmapIt->second;
         bitmapHeight = std::abs(bitmap.heightRaw);
         if (!bitmap.bits || bitmap.width <= 0 || bitmapHeight <= 0 || bitmap.stride == 0) return false;
@@ -922,7 +922,7 @@ bool SyntheticDllRuntime::fillDcPolygon(const GuestDc& dc,
             int32_t left = intersections[i];
             int32_t right = intersections[i + 1];
             if (left > right) std::swap(left, right);
-            if (bitmapIt != bitmaps_.end()) {
+            if (bitmapIt != ceMgdi_.bitmaps().end()) {
                 const GuestBitmap& bitmap = bitmapIt->second;
                 left = std::clamp<int32_t>(left, 0, bitmap.width - 1);
                 right = std::clamp<int32_t>(right, 0, bitmap.width - 1);
@@ -939,7 +939,7 @@ bool SyntheticDllRuntime::fillDcPolygon(const GuestDc& dc,
         }
     }
 
-    if (bitmapIt != bitmaps_.end()) {
+    if (bitmapIt != ceMgdi_.bitmaps().end()) {
         const GuestBitmap& bitmap = bitmapIt->second;
         return uc_mem_write(uc_, bitmap.bits, raw.data(), raw.size()) == UC_ERR_OK;
     }
@@ -1068,8 +1068,8 @@ bool SyntheticDllRuntime::drawHostTextToDc(const GuestDc& dc,
     };
 
     const uint32_t selectedBitmap = ceMgdi_.selectedBitmapForDc(dc.hdc, dc.selectedBitmap);
-    auto dstBitmap = bitmaps_.find(selectedBitmap);
-    if (dstBitmap != bitmaps_.end()) {
+    auto dstBitmap = ceMgdi_.bitmaps().find(selectedBitmap);
+    if (dstBitmap != ceMgdi_.bitmaps().end()) {
         GuestBitmap& bitmap = dstBitmap->second;
         syncBitmapPaletteFromMgdi(selectedBitmap, bitmap);
         if (!bitmap.bits || bitmap.width <= 0 || bitmap.heightRaw == 0 || bitmap.stride == 0) return false;
@@ -1393,8 +1393,8 @@ bool SyntheticDllRuntime::handleCreateBitmap(const GuestCallArgs& args, uint32_t
         bitmap.bits = bits;
         if (bitmap.bpp == 16) ceDefault16BitMasks(bitmap.redMask, bitmap.greenMask, bitmap.blueMask);
         bitmap.palette = defaultIndexedPalette(uint16_t(bpp));
-        bitmaps_[ret] = std::move(bitmap);
-        mirrorMgdiBitmap(ret, bitmaps_[ret]);
+        ceMgdi_.bitmaps()[ret] = std::move(bitmap);
+        mirrorMgdiBitmap(ret, ceMgdi_.bitmaps()[ret]);
     }
     lastError_ = ret ? 0 : 8;
     spdlog::info("CreateBitmap {}x{} planes={} bpp={} bits=0x{:08x} bitmap=0x{:08x}",
@@ -1449,8 +1449,8 @@ bool SyntheticDllRuntime::handleSetDIBColorTable(const GuestCallArgs& args, uint
     GuestDc* dc = lookupGuestDc(args.a0);
     const uint32_t selectedBitmap = dc ? ceMgdi_.selectedBitmapForDc(args.a0, dc->selectedBitmap) : 0;
     CeMgdi::BitmapState* bitmapState = ceMgdi_.bitmapState(selectedBitmap);
-    auto bitmap = dc ? bitmaps_.find(selectedBitmap) : bitmaps_.end();
-    if (!dc || !bitmapState || bitmap == bitmaps_.end() || !args.a3 || bitmapState->bpp > 8) {
+    auto bitmap = dc ? ceMgdi_.bitmaps().find(selectedBitmap) : ceMgdi_.bitmaps().end();
+    if (!dc || !bitmapState || bitmap == ceMgdi_.bitmaps().end() || !args.a3 || bitmapState->bpp > 8) {
         lastError_ = dc ? 87 : 6;
         ret = 0;
         return true;
@@ -1528,9 +1528,9 @@ bool SyntheticDllRuntime::handleSetDIBitsToDevice(const GuestCallArgs& args, uin
     const int32_t srcY = int32_t(stackArg(6) + stackArg(7));
     const CeMgdi::DcState* dcState = ceMgdi_.dcState(args.a0);
     const uint32_t selectedBitmap = dcState ? dcState->selectedBitmap : dc->selectedBitmap;
-    auto dstBitmap = bitmaps_.find(selectedBitmap);
-    if (dstBitmap != bitmaps_.end()) syncBitmapPaletteFromMgdi(selectedBitmap, dstBitmap->second);
-    const bool ok = supported && (dstBitmap != bitmaps_.end()
+    auto dstBitmap = ceMgdi_.bitmaps().find(selectedBitmap);
+    if (dstBitmap != ceMgdi_.bitmaps().end()) syncBitmapPaletteFromMgdi(selectedBitmap, dstBitmap->second);
+    const bool ok = supported && (dstBitmap != ceMgdi_.bitmaps().end()
         ? stretchDibToBitmap(dstBitmap->second, int32_t(args.a1), int32_t(args.a2), dstW, scanLines,
                              srcX, srcY, dstW, scanLines, stackArg(9), stackArg(10))
         : stretchDibToFramebuffer(*dc, int32_t(args.a1), int32_t(args.a2), dstW, scanLines,

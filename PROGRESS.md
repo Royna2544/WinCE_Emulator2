@@ -255,6 +255,15 @@ Current emulator difference:
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_named_dispatch.cpp`, and
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp`. The
   2026-05-31 Release build passed with the existing vcpkg/Boost warnings.
+- MGDI storage for DCs, bitmaps, brushes, pens, fonts, and stock-object
+  handles now lives behind `CeMgdi`. Runtime drawing functions still perform
+  the same guest-memory and host-framebuffer work through CeMgdi accessors, so
+  this is an ownership move without guest-visible behavior change. Current
+  source anchors: `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_mgdi.h`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_bitmap.cpp`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_named_dispatch.cpp`, and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_paint.cpp`. The 2026-05-31
+  Release build passed with the existing vcpkg/Boost warnings.
 - Legacy host-audio and guest waveOut type definitions now live in `CeAudio`
   with `SyntheticDllRuntime` keeping aliases and the existing storage for this
   behavior-preserving step. Current source anchors:

@@ -6,6 +6,7 @@
 #include <map>
 #include <optional>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -478,6 +479,19 @@ public:
         return windowBitmapStates_;
     }
 
+    std::unordered_map<uint32_t, GuestDc>& dcs() noexcept { return dcs_; }
+    const std::unordered_map<uint32_t, GuestDc>& dcs() const noexcept { return dcs_; }
+    std::unordered_map<uint32_t, GuestBrush>& brushes() noexcept { return brushes_; }
+    const std::unordered_map<uint32_t, GuestBrush>& brushes() const noexcept { return brushes_; }
+    std::unordered_map<uint32_t, GuestPen>& pens() noexcept { return pens_; }
+    const std::unordered_map<uint32_t, GuestPen>& pens() const noexcept { return pens_; }
+    std::unordered_map<uint32_t, GuestFont>& fonts() noexcept { return fonts_; }
+    const std::unordered_map<uint32_t, GuestFont>& fonts() const noexcept { return fonts_; }
+    std::unordered_map<uint32_t, GuestBitmap>& bitmaps() noexcept { return bitmaps_; }
+    const std::unordered_map<uint32_t, GuestBitmap>& bitmaps() const noexcept { return bitmaps_; }
+    std::unordered_map<int32_t, uint32_t>& stockObjects() noexcept { return stockObjects_; }
+    const std::unordered_map<int32_t, uint32_t>& stockObjects() const noexcept { return stockObjects_; }
+
 private:
     void addDcToWindowBitmap(uint32_t hwnd) {
         if (!hwnd) return;
@@ -499,4 +513,10 @@ private:
     std::map<uint32_t, FontState> fontStates_;
     std::map<uint32_t, RegionState> regionStates_;
     std::map<uint32_t, WindowBitmapState> windowBitmapStates_;
+    std::unordered_map<uint32_t, GuestDc> dcs_;
+    std::unordered_map<uint32_t, GuestBrush> brushes_;
+    std::unordered_map<uint32_t, GuestPen> pens_;
+    std::unordered_map<uint32_t, GuestFont> fonts_;
+    std::unordered_map<uint32_t, GuestBitmap> bitmaps_;
+    std::unordered_map<int32_t, uint32_t> stockObjects_;
 };

@@ -657,11 +657,11 @@ uint32_t SyntheticDllRuntime::closeGuestHandle(uint32_t guestHandle) {
         ceGwe_.windows().erase(guestHandle);
         crossProcessBroker_.forgetImportedWindow(guestHandle);
     } else if (it->second.kind == GuestHandle::Kind::GuestDc) {
-        dcs_.erase(guestHandle);
+        ceMgdi_.dcs().erase(guestHandle);
     } else if (it->second.kind == GuestHandle::Kind::GuestBrush) {
-        brushes_.erase(guestHandle);
+        ceMgdi_.brushes().erase(guestHandle);
     } else if (it->second.kind == GuestHandle::Kind::GuestFont) {
-        fonts_.erase(guestHandle);
+        ceMgdi_.fonts().erase(guestHandle);
     } else if (it->second.kind == GuestHandle::Kind::GuestRegistryKey) {
         registryHandles_.erase(guestHandle);
     } else if (it->second.kind == GuestHandle::Kind::HostFile ||
@@ -689,7 +689,7 @@ uint32_t SyntheticDllRuntime::closeGuestHandle(uint32_t guestHandle) {
                                                });
         if (!hasMappedView) fileMappings_.erase(guestHandle);
     } else if (it->second.kind == GuestHandle::Kind::HostBitmap) {
-        bitmaps_.erase(guestHandle);
+        ceMgdi_.bitmaps().erase(guestHandle);
         if (it->second.filePointer) releaseAllocation(it->second.filePointer);
     } else if (it->second.kind == GuestHandle::Kind::GuestThread) {
         auto thread = ceKernel_.threads().find(guestHandle);
@@ -2302,8 +2302,8 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                 } else {
                     int32_t width = framebufferWidth_;
                     int32_t height = framebufferHeight_;
-                    auto bitmap = bitmaps_.find(dc->selectedBitmap);
-                    if (bitmap != bitmaps_.end()) {
+                    auto bitmap = ceMgdi_.bitmaps().find(dc->selectedBitmap);
+                    if (bitmap != ceMgdi_.bitmaps().end()) {
                         width = bitmap->second.width;
                         height = std::abs(bitmap->second.heightRaw);
                     }

@@ -1601,8 +1601,8 @@ void SyntheticDllRuntime::eraseGuestWindowArea(uint32_t hwnd, const GuestWindow&
             if (cls != ceGwe_.windowClassesByName().end()) {
                 std::memcpy(&brushHandle, cls->second.bytes.data() + 28, sizeof(brushHandle));
             }
-            auto brush = brushes_.find(brushHandle);
-            if (brush != brushes_.end()) pixel = colorRefToPixel(brush->second.colorRef);
+            auto brush = ceMgdi_.brushes().find(brushHandle);
+            if (brush != ceMgdi_.brushes().end()) pixel = colorRefToPixel(brush->second.colorRef);
         }
     }
     if (pixel == 0) pixel = 0xff000000u;

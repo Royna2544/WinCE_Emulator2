@@ -637,12 +637,6 @@ private:
     std::unordered_map<uint32_t, uint32_t> tlsValues_;
     std::unordered_map<uint32_t, uint32_t> criticalSectionDepth_;
     std::unordered_map<uint32_t, uint32_t> syntheticHandleValues_;
-    std::unordered_map<uint32_t, GuestDc> dcs_;
-    std::unordered_map<uint32_t, GuestBrush> brushes_;
-    std::unordered_map<uint32_t, GuestPen> pens_;
-    std::unordered_map<uint32_t, GuestFont> fonts_;
-    std::unordered_map<uint32_t, GuestBitmap> bitmaps_;
-    std::unordered_map<int32_t, uint32_t> stockObjects_;
     GuestProcessLauncher guestProcessLauncher_;
     RemoteServerConfig remoteConfig_;
     std::unique_ptr<RemoteServerHandle, RemoteServerHandleDeleter> remoteServer_;

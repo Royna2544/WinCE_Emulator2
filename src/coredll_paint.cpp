@@ -74,7 +74,7 @@ bool SyntheticDllRuntime::handleEndPaint(SyntheticExportCode code, const GuestCa
     if (args.a1) uc_mem_read(uc_, args.a1, &hdc, sizeof(hdc));
     if (hdc) {
         ceMgdi_.destroyDc(hdc);
-        dcs_.erase(hdc);
+        ceMgdi_.dcs().erase(hdc);
         ceKernel_.handles().erase(hdc);
     }
     ret = ceGwe_.windows().count(args.a0) ? 1 : 0;
@@ -126,8 +126,8 @@ bool SyntheticDllRuntime::handleGetDCEx(SyntheticExportCode code, const GuestCal
 
 bool SyntheticDllRuntime::handleGetPixel(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
     (void)code;
-    const auto dcIt = dcs_.find(args.a0);
-    if (dcIt == dcs_.end()) {
+    const auto dcIt = ceMgdi_.dcs().find(args.a0);
+    if (dcIt == ceMgdi_.dcs().end()) {
         lastError_ = 6;
         ret = 0xffffffffu;
         return true;
@@ -137,8 +137,8 @@ bool SyntheticDllRuntime::handleGetPixel(SyntheticExportCode code, const GuestCa
     uint32_t pixel = 0xff000000u;
     const uint32_t selectedBitmap = ceMgdi_.selectedBitmapForDc(dc.hdc, dc.selectedBitmap);
     if (selectedBitmap) {
-        const auto bitmapIt = bitmaps_.find(selectedBitmap);
-        if (bitmapIt == bitmaps_.end() || !bitmapIt->second.bits ||
+        const auto bitmapIt = ceMgdi_.bitmaps().find(selectedBitmap);
+        if (bitmapIt == ceMgdi_.bitmaps().end() || !bitmapIt->second.bits ||
             bitmapIt->second.width <= 0 || bitmapIt->second.heightRaw == 0 ||
             bitmapIt->second.stride == 0) {
             lastError_ = 6;
@@ -187,7 +187,7 @@ bool SyntheticDllRuntime::handleReleaseDC(SyntheticExportCode code, const GuestC
         ret = 0;
     } else {
         ceMgdi_.destroyDc(args.a1);
-        dcs_.erase(args.a1);
+        ceMgdi_.dcs().erase(args.a1);
         ceKernel_.handles().erase(handle);
         lastError_ = 0;
         ret = 1;
