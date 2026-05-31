@@ -1872,8 +1872,8 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
     }
     case ord(CoredllOrdinal::CloseHandle):
     {
-        auto debugName = fileHandleDebugNames_.find(a0);
-        const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+        auto debugName = ceFilesystem_.fileHandleDebugNames().find(a0);
+        const std::string debugPath = debugName == ceFilesystem_.fileHandleDebugNames().end() ? std::string{} : debugName->second;
         const std::string lowerPath = lowerAscii(debugPath);
         if (ra == 0x0006bea4u && lowerPath.find("values.dat") != std::string::npos) {
             uint16_t recordCount = 0;

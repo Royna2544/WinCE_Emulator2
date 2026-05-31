@@ -3,6 +3,7 @@
 #include <unicorn/unicorn.h>
 
 #include "ce_device.h"
+#include "ce_filesystem.h"
 #include "ce_audio.h"
 #include "ce_gwe.h"
 #include "ce_ipc.h"
@@ -59,19 +60,7 @@ public:
         uint32_t processId{};
         uint32_t threadId{};
     };
-    struct CachedFileAttributes {
-        bool ok{};
-        uint32_t error{};
-        uint32_t attributes{};
-        uint32_t creationLow{};
-        uint32_t creationHigh{};
-        uint32_t accessLow{};
-        uint32_t accessHigh{};
-        uint32_t writeLow{};
-        uint32_t writeHigh{};
-        uint32_t sizeHigh{};
-        uint32_t sizeLow{};
-    };
+    using CachedFileAttributes = CeFilesystem::CachedFileAttributes;
     using GuestProcessLauncher = std::function<bool(GuestProcessLaunch&)>;
     struct RemoteServerConfig {
         bool enabled{};
@@ -577,6 +566,7 @@ private:
     uint32_t lastError_ = 0;
     CeKernel ceKernel_;
     CeDevice ceDevice_;
+    CeFilesystem ceFilesystem_;
     CeAudio ceAudio_;
     CeGwe ceGwe_;
     CeIpc ceIpc_;
@@ -629,10 +619,6 @@ private:
     RemoteServerConfig remoteConfig_;
     std::unique_ptr<RemoteServerHandle, RemoteServerHandleDeleter> remoteServer_;
     std::map<uint32_t, std::string> registryHandles_;
-    std::map<uint32_t, std::string> fileHandleDebugNames_;
-    std::map<std::wstring, CachedFileAttributes> fileAttributeCache_;
-    std::unordered_map<uint32_t, uint32_t> fileReadCounts_;
-    std::unordered_map<uint32_t, uint32_t> fileSeekCounts_;
     std::vector<PendingBlockingApi> pendingBlockingApis_;
     bool interactiveSliceActive_{};
     bool interactiveSliceStopRequested_{};

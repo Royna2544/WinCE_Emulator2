@@ -667,16 +667,16 @@ uint32_t SyntheticDllRuntime::closeGuestHandle(uint32_t guestHandle) {
     } else if (it->second.kind == GuestHandle::Kind::HostFile ||
                it->second.kind == GuestHandle::Kind::HostSerialDevice ||
                it->second.kind == GuestHandle::Kind::GuestSerialDevice) {
-        fileHandleDebugNames_.erase(guestHandle);
+        ceFilesystem_.fileHandleDebugNames().erase(guestHandle);
         ceDevice_.unregisterSerial(guestHandle);
-        fileReadCounts_.erase(guestHandle);
-        fileSeekCounts_.erase(guestHandle);
+        ceFilesystem_.fileReadCounts().erase(guestHandle);
+        ceFilesystem_.fileSeekCounts().erase(guestHandle);
     } else if (it->second.kind == GuestHandle::Kind::HostCrtFile) {
-        fileHandleDebugNames_.erase(guestHandle);
-        fileReadCounts_.erase(guestHandle);
+        ceFilesystem_.fileHandleDebugNames().erase(guestHandle);
+        ceFilesystem_.fileReadCounts().erase(guestHandle);
     } else if (it->second.kind == GuestHandle::Kind::HostFind ||
                it->second.kind == GuestHandle::Kind::GuestFind) {
-        fileHandleDebugNames_.erase(guestHandle);
+        ceFilesystem_.fileHandleDebugNames().erase(guestHandle);
     } else if (it->second.kind == GuestHandle::Kind::HostWaveOut) {
         clearHostAudioBackend(guestHandle);
         ceAudio_.closeStream(guestHandle);
@@ -765,7 +765,7 @@ uint32_t SyntheticDllRuntime::openGuestSerialDevice(const std::string& guestPath
         state.timeouts.readIntervalTimeout = 0xffffffffu;
         state.virtualNoDataBackend = virtualNoDataBackend;
         ceDevice_.registerSerial(std::move(state));
-        fileHandleDebugNames_[guest] = std::move(debugName);
+        ceFilesystem_.fileHandleDebugNames()[guest] = std::move(debugName);
     };
     const auto mapped = serialDevicesByGuest_.find(deviceKey);
     if (mapped != serialDevicesByGuest_.end()) {
@@ -824,7 +824,7 @@ uint32_t SyntheticDllRuntime::openGuestSerialDevice(const std::string& guestPath
             SetCommTimeouts(host, &timeouts);
             const uint32_t guest = makeGuestHandle({GuestHandle::Kind::HostSerialDevice,
                                                     reinterpret_cast<uintptr_t>(host), 0});
-            fileHandleDebugNames_[guest] = guestPath + " -> " + displayName + note;
+            ceFilesystem_.fileHandleDebugNames()[guest] = guestPath + " -> " + displayName + note;
             lastError_ = 0;
             spdlog::info("CreateFileW guest device=\"{}\" host=\"{}\" guestHandle=0x{:08x} access=0x{:08x} share=0x{:08x} ra=0x{:08x} serial={} {}{}",
                          guestPath, displayName, guest, desiredAccess, share,
@@ -871,8 +871,8 @@ uint32_t SyntheticDllRuntime::dispatchDeviceIoControl(uint32_t handleValue, uint
         return 0;
     }
     if (handle->kind == GuestHandle::Kind::GuestSerialDevice) {
-        auto debugName = fileHandleDebugNames_.find(handleValue);
-        const std::string name = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+        auto debugName = ceFilesystem_.fileHandleDebugNames().find(handleValue);
+        const std::string name = debugName == ceFilesystem_.fileHandleDebugNames().end() ? std::string{} : debugName->second;
         const CeDevice::SerialState* serial = ceDevice_.serialState(handleValue);
         if (serial &&
             serial->open &&
@@ -959,9 +959,9 @@ uint32_t SyntheticDllRuntime::dispatchDeviceIoControl(uint32_t handleValue, uint
     }
     if (bytesReturnedPtr) writeU32(bytesReturnedPtr, transferred);
     lastError_ = ok ? 0 : GetLastError();
-    auto debugName = fileHandleDebugNames_.find(handleValue);
+    auto debugName = ceFilesystem_.fileHandleDebugNames().find(handleValue);
     spdlog::info("DeviceIoControl host handle=0x{:08x} path=\"{}\" code=0x{:08x} inSize={} outSize={} transferred={} -> {} lastError={}",
-                 handleValue, debugName == fileHandleDebugNames_.end() ? "" : debugName->second,
+                 handleValue, debugName == ceFilesystem_.fileHandleDebugNames().end() ? "" : debugName->second,
                  controlCode, inSize, outSize, transferred, ok ? 1 : 0, lastError_);
     return ok ? 1 : 0;
 #else

@@ -232,8 +232,8 @@ uint32_t SyntheticDllRuntime::handleCreateFileMappingW(uint32_t fileHandle, uint
     const uint32_t sizeLow = stackArg(4);
     const uint32_t namePtr = stackArg(5);
     const std::string name = readUtf16(namePtr, 260);
-    auto debugName = fileHandleDebugNames_.find(fileHandle);
-    const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+    auto debugName = ceFilesystem_.fileHandleDebugNames().find(fileHandle);
+    const std::string debugPath = debugName == ceFilesystem_.fileHandleDebugNames().end() ? std::string{} : debugName->second;
     uint64_t mappingSize = (uint64_t(sizeHigh) << 32) | sizeLow;
     if (fileHandle != 0xffffffffu) {
         auto* file = lookupGuestHandle(fileHandle);
@@ -275,7 +275,7 @@ uint32_t SyntheticDllRuntime::handleCreateFileMappingW(uint32_t fileHandle, uint
     }
     const uint32_t handle = makeGuestHandle({GuestHandle::Kind::GuestFileMapping, 0, 0});
     ceIpc_.fileMappings()[handle] = GuestFileMapping{fileHandle, mappingSize, protect, name, backingPath, namedShared};
-    fileHandleDebugNames_[handle] = "mapping name=\"" + name + "\" file=\"" + debugPath + "\" backing=\"" +
+    ceFilesystem_.fileHandleDebugNames()[handle] = "mapping name=\"" + name + "\" file=\"" + debugPath + "\" backing=\"" +
                                     pathToUtf8(backingPath) + "\"";
     lastError_ = alreadyExists ? 183 : 0;
     if (namedShared) {

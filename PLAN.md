@@ -535,6 +535,11 @@ results, or timing thresholds.
   state, keeping host shared-mapping backing files in `CrossProcessBroker`.
   Current source anchors: `src/ce_ipc.h`, `src/coredll_mapping.cpp`, and
   `src/synthetic_dll.cpp`.
+- [x] Add a `CeFilesystem` owner for file-handle debug names, cached file
+  attributes, and file read/seek counters while preserving current coredll
+  file API behavior.
+  Current source anchors: `src/ce_filesystem.h`, `src/coredll_fs.cpp`,
+  `src/coredll_crt.cpp`, and `src/coredll_comm.cpp`.
 - [x] Add a `RuntimeDiagnostics` owner for rate-limited logs, dump flags,
   message latency watchdogs, route/search timing, GWE owner queue summaries,
   and host-present/mapping-sync counters.

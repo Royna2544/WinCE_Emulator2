@@ -105,8 +105,8 @@ bool SyntheticDllRuntime::handleGetCommState(SyntheticExportCode code, const Gue
         return true;
     }
     if (handle->kind == GuestHandle::Kind::GuestSerialDevice) {
-        auto debugName = fileHandleDebugNames_.find(args.a0);
-        const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+        auto debugName = ceFilesystem_.fileHandleDebugNames().find(args.a0);
+        const std::string debugPath = debugName == ceFilesystem_.fileHandleDebugNames().end() ? std::string{} : debugName->second;
         DCB dcb{};
         const CeDevice::SerialState* serial = ceDevice_.serialState(args.a0);
         if (serial) {
@@ -139,8 +139,8 @@ bool SyntheticDllRuntime::handleGetCommState(SyntheticExportCode code, const Gue
     }
     ret = ok ? 1 : 0;
     lastError_ = ok ? 0 : GetLastError();
-    auto debugName = fileHandleDebugNames_.find(args.a0);
-    const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+    auto debugName = ceFilesystem_.fileHandleDebugNames().find(args.a0);
+    const std::string debugPath = debugName == ceFilesystem_.fileHandleDebugNames().end() ? std::string{} : debugName->second;
     spdlog::info("GetCommState host serial handle=0x{:08x} path=\"{}\" -> {} lastError={} baud={} byteSize={} parity={} stopBits={}",
                  args.a0, debugPath, ret, lastError_, ok ? dcb.BaudRate : 0,
                  ok ? static_cast<unsigned>(dcb.ByteSize) : 0,
@@ -172,8 +172,8 @@ bool SyntheticDllRuntime::handleSetCommState(SyntheticExportCode code, const Gue
         }
         lastError_ = ok ? 0 : 87;
         ret = ok ? 1 : 0;
-        auto debugName = fileHandleDebugNames_.find(args.a0);
-        const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+        auto debugName = ceFilesystem_.fileHandleDebugNames().find(args.a0);
+        const std::string debugPath = debugName == ceFilesystem_.fileHandleDebugNames().end() ? std::string{} : debugName->second;
         spdlog::info("SetCommState guest device handle=0x{:08x} name=\"{}\" -> {} lastError={} baud={} byteSize={} parity={} stopBits={}",
                      args.a0, debugPath, ret, lastError_,
                      ok ? dcb.BaudRate : 0, ok ? static_cast<unsigned>(dcb.ByteSize) : 0,
@@ -194,8 +194,8 @@ bool SyntheticDllRuntime::handleSetCommState(SyntheticExportCode code, const Gue
     }
     ret = ok ? 1 : 0;
     lastError_ = ok ? 0 : GetLastError();
-    auto debugName = fileHandleDebugNames_.find(args.a0);
-    const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+    auto debugName = ceFilesystem_.fileHandleDebugNames().find(args.a0);
+    const std::string debugPath = debugName == ceFilesystem_.fileHandleDebugNames().end() ? std::string{} : debugName->second;
     spdlog::info("SetCommState host serial handle=0x{:08x} path=\"{}\" -> {} lastError={} baud={} byteSize={} parity={} stopBits={}",
                  args.a0, debugPath, ret, lastError_, ok ? dcb.BaudRate : 0,
                  ok ? static_cast<unsigned>(dcb.ByteSize) : 0,
@@ -219,8 +219,8 @@ bool SyntheticDllRuntime::handleSetCommTimeouts(SyntheticExportCode code, const 
         if (ok) ceDevice_.setSerialTimeouts(args.a0, ceCommTimeoutsFromWin32(timeouts));
         lastError_ = ok ? 0 : 87;
         ret = ok ? 1 : 0;
-        auto debugName = fileHandleDebugNames_.find(args.a0);
-        const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+        auto debugName = ceFilesystem_.fileHandleDebugNames().find(args.a0);
+        const std::string debugPath = debugName == ceFilesystem_.fileHandleDebugNames().end() ? std::string{} : debugName->second;
         spdlog::info("SetCommTimeouts guest device handle=0x{:08x} name=\"{}\" -> {} lastError={} interval={} readMultiplier={} readConstant={} writeMultiplier={} writeConstant={}",
                      args.a0, debugPath, ret, lastError_, timeouts.ReadIntervalTimeout,
                      timeouts.ReadTotalTimeoutMultiplier, timeouts.ReadTotalTimeoutConstant,
@@ -232,8 +232,8 @@ bool SyntheticDllRuntime::handleSetCommTimeouts(SyntheticExportCode code, const 
                     SetCommTimeouts(reinterpret_cast<HANDLE>(handle->hostValue), &timeouts);
     ret = ok ? 1 : 0;
     lastError_ = ok ? 0 : GetLastError();
-    auto debugName = fileHandleDebugNames_.find(args.a0);
-    const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+    auto debugName = ceFilesystem_.fileHandleDebugNames().find(args.a0);
+    const std::string debugPath = debugName == ceFilesystem_.fileHandleDebugNames().end() ? std::string{} : debugName->second;
     spdlog::info("SetCommTimeouts host serial handle=0x{:08x} path=\"{}\" -> {} lastError={} interval={} readMultiplier={} readConstant={} writeMultiplier={} writeConstant={}",
                  args.a0, debugPath, ret, lastError_, timeouts.ReadIntervalTimeout,
                  timeouts.ReadTotalTimeoutMultiplier, timeouts.ReadTotalTimeoutConstant,
@@ -254,8 +254,8 @@ bool SyntheticDllRuntime::handleSetCommMask(SyntheticExportCode code, const Gues
         ceDevice_.setSerialMask(args.a0, args.a1);
         lastError_ = 0;
         ret = 1;
-        auto debugName = fileHandleDebugNames_.find(args.a0);
-        const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+        auto debugName = ceFilesystem_.fileHandleDebugNames().find(args.a0);
+        const std::string debugPath = debugName == ceFilesystem_.fileHandleDebugNames().end() ? std::string{} : debugName->second;
         spdlog::info("SetCommMask guest device handle=0x{:08x} name=\"{}\" mask=0x{:08x} -> 1",
                      args.a0, debugPath, args.a1);
         return true;
@@ -263,8 +263,8 @@ bool SyntheticDllRuntime::handleSetCommMask(SyntheticExportCode code, const Gues
     const BOOL ok = SetCommMask(reinterpret_cast<HANDLE>(handle->hostValue), args.a1);
     ret = ok ? 1 : 0;
     lastError_ = ok ? 0 : GetLastError();
-    auto debugName = fileHandleDebugNames_.find(args.a0);
-    const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+    auto debugName = ceFilesystem_.fileHandleDebugNames().find(args.a0);
+    const std::string debugPath = debugName == ceFilesystem_.fileHandleDebugNames().end() ? std::string{} : debugName->second;
     spdlog::info("SetCommMask host serial handle=0x{:08x} path=\"{}\" mask=0x{:08x} -> {} lastError={}",
                  args.a0, debugPath, args.a1, ret, lastError_);
     return true;
@@ -283,8 +283,8 @@ bool SyntheticDllRuntime::handleSetupComm(SyntheticExportCode code, const GuestC
         ceDevice_.setSerialQueueSizes(args.a0, args.a1, args.a2);
         lastError_ = 0;
         ret = 1;
-        auto debugName = fileHandleDebugNames_.find(args.a0);
-        const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+        auto debugName = ceFilesystem_.fileHandleDebugNames().find(args.a0);
+        const std::string debugPath = debugName == ceFilesystem_.fileHandleDebugNames().end() ? std::string{} : debugName->second;
         spdlog::info("SetupComm guest device handle=0x{:08x} name=\"{}\" inQueue={} outQueue={} -> 1",
                      args.a0, debugPath, args.a1, args.a2);
         return true;
@@ -292,8 +292,8 @@ bool SyntheticDllRuntime::handleSetupComm(SyntheticExportCode code, const GuestC
     const BOOL ok = SetupComm(reinterpret_cast<HANDLE>(handle->hostValue), args.a1, args.a2);
     ret = ok ? 1 : 0;
     lastError_ = ok ? 0 : GetLastError();
-    auto debugName = fileHandleDebugNames_.find(args.a0);
-    const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+    auto debugName = ceFilesystem_.fileHandleDebugNames().find(args.a0);
+    const std::string debugPath = debugName == ceFilesystem_.fileHandleDebugNames().end() ? std::string{} : debugName->second;
     spdlog::info("SetupComm host serial handle=0x{:08x} path=\"{}\" inQueue={} outQueue={} -> {} lastError={}",
                  args.a0, debugPath, args.a1, args.a2, ret, lastError_);
     return true;
@@ -312,8 +312,8 @@ bool SyntheticDllRuntime::handlePurgeComm(SyntheticExportCode code, const GuestC
         ceDevice_.markSerialPurged(args.a0, args.a1);
         lastError_ = 0;
         ret = 1;
-        auto debugName = fileHandleDebugNames_.find(args.a0);
-        const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+        auto debugName = ceFilesystem_.fileHandleDebugNames().find(args.a0);
+        const std::string debugPath = debugName == ceFilesystem_.fileHandleDebugNames().end() ? std::string{} : debugName->second;
         spdlog::info("PurgeComm guest device handle=0x{:08x} name=\"{}\" flags=0x{:08x} -> 1",
                      args.a0, debugPath, args.a1);
         return true;
@@ -321,8 +321,8 @@ bool SyntheticDllRuntime::handlePurgeComm(SyntheticExportCode code, const GuestC
     const BOOL ok = PurgeComm(reinterpret_cast<HANDLE>(handle->hostValue), args.a1);
     ret = ok ? 1 : 0;
     lastError_ = ok ? 0 : GetLastError();
-    auto debugName = fileHandleDebugNames_.find(args.a0);
-    const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+    auto debugName = ceFilesystem_.fileHandleDebugNames().find(args.a0);
+    const std::string debugPath = debugName == ceFilesystem_.fileHandleDebugNames().end() ? std::string{} : debugName->second;
     spdlog::info("PurgeComm host serial handle=0x{:08x} path=\"{}\" flags=0x{:08x} -> {} lastError={}",
                  args.a0, debugPath, args.a1, ret, lastError_);
     return true;
@@ -345,8 +345,8 @@ bool SyntheticDllRuntime::handleClearCommError(SyntheticExportCode code, const G
         if (args.a2) uc_mem_write(uc_, args.a2, &stat, sizeof(stat));
         lastError_ = 0;
         ret = 1;
-        auto debugName = fileHandleDebugNames_.find(args.a0);
-        const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+        auto debugName = ceFilesystem_.fileHandleDebugNames().find(args.a0);
+        const std::string debugPath = debugName == ceFilesystem_.fileHandleDebugNames().end() ? std::string{} : debugName->second;
         spdlog::info("ClearCommError guest device handle=0x{:08x} name=\"{}\" -> 1 errors=0x{:08x} cbInQue={} cbOutQue={}",
                      args.a0, debugPath, errors, stat.cbInQue, stat.cbOutQue);
         return true;
@@ -358,8 +358,8 @@ bool SyntheticDllRuntime::handleClearCommError(SyntheticExportCode code, const G
     if (ok && args.a2) uc_mem_write(uc_, args.a2, &stat, sizeof(stat));
     ret = ok ? 1 : 0;
     lastError_ = ok ? 0 : GetLastError();
-    auto debugName = fileHandleDebugNames_.find(args.a0);
-    const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+    auto debugName = ceFilesystem_.fileHandleDebugNames().find(args.a0);
+    const std::string debugPath = debugName == ceFilesystem_.fileHandleDebugNames().end() ? std::string{} : debugName->second;
     spdlog::info("ClearCommError host serial handle=0x{:08x} path=\"{}\" -> {} lastError={} errors=0x{:08x} cbInQue={} cbOutQue={}",
                  args.a0, debugPath, ret, lastError_, errors, stat.cbInQue, stat.cbOutQue);
     return true;

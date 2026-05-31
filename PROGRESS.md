@@ -246,6 +246,15 @@ Current emulator difference:
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_mapping.cpp`, and
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp`. The 2026-05-31
   Release build passed with the existing vcpkg/Boost warnings.
+- `CeFilesystem` now owns file-handle debug names, cached file attributes,
+  and per-handle file read/seek counters. `CreateFileW`, `ReadFile`,
+  `SetFilePointer`, CRT file reads, COM debug logging, and mapping debug names
+  still use the same behavior through CeFilesystem accessors. Current source
+  anchors: `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_filesystem.h`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_fs.cpp`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_crt.cpp`, and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_comm.cpp`. The 2026-05-31
+  Release build passed with the existing vcpkg/Boost warnings.
 - Legacy runtime type definitions for windows, timers, pending GWE
   continuations, DCs, bitmaps, brushes, pens, fonts, and bitmap probe stats now
   live in `CeGwe`/`CeMgdi` with `SyntheticDllRuntime` keeping aliases and the

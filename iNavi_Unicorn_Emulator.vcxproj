@@ -68,6 +68,7 @@
   <ItemGroup>
     <ClCompile Include="src\ce_audio.cpp" />
     <ClCompile Include="src\ce_device.cpp" />
+    <ClCompile Include="src\ce_filesystem.cpp" />
     <ClCompile Include="src\ce_gwe.cpp" />
     <ClCompile Include="src\ce_ipc.cpp" />
     <ClCompile Include="src\ce_kernel.cpp" />
@@ -110,6 +111,7 @@
   <ItemGroup>
     <ClInclude Include="src\ce_audio.h" />
     <ClInclude Include="src\ce_device.h" />
+    <ClInclude Include="src\ce_filesystem.h" />
     <ClInclude Include="src\ce_gwe.h" />
     <ClInclude Include="src\ce_ipc.h" />
     <ClInclude Include="src\ce_kernel.h" />

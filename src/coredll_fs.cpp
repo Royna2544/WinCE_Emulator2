@@ -227,8 +227,8 @@ bool SyntheticDllRuntime::tryParkGuestSerialRead(const GuestCallArgs& args, uint
         decision.deadlineMs,
     });
 
-    auto debugName = fileHandleDebugNames_.find(args.a0);
-    const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+    auto debugName = ceFilesystem_.fileHandleDebugNames().find(args.a0);
+    const std::string debugPath = debugName == ceFilesystem_.fileHandleDebugNames().end() ? std::string{} : debugName->second;
     spdlog::info("ReadFile virtual serial no-data wait handle=0x{:08x} thread=0x{:08x} name=\"{}\" requested={} deadlineMs={} return=0x{:08x}",
                  args.a0,
                  activeThread,
@@ -313,7 +313,7 @@ bool SyntheticDllRuntime::handleCreateFileW(SyntheticExportCode code, const Gues
         host = CreateFileW(hostPath.wstring().c_str(), args.a1, args.a2, nullptr, stackArg(4), stackArg(5), nullptr);
     }
     if (!hostPath.empty() && createMayMutateFile(args.a1, stackArg(4))) {
-        fileAttributeCache_.erase(attributeCacheKey(hostPath));
+        ceFilesystem_.fileAttributeCache().erase(attributeCacheKey(hostPath));
     }
     if (host == INVALID_HANDLE_VALUE) {
         lastError_ = normalizeVirtualFileMiss(hostPath, hostPath.empty() ? ERROR_PATH_NOT_FOUND : GetLastError());
@@ -323,7 +323,7 @@ bool SyntheticDllRuntime::handleCreateFileW(SyntheticExportCode code, const Gues
     } else {
         ret = makeGuestHandle({GuestHandle::Kind::HostFile, reinterpret_cast<uintptr_t>(host), 0});
         const std::string hostText = pathToUtf8(hostPath);
-        fileHandleDebugNames_[ret] = hostText;
+        ceFilesystem_.fileHandleDebugNames()[ret] = hostText;
         lastError_ = 0;
         const std::string guestLower = guestLowerForTrace;
         const std::string hostLower = lowerAscii(hostText);
@@ -357,7 +357,7 @@ bool SyntheticDllRuntime::handleCreateDirectoryW(SyntheticExportCode code, const
     (void)code;
     const std::string guestPath = readUtf16(args.a0);
     const std::filesystem::path hostPath = resolveGuestPath(guestPath);
-    if (!hostPath.empty()) fileAttributeCache_.erase(attributeCacheKey(hostPath));
+    if (!hostPath.empty()) ceFilesystem_.fileAttributeCache().erase(attributeCacheKey(hostPath));
     const BOOL ok = !hostPath.empty() && CreateDirectoryW(hostPath.wstring().c_str(), nullptr);
     if (ok) {
         ret = 1;
@@ -378,8 +378,8 @@ bool SyntheticDllRuntime::handleGetFileAttributesW(SyntheticExportCode code, con
     const std::string guestPath = readUtf16(args.a0);
     const std::filesystem::path hostPath = resolveGuestPath(guestPath);
     const std::wstring key = hostPath.empty() ? std::wstring{} : attributeCacheKey(hostPath);
-    auto cached = key.empty() ? fileAttributeCache_.end() : fileAttributeCache_.find(key);
-    if (cached != fileAttributeCache_.end()) {
+    auto cached = key.empty() ? ceFilesystem_.fileAttributeCache().end() : ceFilesystem_.fileAttributeCache().find(key);
+    if (cached != ceFilesystem_.fileAttributeCache().end()) {
         ret = cached->second.ok ? cached->second.attributes : INVALID_FILE_ATTRIBUTES;
         lastError_ = cached->second.ok ? 0 : cached->second.error;
     } else {
@@ -390,11 +390,11 @@ bool SyntheticDllRuntime::handleGetFileAttributesW(SyntheticExportCode code, con
             auto value = makeCachedAttributes(data);
             ret = value.attributes;
             lastError_ = 0;
-            if (!key.empty()) fileAttributeCache_[key] = value;
+            if (!key.empty()) ceFilesystem_.fileAttributeCache()[key] = value;
         } else {
             ret = INVALID_FILE_ATTRIBUTES;
             lastError_ = normalizeVirtualFileMiss(hostPath, hostPath.empty() ? ERROR_PATH_NOT_FOUND : GetLastError());
-            if (!key.empty()) fileAttributeCache_[key] = CachedFileAttributes{false, lastError_};
+            if (!key.empty()) ceFilesystem_.fileAttributeCache()[key] = CachedFileAttributes{false, lastError_};
         }
     }
     if (ret == INVALID_FILE_ATTRIBUTES) {
@@ -413,9 +413,9 @@ bool SyntheticDllRuntime::handleGetFileAttributesExW(SyntheticExportCode code, c
     const std::filesystem::path hostPath = resolveGuestPath(guestPath);
     WIN32_FILE_ATTRIBUTE_DATA data{};
     const std::wstring key = hostPath.empty() ? std::wstring{} : attributeCacheKey(hostPath);
-    auto cached = key.empty() ? fileAttributeCache_.end() : fileAttributeCache_.find(key);
+    auto cached = key.empty() ? ceFilesystem_.fileAttributeCache().end() : ceFilesystem_.fileAttributeCache().find(key);
     bool ok = false;
-    if (args.a1 == GetFileExInfoStandard && cached != fileAttributeCache_.end()) {
+    if (args.a1 == GetFileExInfoStandard && cached != ceFilesystem_.fileAttributeCache().end()) {
         ok = cached->second.ok;
         if (ok) {
             data = makeFileAttributeData(cached->second);
@@ -425,7 +425,7 @@ bool SyntheticDllRuntime::handleGetFileAttributesExW(SyntheticExportCode code, c
     } else if (!hostPath.empty() && args.a1 == GetFileExInfoStandard &&
                GetFileAttributesExW(hostPath.wstring().c_str(), GetFileExInfoStandard, &data)) {
         ok = true;
-        if (!key.empty()) fileAttributeCache_[key] = makeCachedAttributes(data);
+        if (!key.empty()) ceFilesystem_.fileAttributeCache()[key] = makeCachedAttributes(data);
     }
     if (ok) {
         writeGuestFileAttributeData(uc_, args.a2, data);
@@ -433,13 +433,13 @@ bool SyntheticDllRuntime::handleGetFileAttributesExW(SyntheticExportCode code, c
         lastError_ = 0;
     } else {
         ret = 0;
-        if (cached == fileAttributeCache_.end()) {
+        if (cached == ceFilesystem_.fileAttributeCache().end()) {
             const uint32_t error = hostPath.empty()
                 ? ERROR_PATH_NOT_FOUND
                 : (args.a1 == GetFileExInfoStandard ? GetLastError() : ERROR_INVALID_PARAMETER);
             lastError_ = normalizeVirtualFileMiss(hostPath, error);
             if (!key.empty() && args.a1 == GetFileExInfoStandard) {
-                fileAttributeCache_[key] = CachedFileAttributes{false, lastError_};
+                ceFilesystem_.fileAttributeCache()[key] = CachedFileAttributes{false, lastError_};
             }
         }
     }
@@ -456,7 +456,7 @@ bool SyntheticDllRuntime::handleGetFileAttributesExW(SyntheticExportCode code, c
 bool SyntheticDllRuntime::handleDeleteFileW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
     (void)code;
     const std::filesystem::path hostPath = resolveGuestPath(readUtf16(args.a0));
-    if (!hostPath.empty()) fileAttributeCache_.erase(attributeCacheKey(hostPath));
+    if (!hostPath.empty()) ceFilesystem_.fileAttributeCache().erase(attributeCacheKey(hostPath));
     const BOOL ok = !hostPath.empty() && DeleteFileW(hostPath.wstring().c_str());
     ret = ok ? 1 : 0;
     lastError_ = ret ? 0 : GetLastError();
@@ -475,7 +475,7 @@ bool SyntheticDllRuntime::handleFindFirstFileW(SyntheticExportCode code, const G
         }
         writeGuestFindData(uc_, args.a1, makeVirtualRootFindData(roots.front()));
         ret = makeGuestHandle({GuestHandle::Kind::GuestFind, 0, 1});
-        fileHandleDebugNames_[ret] = "\\*";
+        ceFilesystem_.fileHandleDebugNames()[ret] = "\\*";
         lastError_ = 0;
         spdlog::info("FindFirstFileW virtual-root guest=\"{}\" guestHandle=0x{:08x} file=\"{}\"",
                      guestPath, ret, roots.front());
@@ -499,7 +499,7 @@ bool SyntheticDllRuntime::handleFindFirstFileW(SyntheticExportCode code, const G
         writeGuestFindData(uc_, args.a1, data);
         ret = makeGuestHandle({GuestHandle::Kind::HostFind, reinterpret_cast<uintptr_t>(host),
                                rootEnumeration ? 1u : 0u});
-        fileHandleDebugNames_[ret] = pathToUtf8(hostPath);
+        ceFilesystem_.fileHandleDebugNames()[ret] = pathToUtf8(hostPath);
         lastError_ = 0;
         spdlog::info("FindFirstFileW hit guest=\"{}\" host=\"{}\" guestHandle=0x{:08x} file=\"{}\" attr=0x{:08x} size={}",
                      guestPath, pathToUtf8(hostPath), ret,
@@ -540,8 +540,8 @@ bool SyntheticDllRuntime::handleFindNextFileW(SyntheticExportCode code, const Gu
         if (ok) {
             data = translateGuestFindData(data, handle->filePointer != 0);
             writeGuestFindData(uc_, args.a1, data);
-            auto debugName = fileHandleDebugNames_.find(args.a0);
-            const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+            auto debugName = ceFilesystem_.fileHandleDebugNames().find(args.a0);
+            const std::string debugPath = debugName == ceFilesystem_.fileHandleDebugNames().end() ? std::string{} : debugName->second;
             spdlog::info("FindNextFileW hit handle=0x{:08x} path=\"{}\" file=\"{}\" attr=0x{:08x} size={}",
                          args.a0, debugPath, wideZToUtf8(data.cFileName, 260),
                          data.dwFileAttributes,
@@ -579,8 +579,8 @@ bool SyntheticDllRuntime::handleReadFile(SyntheticExportCode code, const GuestCa
         }
         ret = 1;
         lastError_ = 0;
-        auto debugName = fileHandleDebugNames_.find(args.a0);
-        const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+        auto debugName = ceFilesystem_.fileHandleDebugNames().find(args.a0);
+        const std::string debugPath = debugName == ceFilesystem_.fileHandleDebugNames().end() ? std::string{} : debugName->second;
         const CeDevice::SerialState* serial = ceDevice_.serialState(args.a0);
         spdlog::info("ReadFile guest device handle=0x{:08x} name=\"{}\" requested={} transferred={} virtualNoDataBackend={}",
                      args.a0, debugPath, args.a2, transferred,
@@ -600,8 +600,8 @@ bool SyntheticDllRuntime::handleReadFile(SyntheticExportCode code, const GuestCa
             : args.a2;
         static thread_local std::vector<uint8_t> bytes;
         bytes.resize(requested);
-        auto debugName = fileHandleDebugNames_.find(args.a0);
-        const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+        auto debugName = ceFilesystem_.fileHandleDebugNames().find(args.a0);
+        const std::string debugPath = debugName == ceFilesystem_.fileHandleDebugNames().end() ? std::string{} : debugName->second;
         if (handle->kind == GuestHandle::Kind::HostSerialDevice) {
             const size_t injected = readRemoteSerialBytes(bytes.data(), bytes.size());
             if (injected) {
@@ -609,7 +609,7 @@ bool SyntheticDllRuntime::handleReadFile(SyntheticExportCode code, const GuestCa
                 writeU32(args.a3, static_cast<uint32_t>(injected));
                 ret = 1;
                 lastError_ = 0;
-                const uint32_t readCount = ++fileReadCounts_[args.a0];
+                const uint32_t readCount = ++ceFilesystem_.fileReadCounts()[args.a0];
                 spdlog::info("ReadFile remote serial handle=0x{:08x} path=\"{}\" guestRequested={} transferred={} read#={} data=\"{}\"",
                              args.a0, debugPath, args.a2, injected, readCount,
                              serialAsciiPreview(bytes.data(), injected));
@@ -629,7 +629,7 @@ bool SyntheticDllRuntime::handleReadFile(SyntheticExportCode code, const GuestCa
         ret = ok ? 1 : 0;
         writeU32(args.a3, transferred);
         lastError_ = ret ? 0 : GetLastError();
-        const uint32_t readCount = ++fileReadCounts_[args.a0];
+        const uint32_t readCount = ++ceFilesystem_.fileReadCounts()[args.a0];
         constexpr uint32_t gpsPortSlot = 0x0079233c;
         if (ok && transferred && args.a1 <= gpsPortSlot &&
             gpsPortSlot + sizeof(uint16_t) <= args.a1 + transferred) {
@@ -686,8 +686,8 @@ bool SyntheticDllRuntime::handleWriteFile(SyntheticExportCode code, const GuestC
         ret = ok ? 1 : 0;
         writeU32(args.a3, transferred);
         lastError_ = ret ? 0 : GetLastError();
-        auto debugName = fileHandleDebugNames_.find(args.a0);
-        const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+        auto debugName = ceFilesystem_.fileHandleDebugNames().find(args.a0);
+        const std::string debugPath = debugName == ceFilesystem_.fileHandleDebugNames().end() ? std::string{} : debugName->second;
         const std::string debugLower = lowerAscii(debugPath);
         const bool traceProfileFile = isProfileTracePath(debugLower);
         DWORD fileOffsetBefore = 0xffffffffu;
@@ -718,9 +718,9 @@ bool SyntheticDllRuntime::handleGetFileSize(SyntheticExportCode code, const Gues
         ret = GetFileSize(reinterpret_cast<HANDLE>(handle->hostValue), args.a1 ? &high : nullptr);
         if (args.a1) writeU32(args.a1, high);
         lastError_ = ret == 0xffffffffu ? GetLastError() : 0;
-        auto debugName = fileHandleDebugNames_.find(args.a0);
+        auto debugName = ceFilesystem_.fileHandleDebugNames().find(args.a0);
         spdlog::debug("GetFileSize handle=0x{:08x} path=\"{}\" size={} high={} lastError={}",
-                      args.a0, debugName == fileHandleDebugNames_.end() ? "" : debugName->second,
+                      args.a0, debugName == ceFilesystem_.fileHandleDebugNames().end() ? "" : debugName->second,
                       ret, high, lastError_);
     }
     return true;
@@ -738,10 +738,10 @@ bool SyntheticDllRuntime::handleSetFilePointer(SyntheticExportCode code, const G
         ret = SetFilePointer(reinterpret_cast<HANDLE>(handle->hostValue), LONG(args.a1), args.a2 ? &high : nullptr, args.a3);
         if (args.a2) writeU32(args.a2, uint32_t(high));
         lastError_ = ret == 0xffffffffu ? GetLastError() : 0;
-        const uint32_t seekCount = ++fileSeekCounts_[args.a0];
+        const uint32_t seekCount = ++ceFilesystem_.fileSeekCounts()[args.a0];
         if (seekCount <= 32 || ret == 0xffffffffu) {
-            auto debugName = fileHandleDebugNames_.find(args.a0);
-            const std::string debugPath = debugName == fileHandleDebugNames_.end() ? "" : debugName->second;
+            auto debugName = ceFilesystem_.fileHandleDebugNames().find(args.a0);
+            const std::string debugPath = debugName == ceFilesystem_.fileHandleDebugNames().end() ? "" : debugName->second;
             const bool traceProfileFile = isProfileTracePath(lowerAscii(debugPath));
             if (traceProfileFile) {
                 spdlog::info("SetFilePointer profile handle=0x{:08x} path=\"{}\" distance={} method={} -> low={} high={} lastError={} seek#={} ra=0x{:08x}",
@@ -769,9 +769,9 @@ bool SyntheticDllRuntime::handleFlushFileBuffers(SyntheticExportCode code, const
         const BOOL ok = FlushFileBuffers(reinterpret_cast<HANDLE>(handle->hostValue));
         ret = ok ? 1 : 0;
         lastError_ = ret ? 0 : GetLastError();
-        auto debugName = fileHandleDebugNames_.find(args.a0);
+        auto debugName = ceFilesystem_.fileHandleDebugNames().find(args.a0);
         spdlog::info("FlushFileBuffers handle=0x{:08x} path=\"{}\" -> {} lastError={}",
-                     args.a0, debugName == fileHandleDebugNames_.end() ? "" : debugName->second,
+                     args.a0, debugName == ceFilesystem_.fileHandleDebugNames().end() ? "" : debugName->second,
                      ret, lastError_);
     }
     return true;

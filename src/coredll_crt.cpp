@@ -113,7 +113,7 @@ bool SyntheticDllRuntime::handleFopen(SyntheticExportCode code, const GuestCallA
                      wide ? "_wfopen" : "fopen", guestPath, pathToUtf8(hostPath), mode);
     } else {
         ret = makeGuestHandle({GuestHandle::Kind::HostCrtFile, reinterpret_cast<uintptr_t>(host), 0});
-        fileHandleDebugNames_[ret] = pathToUtf8(hostPath);
+        ceFilesystem_.fileHandleDebugNames()[ret] = pathToUtf8(hostPath);
         spdlog::info("{} hit guest=\"{}\" host=\"{}\" mode=\"{}\" guestHandle=0x{:08x}",
                      wide ? "_wfopen" : "fopen", guestPath, pathToUtf8(hostPath), mode, ret);
     }
@@ -786,8 +786,8 @@ bool SyntheticDllRuntime::handleFclose(SyntheticExportCode code, const GuestCall
     } else {
         FILE* host = reinterpret_cast<FILE*>(it->second.hostValue);
         ret = uint32_t(std::fclose(host));
-        fileHandleDebugNames_.erase(args.a0);
-        fileReadCounts_.erase(args.a0);
+        ceFilesystem_.fileHandleDebugNames().erase(args.a0);
+        ceFilesystem_.fileReadCounts().erase(args.a0);
         ceKernel_.handles().erase(it);
     }
     return true;
@@ -806,10 +806,10 @@ bool SyntheticDllRuntime::handleFread(SyntheticExportCode code, const GuestCallA
             : std::fread(bytes.data(), 1, bytes.size(), reinterpret_cast<FILE*>(handle->hostValue));
         if (readBytes) uc_mem_write(uc_, args.a0, bytes.data(), readBytes);
         ret = uint32_t(readBytes / args.a1);
-        const uint32_t readCount = ++fileReadCounts_[args.a3];
+        const uint32_t readCount = ++ceFilesystem_.fileReadCounts()[args.a3];
         if (readCount <= 32 || readBytes != bytes.size()) {
-            auto debugName = fileHandleDebugNames_.find(args.a3);
-            const std::string debugPath = debugName == fileHandleDebugNames_.end() ? std::string{} : debugName->second;
+            auto debugName = ceFilesystem_.fileHandleDebugNames().find(args.a3);
+            const std::string debugPath = debugName == ceFilesystem_.fileHandleDebugNames().end() ? std::string{} : debugName->second;
             spdlog::debug("fread handle=0x{:08x} path=\"{}\" size={} count={} bytes={} elements={} read#={}",
                           args.a3, debugPath, args.a1, args.a2, readBytes, ret, readCount);
         }
