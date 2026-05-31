@@ -1507,9 +1507,6 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
             releaseHostErasePresentDeferral(paintedHwnd);
             presentHostWindows(true);
         }
-        if (dispatchQueuedPaintForBlockingApi(pending, "while blocked")) {
-            return;
-        }
         PendingBlockingApi pendingCall = pendingBlockingApis_.back();
         uint32_t ret = 0;
         bool waitStillBlocked = false;
@@ -1545,6 +1542,9 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                 waitStillBlocked = true;
             }
             if (waitStillBlocked) {
+                if (dispatchQueuedPaintForBlockingApi(pending, "while blocked")) {
+                    return;
+                }
                 setReg(UC_MIPS_REG_PC, blockingApiContinuationStub_);
                 pumpHostMessages();
                 if (!switchToRunnableGuestThread(pendingCall.name.c_str())) {

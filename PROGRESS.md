@@ -184,6 +184,17 @@ Current emulator difference:
   fatal/unsupported/PC-zero signatures, and Debug interactive run
   `captures/inavi_autodrive_20260531_112632` is live on
   `192.168.0.39:8765` for subjective websocket-audio validation.
+  A follow-up log review of that Debug run found a click/menu command did
+  reach the guest, but the resulting 91 ms `waveOutWrite` completion event
+  was not allowed to win until about 4.35 s later because the cooperative
+  blocking-wait continuation dispatched paint/timer maintenance before
+  re-probing the wait object. The continuation now refreshes virtual audio and
+  probes `WaitForSingleObject` first, and only dispatches cooperative paint
+  while the wait remains blocked. Current source anchor:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp:1529`. The
+  2026-05-31 Release build passed with zero warnings, and bounded Release
+  smoke `captures/inavi_autodrive_20260531_114217` captured startup without
+  main-emulator fatal/unsupported/false-success signatures.
 - CE GWE/MGDI source comparison for the route-guide visual artifacts found
   missing region/rounded drawing exports in the emulator boundary:
   `RoundRect`, `FillRgn`, `SetRectRgn`, `SelectClipRgn`, `PtInRegion`, and

@@ -268,6 +268,17 @@ Status:
   bug is fixed in source and Release-build verified; remaining open piece:
   validate a real interactive run with mid-startup websocket connect, route
   guide audio, and short click sounds.
+- Debug run `captures/inavi_autodrive_20260531_112632` showed another
+  source-shaped ordering bug in the same area: a menu click reached the guest
+  and posted `msg=0x5734`, but the following short `waveOutWrite` had
+  `durationMs=91` and its event wait resumed about 4.35 s later because the
+  blocking-wait continuation pumped paint/timer work before refreshing virtual
+  audio and re-probing the wait object. Fixed in source by letting wait
+  readiness win first and using cooperative paint only while the wait remains
+  blocked. Current source:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp:1529`. Release build
+  passed and bounded smoke `captures/inavi_autodrive_20260531_114217` still
+  captured startup; live remote click validation remains open.
 
 ## Resolved: Missing Host Serial Port Added Startup Delay
 

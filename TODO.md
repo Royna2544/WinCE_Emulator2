@@ -42,7 +42,14 @@ Active refactor checklist: `PLAN.md`.
      appears: `WaitForSingleObject(..., INFINITE)` must not resume with
      `WAIT_TIMEOUT`, and
      `waveOutUnprepareHeader` must not run while `WHDR_INQUEUE` is still set
-     just because cooperative paint drained.
+     just because cooperative paint drained. A log review of the same run
+     found a separate short-click wait priority issue: the `0x5734` menu
+     command was posted, then a 91 ms `waveOutWrite` completion event resumed
+     about 4.35 s later because cooperative paint/timer dispatch ran before
+     wait-object re-probing. The continuation order is fixed in source; next
+     live validation should click the same menu path and confirm the click
+     event wait resumes near its virtual duration and the UI action is not
+     hidden behind audio/event waiting.
 
 1. Finish virtual serial wait semantics and scheduler responsiveness.
    - CE reference:
