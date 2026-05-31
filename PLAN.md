@@ -458,6 +458,39 @@ results, or timing thresholds.
   completed behavior phase, keeping CE source references beside behavior
   changes.
 
+## Phase 8: `SyntheticDllRuntime` Header Decomposition
+
+- [ ] Keep `SyntheticDllRuntime` as the ABI/orchestration boundary while moving
+  guest-visible state into CE-shaped owners. Current source anchors:
+  `src/synthetic_dll.h`, `src/synthetic_dll.cpp`, and
+  `src/synthetic_dll_modules.cpp`.
+- [ ] Add a small handle-storage layer for emulator-owned dense handles while
+  preserving guest-visible handle values. Use sparse maps only for externally
+  supplied keys such as guest addresses, module bases, filesystem paths, and
+  imported cross-process handles.
+- [ ] Flatten synthetic ordinal dispatch into per-DLL ordinal-indexed handler
+  tables so the hot path is `PC -> ExportEntry -> handler`, while preserving
+  SDK ordinal metadata and unknown-ordinal logging.
+- [ ] Move window classes, `GuestWindow`, focus/capture/pointer state, timers,
+  z-order, and pending window lifecycle state behind `CeGwe`. CE source
+  anchors: `gweapiset1.hpp`, `cmsgque.h`, and `window.hpp`.
+- [ ] Move `GuestDc`, `GuestBitmap`, GDI objects, stock objects, palettes,
+  clip state, and window bitmap state behind `CeMgdi`.
+- [ ] Move wave-output state, host backend queue state, and live websocket tap
+  cursor behind `CeAudio`; host WinMM and websocket remain backing services.
+- [ ] Move remote touch/key/audio/serial queues into a remote endpoint state
+  helper so `remote_server.cpp` no longer reaches through runtime internals.
+- [ ] Add a `CrossProcessBroker` owner for companion window registry paths,
+  imported external HWNDs, cross-process message queue transport, and shared
+  mapping backing files.
+- [ ] Add a `RuntimeDiagnostics` owner for rate-limited logs, dump flags,
+  message latency watchdogs, route/search timing, GWE owner queue summaries,
+  and host-present/mapping-sync counters.
+- [ ] Fold the current search-freeze investigation into the new ownership
+  shape: track received sent-message depth separately from posted/input/paint
+  queues, keep plain waits from pumping posted/paint, and diagnose the known
+  main-owner `WaitForSingleObject(0x10021)` plus queued sent-message signature.
+
 ## Cross-Cutting: CE Audio Timeline And Live WebSocket Tap
 
 - [x] Preserve CE's asynchronous wave-output behavior while fixing wait
