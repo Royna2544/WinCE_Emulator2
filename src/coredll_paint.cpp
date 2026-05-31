@@ -79,7 +79,8 @@ bool SyntheticDllRuntime::handleEndPaint(SyntheticExportCode code, const GuestCa
     lastError_ = ret ? 0 : 1400;
     if (ret) {
         ceGwe_.validateWindow(args.a0);
-        presentHostWindows(true);
+        invalidateHostWindows();
+        presentHostWindows(false);
     }
     return true;
 }

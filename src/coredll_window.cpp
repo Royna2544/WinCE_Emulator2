@@ -131,25 +131,9 @@ bool SyntheticDllRuntime::handleEnableWindow(SyntheticExportCode code, const Gue
         it->second.enabled = args.a1 != 0;
         size_t discardedInput = 0;
         if (!it->second.enabled) {
-            auto isSameOrDescendant = [&](uint32_t hwnd) {
-                for (uint32_t current = hwnd; current;) {
-                    if (current == args.a0) return true;
-                    auto window = windows_.find(current);
-                    if (window == windows_.end()) break;
-                    current = window->second.parent;
-                }
-                return false;
-            };
-            discardedInput = ceGwe_.eraseIf([&](const GuestMessage& message) {
-                return message.message >= 0x0200 && message.message <= 0x0202 &&
-                       isSameOrDescendant(message.hwnd);
-            });
-            if (isSameOrDescendant(capturedWindow_)) capturedWindow_ = 0;
-            if (isSameOrDescendant(hostPointerCaptureWindow_)) hostPointerCaptureWindow_ = 0;
-            if (isSameOrDescendant(pendingSyntheticChildButtonUpWindow_)) {
-                pendingSyntheticChildButtonUpWindow_ = 0;
-            }
+            discardedInput = discardQueuedPointerMessagesForWindowStack(args.a0);
         }
+        publishGuestWindowState(args.a0);
         lastError_ = 0;
         ret = wasEnabled ? 1 : 0;
         spdlog::info("EnableWindow guest=0x{:08x} enable={} oldEnabled={} discardedInput={}",

@@ -165,6 +165,67 @@ Current emulator difference:
   without special-casing that device. Current source anchor:
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp:781`. The
   2026-05-31 Release build passed with zero warnings.
+- `CeGwe` now shadows enough CE window-stack state for modal/owner input
+  routing: parent, inferred non-child owner, root, z-order, visible, enabled,
+  and destroyed state. `Create`/`ShowWindow`/`SetWindowPos` publication feeds
+  that state, host pointer hit testing now asks `CeGwe::hitTest`, and hide,
+  destroy, and disable paths purge queued pointer messages/captures for the
+  whole owner stack. Owner/root repaint is queued after stack members are
+  hidden or destroyed, visible popups are repainted above their owner/root,
+  and owner-stack popup hides no longer restore stale saved backing over newer
+  owner/root paint. After live observation showed lower map UI could still
+  paint above a fullscreen popup, CE source comparison confirmed the remaining
+  difference: `TopOwnedWindows`/z-order is coupled to `CalcVisRgn`, so lower
+  owner/root windows should not retain drawable visible regions while higher
+  popups cover them. A quick full-rectangle visible-clip experiment was backed
+  out after a transition/not-responding regression; the follow-up needs real
+  region subtraction before MGDI/DC system clips use it as paint truth.
+  This follows CE GWE top-owned-window and visible/enabled filtering plus MFC
+  modal owner disabling/drop-mouse behavior. CE references:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/window.hpp:906`,
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/window.hpp:930`,
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/window.hpp:1131`,
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/window.hpp:1142`,
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/window.hpp:1352`,
+  and
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/cmsgque.h:1594`.
+  MFC references:
+  `/mnt/c/Program Files (x86)/Microsoft Visual Studio 8/VC/ce/atlmfc/src/mfc/dlgcore.cpp:694`
+  and
+  `/mnt/c/Program Files (x86)/Microsoft Visual Studio 8/VC/ce/atlmfc/src/mfc/wincore.cpp:4771`.
+  Current source anchors:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_gwe.h:56`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_named_dispatch.cpp:808`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_named_dispatch.cpp:823`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp:1311`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp:1693`,
+  and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window.cpp:126`. The
+  2026-05-31 Release and Debug builds passed with zero warnings. Fresh
+  interactive Debug runs were launched at
+  `captures/inavi_autodrive_20260531_093953` and
+  `captures/inavi_autodrive_20260531_094420` with remote server listening on
+  `192.168.0.39:8765`. Live observation still reports weird z-order/layering
+  and possible black-fill flashes on hide/destroy, so this is a partial
+  owner-stack migration rather than a completed visible/update-region model.
+  The click-sound websocket burst is also still open and needs a focused audio
+  publish/send-boundary pass.
+- Follow-up interactive evidence showed the newer symptom was late map/nearby
+  UI paint rather than pure z-order: host input could be queued quickly, but
+  the guest did not retrieve the target focus/down/up for about 2.6 seconds
+  while same-window paint/lifecycle work was ahead of input. The queueing path
+  now keeps create/size/show ahead of input but no longer places pointer input
+  behind `WM_ERASEBKGND`/`WM_PAINT`, matching CE's model where paint is driven
+  by update regions after higher-priority queue work. The older fullscreen
+  popup retirement path also no longer restores its saved backing before
+  hiding it under a newer fullscreen popup, because backing is a cache rather
+  than CE z-order truth. Current source anchors:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp:1436` and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp:1907`.
+  The 2026-05-31 Release and Debug builds passed with zero warnings, and a
+  fresh Debug interactive run was launched at
+  `captures/inavi_autodrive_20260531_100056` with the remote server listening
+  on `192.168.0.39:8765`.
 - `CeGwe` now owns the `GuestMessage` record type and backing message deque.
   `SyntheticDllRuntime::guestMessages_` remains a compatibility alias to that
   deque, so this Phase 3 scaffold step should preserve delivery behavior while

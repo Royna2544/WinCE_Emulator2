@@ -851,6 +851,8 @@ private:
     uint64_t lastHostPresentMs_{};
     bool hostPresentDirty_{};
     uint32_t hostPresentDeferDepth_{};
+    bool hostPresentUiBatchActive_{};
+    uint64_t hostPresentUiBatchStartMs_{};
     std::unordered_set<uint32_t> hostPresentDeferredEraseHwnds_;
     std::vector<ResourceEntry> mainResources_;
     std::map<std::string, LoadedModuleInfo> loadedModulesByName_;
@@ -1348,6 +1350,8 @@ private:
     void pollCrossProcessGuestMessages();
     void presentHostWindows(bool force);
     void invalidateHostWindows();
+    void beginHostUiBatchPresentDeferral();
+    void releaseHostUiBatchPresentDeferral();
     bool beginHostErasePresentDeferral(uint32_t hwnd);
     bool hasHostErasePresentDeferral(uint32_t hwnd) const;
     void releaseHostErasePresentDeferral(uint32_t hwnd);
@@ -1366,6 +1370,11 @@ private:
     void captureGuestWindowBacking(uint32_t hwnd);
     bool guestWindowCoversFramebuffer(uint32_t hwnd) const;
     bool isWindowInOwnedPopupStack(uint32_t hwnd, uint32_t ancestor) const;
+    uint32_t inferredWindowOwner(uint32_t hwnd) const;
+    uint32_t rootWindowForStack(uint32_t hwnd) const;
+    bool isWindowInGweStack(uint32_t hwnd, uint32_t ancestor) const;
+    size_t discardQueuedPointerMessagesForWindowStack(uint32_t hwnd);
+    uint32_t repaintOwnerAfterStackChange(uint32_t hwnd, bool eraseHiddenWindow);
     uint32_t coveringFullScreenOwnedPopup(uint32_t hwnd) const;
     void retireOlderFullScreenOwnedPopupsForPopup(uint32_t popupHwnd);
     bool restoreGuestWindowBacking(uint32_t hwnd,

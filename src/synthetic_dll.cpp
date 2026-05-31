@@ -1591,7 +1591,8 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
         spdlog::info("{} synchronous paint complete hwnd=0x{:08x} return=0x{:08x}",
                      sourceName, hwnd, originalRa);
         queueVisiblePopupPaintsAbove(hwnd);
-        presentHostWindows(true);
+        invalidateHostWindows();
+        presentHostWindows(false);
         pumpHostMessages();
         return;
     }
@@ -1665,7 +1666,8 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                          pending.originalRa);
         }
         if (pending.releaseHostPresentAfterPaint) {
-            presentHostWindows(true);
+            invalidateHostWindows();
+            presentHostWindows(false);
         }
         auto readableReturn = [&](uint32_t address) {
             const uint32_t normalized = normalizeGuestCodeAddress(address, pending.sourceName.c_str());

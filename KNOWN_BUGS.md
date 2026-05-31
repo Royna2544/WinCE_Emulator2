@@ -288,7 +288,45 @@ Status:
   input hit-test path now consumes GWE visible-region rectangles for point
   checks and pointer-capture validity. The bug remains open until z-order
   visibility, popup/backing behavior, and paint/DC clipping consume those
-  regions as behavioral truth.
+  regions as behavioral truth. A 2026-05-31 owner-stack pass added GWE-side
+  owner/root/z-order/enabled shadow state, top/modal popup hit-test blocking,
+  stack-wide pointer purge on hide/destroy/disable, and owner/root repaint
+  after stack changes. It also stops owner-stack popup hides from restoring
+  stale saved backing over newer owner/root paint. The next observed CE
+  mismatch remains open: z-order alone is not enough, because CE `CalcVisRgn`
+  removes lower owner/root visible regions below covering popups. A quick
+  full-rectangle clipping experiment was backed out after a transition/
+  not-responding regression; implement proper region subtraction before MGDI
+  receives clipped system clips. Hidden or destroyed UI can still briefly
+  leave black fill before the owner/root repaint lands. A 2026-05-31
+  follow-up fixed two generic cache/queue issues in this area: pointer input no
+  longer waits behind same-window `WM_ERASEBKGND`/`WM_PAINT`, and retiring an
+  older fullscreen popup no longer restores its saved backing under a newer
+  fullscreen popup. The bug remains open for real visible-region subtraction
+  and any remaining coarse full-window paint latency.
+
+## Remote Audio Click Sounds Can Still Burst
+
+Symptom:
+
+- Short click sounds over the websocket can still stack and arrive in a burst
+  instead of being delivered immediately.
+
+Current emulator reference:
+
+- Remote audio queueing and websocket send path:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/remote_server.cpp:759`.
+- Guest wave output publish path:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_host_audio.cpp`.
+
+Status:
+
+- Still open as of the 2026-05-31 interactive remote run. Earlier fixes made
+  remote audio opt-out instead of opt-in, dropped stale startup audio when no
+  client is connected, woke the websocket sender on new PCM, disabled Nagle,
+  and capped queued PCM. That was not enough for short click latency; the next
+  pass should inspect PCM chunking/coalescing and websocket send backpressure
+  at the publish/send boundary.
 
 ## Paint And ValidateRect Do Not Preserve CE Update Regions
 

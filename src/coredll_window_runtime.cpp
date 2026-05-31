@@ -1029,6 +1029,22 @@ void SyntheticDllRuntime::invalidateHostWindows() {
     hostPresentDirty_ = true;
 }
 
+void SyntheticDllRuntime::beginHostUiBatchPresentDeferral() {
+    if (hostPresentUiBatchActive_) return;
+    hostPresentUiBatchActive_ = true;
+    hostPresentUiBatchStartMs_ = hostTickMilliseconds();
+    ++hostPresentDeferDepth_;
+    hostPresentDirty_ = true;
+}
+
+void SyntheticDllRuntime::releaseHostUiBatchPresentDeferral() {
+    if (!hostPresentUiBatchActive_) return;
+    hostPresentUiBatchActive_ = false;
+    hostPresentUiBatchStartMs_ = 0;
+    if (hostPresentDeferDepth_ > 0) --hostPresentDeferDepth_;
+    presentHostWindows(true);
+}
+
 bool SyntheticDllRuntime::beginHostErasePresentDeferral(uint32_t hwnd) {
     if (!hwnd) return false;
     const auto [_, inserted] = hostPresentDeferredEraseHwnds_.insert(hwnd);
@@ -1308,6 +1324,102 @@ bool SyntheticDllRuntime::isWindowInOwnedPopupStack(uint32_t hwnd, uint32_t ance
     return false;
 }
 
+uint32_t SyntheticDllRuntime::inferredWindowOwner(uint32_t hwnd) const {
+    auto it = windows_.find(hwnd);
+    if (it == windows_.end() || it->second.destroyed) return 0;
+    const GuestWindow& window = it->second;
+    if (window.style & kWindowStyleChild) return 0;
+    if (window.parent) return window.parent;
+    constexpr uint32_t kWindowStylePopup = 0x80000000u;
+    if ((window.style & kWindowStylePopup) == 0) return 0;
+
+    uint32_t best = 0;
+    uint64_t bestZ = 0;
+    for (const auto& [candidateHwnd, candidate] : windows_) {
+        if (candidateHwnd == hwnd || candidate.destroyed || !candidate.visible) continue;
+        if (window.ownerThread && candidate.ownerThread && candidate.ownerThread != window.ownerThread) continue;
+        if (candidate.parent || (candidate.style & kWindowStyleChild)) continue;
+        if (candidate.style & kWindowStylePopup) continue;
+        if (window.zOrder && candidate.zOrder > window.zOrder) continue;
+        if (!best || candidate.zOrder >= bestZ) {
+            best = candidateHwnd;
+            bestZ = candidate.zOrder;
+        }
+    }
+    if (best) return best;
+    for (const auto& [candidateHwnd, candidate] : windows_) {
+        if (candidateHwnd == hwnd || candidate.destroyed || !candidate.visible) continue;
+        if (window.ownerThread && candidate.ownerThread && candidate.ownerThread != window.ownerThread) continue;
+        if (candidate.style & kWindowStyleChild) continue;
+        if (candidate.style & kWindowStylePopup) continue;
+        if (window.zOrder && candidate.zOrder > window.zOrder) continue;
+        if (!best || candidate.zOrder >= bestZ) {
+            best = candidateHwnd;
+            bestZ = candidate.zOrder;
+        }
+    }
+    return best;
+}
+
+uint32_t SyntheticDllRuntime::rootWindowForStack(uint32_t hwnd) const {
+    uint32_t root = hwnd;
+    uint32_t current = hwnd;
+    for (size_t guard = 0; current && guard < windows_.size() + 1; ++guard) {
+        auto it = windows_.find(current);
+        if (it == windows_.end()) break;
+        root = current;
+        if (it->second.style & kWindowStyleChild) {
+            current = it->second.parent;
+        } else {
+            current = inferredWindowOwner(current);
+        }
+    }
+    return root;
+}
+
+bool SyntheticDllRuntime::isWindowInGweStack(uint32_t hwnd, uint32_t ancestor) const {
+    if (!hwnd || !ancestor) return false;
+    if (ceGwe_.isWindowInStack(hwnd, ancestor)) return true;
+    for (uint32_t current = hwnd; current;) {
+        if (current == ancestor) return true;
+        auto it = windows_.find(current);
+        if (it == windows_.end()) break;
+        current = (it->second.style & kWindowStyleChild) ? it->second.parent : inferredWindowOwner(current);
+    }
+    return false;
+}
+
+size_t SyntheticDllRuntime::discardQueuedPointerMessagesForWindowStack(uint32_t hwnd) {
+    const size_t discarded = ceGwe_.eraseIf([&](const GuestMessage& message) {
+        return message.message >= 0x0200 && message.message <= 0x0202 &&
+               isWindowInGweStack(message.hwnd, hwnd);
+    });
+    if (isWindowInGweStack(capturedWindow_, hwnd)) capturedWindow_ = 0;
+    if (isWindowInGweStack(hostPointerCaptureWindow_, hwnd)) hostPointerCaptureWindow_ = 0;
+    if (isWindowInGweStack(pendingSyntheticChildButtonUpWindow_, hwnd)) {
+        pendingSyntheticChildButtonUpWindow_ = 0;
+    }
+    return discarded;
+}
+
+uint32_t SyntheticDllRuntime::repaintOwnerAfterStackChange(uint32_t hwnd, bool eraseHiddenWindow) {
+    auto it = windows_.find(hwnd);
+    if (it == windows_.end()) return 0;
+    const uint32_t owner = inferredWindowOwner(hwnd);
+    const uint32_t parent = it->second.parent;
+    const uint32_t repaintTarget = parent ? parent : owner;
+    if (eraseHiddenWindow) eraseGuestWindowArea(hwnd, it->second);
+    if (repaintTarget) {
+        spdlog::debug("queued owner-stack repaint target=0x{:08x} after window=0x{:08x}",
+                      repaintTarget, hwnd);
+        queueGuestPaint(repaintTarget, true);
+        if ((it->second.style & kWindowStyleChild) == 0 || owner) {
+            queueVisiblePopupPaintsAbove(repaintTarget);
+        }
+    }
+    return repaintTarget;
+}
+
 uint32_t SyntheticDllRuntime::coveringFullScreenOwnedPopup(uint32_t hwnd) const {
     auto isOwnerChildDescendant = [&](uint32_t targetHwnd, uint32_t ownerHwnd) {
         bool traversedChild = false;
@@ -1351,7 +1463,6 @@ void SyntheticDllRuntime::retireOlderFullScreenOwnedPopupsForPopup(uint32_t popu
             continue;
         }
 
-        restoreGuestWindowBacking(hwnd, window, true, false);
         window.visible = false;
         window.backingValid = false;
         window.backingPixels.clear();
@@ -1439,9 +1550,20 @@ void SyntheticDllRuntime::eraseGuestWindowArea(uint32_t hwnd, const GuestWindow&
     }
     auto mutableWindow = windows_.find(hwnd);
     const bool childWindow = (window.style & kWindowStyleChild) != 0;
+    constexpr uint32_t kWindowStylePopup = 0x80000000u;
+    const bool ownerStackPopup =
+        !childWindow && (window.style & kWindowStylePopup) &&
+        (window.parent || inferredWindowOwner(hwnd));
     if (mutableWindow != windows_.end() && childWindow) {
         mutableWindow->second.backingValid = false;
         mutableWindow->second.backingPixels.clear();
+    }
+    if (mutableWindow != windows_.end() && ownerStackPopup) {
+        mutableWindow->second.backingValid = false;
+        mutableWindow->second.backingPixels.clear();
+        spdlog::debug("discarded owner-stack popup backing hwnd=0x{:08x}; owner repaint is authoritative",
+                      hwnd);
+        return;
     }
     if (mutableWindow != windows_.end() && !childWindow &&
         restoreGuestWindowBacking(hwnd, mutableWindow->second)) {
@@ -1598,103 +1720,15 @@ uint32_t SyntheticDllRuntime::windowAtPoint(uint32_t rootGuestHwnd, int32_t x, i
                                             int32_t& clientX, int32_t& clientY) const {
     auto root = windows_.find(rootGuestHwnd);
     if (root == windows_.end() || root->second.destroyed) rootGuestHwnd = 0;
-    uint32_t best = rootGuestHwnd;
-    int32_t bestX = 0;
-    int32_t bestY = 0;
-    auto belongsToRoot = [&](uint32_t hwnd) {
-        if (!rootGuestHwnd) return true;
-        for (uint32_t current = hwnd; current;) {
-            if (current == rootGuestHwnd) return true;
-            auto it = windows_.find(current);
-            if (it == windows_.end()) break;
-            current = it->second.parent;
-        }
-        return false;
-    };
-    auto originOf = [&](uint32_t hwnd) {
-        int32_t ox = 0;
-        int32_t oy = 0;
-        for (uint32_t current = hwnd; current;) {
-            auto it = windows_.find(current);
-            if (it == windows_.end()) break;
-            ox += it->second.x;
-            oy += it->second.y;
-            current = (it->second.style & kWindowStyleChild) ? it->second.parent : 0;
-        }
-        return std::pair<int32_t, int32_t>{ox, oy};
-    };
-    const std::vector<uint32_t> topToBottom = orderedWindowsTopToBottom();
-    for (uint32_t hwnd : topToBottom) {
-        const auto it = windows_.find(hwnd);
-        if (it == windows_.end()) continue;
-        const GuestWindow& window = it->second;
-        const auto visibleRect = ceGwe_.visibleRectForWindow(hwnd);
-        if (hwnd == rootGuestHwnd || window.destroyed || !window.visible ||
-            !visibleRect || !window.enabled || window.parent || !(window.style & 0x80000000u)) {
-            continue;
-        }
-        const auto [ox, oy] = originOf(hwnd);
-        rootGuestHwnd = hwnd;
-        best = hwnd;
-        bestX = ox;
-        bestY = oy;
-        if (!CeGwe::rectContainsPoint(*visibleRect, x, y)) {
-            clientX = x - ox;
-            clientY = y - oy;
-            return hwnd;
-        }
-        break;
+    const CeGwe::HitTestResult hit = ceGwe_.hitTest(rootGuestHwnd, x, y);
+    clientX = hit.clientX;
+    clientY = hit.clientY;
+    if (hit.blockedByModal) {
+        spdlog::info("gwe hit-test blocked by modal/top popup root=0x{:08x} blocker=0x{:08x} point={},{}",
+                     rootGuestHwnd, hit.blocker, x, y);
+        return 0;
     }
-    uint32_t modalPopup = 0;
-    int32_t modalX = 0;
-    int32_t modalY = 0;
-    for (uint32_t hwnd : topToBottom) {
-        const auto it = windows_.find(hwnd);
-        if (it == windows_.end()) continue;
-        const GuestWindow& window = it->second;
-        if (window.destroyed || !window.visible || !ceGwe_.visibleRectForWindow(hwnd) ||
-            !window.enabled || !belongsToRoot(hwnd)) continue;
-        if (!isOwnedPopupWindow(hwnd) || guestWindowCoversFramebuffer(hwnd)) continue;
-        if (hasCoveringRootPopup(hwnd)) continue;
-        const auto [ox, oy] = originOf(hwnd);
-        modalPopup = hwnd;
-        modalX = ox;
-        modalY = oy;
-        break;
-    }
-    for (uint32_t hwnd : topToBottom) {
-        const auto it = windows_.find(hwnd);
-        if (it == windows_.end()) continue;
-        const GuestWindow& window = it->second;
-        const auto visibleRect = ceGwe_.visibleRectForWindow(hwnd);
-        if (window.destroyed || !window.visible || !visibleRect ||
-            !window.enabled || !belongsToRoot(hwnd)) continue;
-        if (hasCoveringRootPopup(hwnd)) continue;
-        const auto [ox, oy] = originOf(hwnd);
-        int32_t left = visibleRect->left;
-        int32_t top = visibleRect->top;
-        int32_t right = visibleRect->right;
-        int32_t bottom = visibleRect->bottom;
-        if ((window.width <= 0 || window.height <= 0) && window.paintBoundsValid) {
-            left = window.paintLeft;
-            top = window.paintTop;
-            right = window.paintRight;
-            bottom = window.paintBottom;
-        }
-        if (x < left || y < top || x >= right || y >= bottom) continue;
-        best = hwnd;
-        bestX = ox;
-        bestY = oy;
-        break;
-    }
-    if (modalPopup && !isWindowInOwnedPopupStack(best, modalPopup)) {
-        best = modalPopup;
-        bestX = modalX;
-        bestY = modalY;
-    }
-    clientX = x - bestX;
-    clientY = y - bestY;
-    return best;
+    return hit.hwnd;
 }
 
 void SyntheticDllRuntime::compactQueuedPointerMotion(size_t maxMotionPerWindow) {
@@ -1887,9 +1921,7 @@ void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t
         const auto mustRunBeforeInputForSameWindow = [](uint32_t message) {
             return message == 0x0001 || // WM_CREATE
                    message == 0x0005 || // WM_SIZE
-                   message == 0x0014 || // WM_ERASEBKGND
-                   message == 0x0018 || // WM_SHOWWINDOW
-                   message == 0x000f;   // WM_PAINT
+                   message == 0x0018;   // WM_SHOWWINDOW
         };
         const bool hasPendingLifecycleForTarget =
             ceGwe_.anyMessage([&](const GuestMessage& queued) {
@@ -2263,6 +2295,9 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
         }
         pollCrossProcessGuestMessages();
         enqueueDueTimers();
+        if (ceGwe_.hasMessages()) {
+            beginHostUiBatchPresentDeferral();
+        }
         if (!pendingMessageTransfers_.empty()) {
             if (!resumeGuestSlice(1000000, "message-transfer")) {
                 return;
@@ -2304,6 +2339,13 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
                     return;
                 }
             }
+            if (!ceGwe_.hasMessages()) {
+                releaseHostUiBatchPresentDeferral();
+            } else if (hostPresentUiBatchActive_ &&
+                       hostTickMilliseconds() - hostPresentUiBatchStartMs_ >= 100) {
+                releaseHostUiBatchPresentDeferral();
+                beginHostUiBatchPresentDeferral();
+            }
         }
         const DWORD waitMs = std::max<DWORD>(1, std::min<DWORD>(50, timerWaitMilliseconds()));
         while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
@@ -2313,6 +2355,7 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
         }
         presentHostWindows(false);
         if (!ceGwe_.hasMessages() && hasHostWindows() && !ceKernel_.activeGuestThread()) {
+            releaseHostUiBatchPresentDeferral();
             if (hasRunnableGuestThread()) {
                 switchToRunnableGuestThread("idle-worker");
             } else {

@@ -1,6 +1,6 @@
 # Virtual CE Kernel/GWE/MGDI Refactor Checklist
 
-Last refreshed: 2026-05-30.
+Last refreshed: 2026-05-31.
 
 This is the active checklist for moving the emulator from flattened
 `SyntheticDllRuntime` ownership toward:
@@ -239,6 +239,68 @@ results, or timing thresholds.
   relationships, focus, capture, and hit testing behind `CeGwe`.
   Current source anchors: `src/synthetic_dll.h`,
   `src/coredll_window_runtime.cpp`, `src/coredll_named_dispatch.cpp`.
+  - [x] Add GWE-side owner/root/z-order/enabled window-stack shadow state,
+    including parentless same-thread popup ownership inference in the runtime
+    publication path. CE source anchors:
+    `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/window.hpp:906`,
+    `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/window.hpp:1142`,
+    and
+    `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/cmsgque.h:1594`.
+    MFC source anchors:
+    `/mnt/c/Program Files (x86)/Microsoft Visual Studio 8/VC/ce/atlmfc/src/mfc/dlgcore.cpp:694`
+    and
+    `/mnt/c/Program Files (x86)/Microsoft Visual Studio 8/VC/ce/atlmfc/src/mfc/wincore.cpp:4771`.
+    Current source anchors: `src/ce_gwe.h:56`,
+    `src/coredll_named_dispatch.cpp:808`, and
+    `src/coredll_window_runtime.cpp:1311`.
+  - [x] Route host pointer hit testing through `CeGwe::hitTest`, rejecting
+    hidden, destroyed, disabled, and modal/top-popup-covered windows before
+    queuing pointer messages. Current source anchors: `src/ce_gwe.h:266` and
+    `src/coredll_window_runtime.cpp:1693`.
+  - [x] Purge queued pointer messages and captures for the full GWE owner
+    stack when `ShowWindow`, `SetWindowPos`, `DestroyWindow`, or
+    `EnableWindow(false)` hides/disables/destroys a target. Current source
+    anchors: `src/coredll_window_runtime.cpp:1376`,
+    `src/coredll_named_dispatch.cpp:3466`,
+    `src/coredll_named_dispatch.cpp:3599`,
+    `src/coredll_named_dispatch.cpp:3636`, and `src/coredll_window.cpp:126`.
+  - [x] Repaint exposed owner/root windows after hiding or destroying a
+    stack member, and then repaint visible popups above that owner/root so
+    overlays remain visually above their owner. Current source anchor:
+    `src/coredll_window_runtime.cpp:1389`.
+  - [x] Treat queued pointer input as higher priority than pending
+    `WM_ERASEBKGND`/`WM_PAINT` for the same window, while still preserving
+    create/size/show ordering before input. CE paint is update-region work and
+    should not keep button release or nearby UI input visually stuck behind a
+    late paint. Current source anchor:
+    `src/coredll_window_runtime.cpp:1907`.
+  - [x] Stop restoring saved backing from older fullscreen owned popups while
+    retiring them below a newer fullscreen popup; saved backing is only a
+    rendering cache and must not reintroduce old map UI during a CE z-order
+    transition. Current source anchor:
+    `src/coredll_window_runtime.cpp:1436`.
+  - [x] Batch host presentation while draining GWE message bursts, and stop
+    forcing a host present at each `EndPaint`/`UpdateWindow` completion. CE
+    keeps paint requests on a separate queue/list and derives screen exposure
+    from update/visible regions, so the host should not expose each
+    intermediate child/window paint as display truth. CE source anchors:
+    `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/cmsgque.h:476`
+    and
+    `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/window.hpp:1352`.
+    Current source anchors: `src/coredll_window_runtime.cpp:1032`,
+    `src/coredll_window_runtime.cpp:2280`, `src/coredll_paint.cpp:69`, and
+    `src/synthetic_dll.cpp:1581`.
+  - [ ] Recompute GWE visible regions with real CE-style region subtraction,
+    then feed MGDI/DC system clips from that result so owner/root windows
+    covered by higher popups cannot repaint through them. A quick full-rect
+    coverage experiment was backed out after a transition regression, because
+    CE `CalcVisRgn` is region-based rather than a simple full-window clip.
+    CE source anchors:
+    `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/window.hpp:1131`
+    and
+    `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/window.hpp:1352`.
+    Current source anchors: `src/ce_gwe.h:57` and
+    `src/coredll_named_dispatch.cpp:808`.
 - [ ] Add CE-shaped visible, update, client-visible, and client-update regions
   before changing paint behavior. CE source anchor:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/window.hpp:1351`.

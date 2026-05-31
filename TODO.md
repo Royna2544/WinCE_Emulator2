@@ -128,7 +128,23 @@ Active refactor checklist: `PLAN.md`.
      rectangles for its point checks. Full-screen hide/return redraw now also
      discards stale queued update messages for hidden subtrees and blocks
      backing recapture for hidden/destroyed windows, matching CE's visible/
-     update region ownership more closely.
+     update region ownership more closely. The newest owner-stack pass adds
+     inferred popup ownership, GWE hit-test blocking for active top/modal
+     popups, pointer/capture purge on hide/destroy/disable, and owner/root
+     repaint after stack changes. It also stops owner-stack popup hides from
+     restoring stale saved backing over newer owner/root paint. CE source
+     comparison confirms the remaining difference is `CalcVisRgn`-style
+     visible-region subtraction below higher popups; a quick full-rect clip was
+     backed out after a transition regression. Remaining follow-up: implement
+     proper region subtraction before using it as MGDI/DC paint truth, and
+     stop hide/destroy black flash by letting exposure repaint flow through the
+     owner update region instead of direct erase-first behavior. Pointer input
+     is no longer queued behind same-window `WM_ERASEBKGND`/`WM_PAINT`, and
+     older fullscreen popup retirement no longer restores stale backing before
+     hiding the old popup. Next validation should check whether nearby map UI
+     still appears late after these CE-aligned queue/cache changes; if it does,
+     the next suspect is coarse synchronous `UpdateWindow`/full-window paint
+     cost rather than input delivery.
 
 5. Make paint APIs consume update regions.
    - CE reference:

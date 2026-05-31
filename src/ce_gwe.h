@@ -7,6 +7,8 @@
 #include <map>
 #include <optional>
 #include <string_view>
+#include <vector>
+#include <algorithm>
 
 class CeGwe {
 public:
@@ -55,8 +57,11 @@ public:
         uint32_t hwnd{};
         uint32_t ownerThread{};
         uint32_t parent{};
+        uint32_t owner{};
+        uint32_t root{};
         uint32_t style{};
         uint32_t exStyle{};
+        uint64_t zOrder{};
         Rect windowRect;
         Rect clientRect;
         Rect visibleRect;
@@ -64,11 +69,20 @@ public:
         Rect clientVisibleRect;
         Rect clientUpdateRect;
         bool visible{};
+        bool enabled{true};
         bool destroyed{};
         bool hasVisibleRegion{};
         bool hasUpdateRegion{};
         bool hasClientVisibleRegion{};
         bool hasClientUpdateRegion{};
+    };
+
+    struct HitTestResult {
+        uint32_t hwnd{};
+        uint32_t blocker{};
+        int32_t clientX{};
+        int32_t clientY{};
+        bool blockedByModal{};
     };
 
     static constexpr std::string_view name() noexcept { return "CE GWE"; }
@@ -100,13 +114,17 @@ public:
     void updateWindowState(uint32_t hwnd,
                            uint32_t ownerThread,
                            uint32_t parent,
+                           uint32_t owner,
+                           uint32_t root,
                            uint32_t style,
                            uint32_t exStyle,
+                           uint64_t zOrder,
                            int32_t x,
                            int32_t y,
                            int32_t width,
                            int32_t height,
                            bool visible,
+                           bool enabled,
                            bool destroyed) {
         if (!hwnd) return;
         registerWindowOwner(hwnd, ownerThread);
@@ -114,11 +132,15 @@ public:
         state.hwnd = hwnd;
         state.ownerThread = ownerThread;
         state.parent = parent;
+        state.owner = owner;
+        state.root = root ? root : hwnd;
         state.style = style;
         state.exStyle = exStyle;
+        state.zOrder = zOrder;
         state.windowRect = Rect{x, y, x + width, y + height};
         state.clientRect = Rect{0, 0, width, height};
         state.visible = visible;
+        state.enabled = enabled;
         state.destroyed = destroyed;
         state.hasVisibleRegion = visible && !destroyed;
         state.visibleRect = state.hasVisibleRegion ? state.windowRect : Rect{};
@@ -168,6 +190,108 @@ public:
         const WindowRegionState* state = windowRegionState(hwnd);
         if (!state || !state->hasVisibleRegion) return std::nullopt;
         return state->visibleRect;
+    }
+    uint32_t ownerForStack(uint32_t hwnd) const {
+        const WindowRegionState* state = windowRegionState(hwnd);
+        return state ? state->owner : 0;
+    }
+    uint32_t rootForStack(uint32_t hwnd) const {
+        const WindowRegionState* state = windowRegionState(hwnd);
+        return state ? state->root : 0;
+    }
+    bool isChildWindow(uint32_t hwnd) const {
+        const WindowRegionState* state = windowRegionState(hwnd);
+        return state && (state->style & kWindowStyleChild) != 0;
+    }
+    bool isPopupWindow(uint32_t hwnd) const {
+        const WindowRegionState* state = windowRegionState(hwnd);
+        return state && (state->style & kWindowStylePopup) != 0 &&
+               (state->style & kWindowStyleChild) == 0;
+    }
+    bool isVisibleEnabled(uint32_t hwnd) const {
+        const WindowRegionState* state = windowRegionState(hwnd);
+        if (!state || state->destroyed || !state->visible || !state->enabled || !state->hasVisibleRegion) {
+            return false;
+        }
+        for (uint32_t current = (state->style & kWindowStyleChild) ? state->parent : 0; current;) {
+            const WindowRegionState* parentState = windowRegionState(current);
+            if (!parentState) break;
+            if (parentState->destroyed || !parentState->visible || !parentState->enabled ||
+                !parentState->hasVisibleRegion) {
+                return false;
+            }
+            current = (parentState->style & kWindowStyleChild) ? parentState->parent : 0;
+        }
+        return true;
+    }
+    bool isWindowInStack(uint32_t hwnd, uint32_t ancestor) const {
+        if (!hwnd || !ancestor) return false;
+        for (uint32_t current = hwnd; current;) {
+            if (current == ancestor) return true;
+            const WindowRegionState* state = windowRegionState(current);
+            if (!state) break;
+            current = (state->style & kWindowStyleChild) ? state->parent : state->owner;
+        }
+        return false;
+    }
+    std::vector<uint32_t> orderedWindowsTopToBottom(uint32_t root = 0) const {
+        std::vector<uint32_t> ordered;
+        ordered.reserve(windowRegions_.size());
+        for (const auto& [hwnd, state] : windowRegions_) {
+            if (state.destroyed) continue;
+            if (root && state.root != root && hwnd != root && !isWindowInStack(hwnd, root)) continue;
+            ordered.push_back(hwnd);
+        }
+        std::sort(ordered.begin(), ordered.end(), [&](uint32_t left, uint32_t right) {
+            const WindowRegionState* leftState = windowRegionState(left);
+            const WindowRegionState* rightState = windowRegionState(right);
+            const int leftGroup = stackPriority(leftState);
+            const int rightGroup = stackPriority(rightState);
+            if (leftGroup != rightGroup) return leftGroup < rightGroup;
+            const uint64_t leftZ = leftState ? leftState->zOrder : 0;
+            const uint64_t rightZ = rightState ? rightState->zOrder : 0;
+            if (leftZ != rightZ) return leftZ > rightZ;
+            return left > right;
+        });
+        return ordered;
+    }
+    uint32_t activePopupForRoot(uint32_t root) const {
+        for (uint32_t hwnd : orderedWindowsTopToBottom(root)) {
+            const WindowRegionState* state = windowRegionState(hwnd);
+            if (!state || !isVisibleEnabled(hwnd)) continue;
+            if (isPopupWindow(hwnd) && state->root == root) return hwnd;
+        }
+        return 0;
+    }
+    HitTestResult hitTest(uint32_t root, int32_t x, int32_t y) const {
+        HitTestResult result{};
+        uint32_t effectiveRoot = root;
+        const WindowRegionState* rootState = windowRegionState(effectiveRoot);
+        if (!rootState || rootState->destroyed) {
+            effectiveRoot = 0;
+        }
+        const uint32_t modalPopup = effectiveRoot ? activePopupForRoot(effectiveRoot) : 0;
+        if (modalPopup && !visibleRegionContainsPoint(modalPopup, x, y)) {
+            result.blocker = modalPopup;
+            result.blockedByModal = true;
+            const WindowRegionState* blocker = windowRegionState(modalPopup);
+            if (blocker) {
+                result.clientX = x - blocker->windowRect.left;
+                result.clientY = y - blocker->windowRect.top;
+            }
+            return result;
+        }
+        for (uint32_t hwnd : orderedWindowsTopToBottom(effectiveRoot)) {
+            if (!isVisibleEnabled(hwnd) || !visibleRegionContainsPoint(hwnd, x, y)) continue;
+            if (modalPopup && !isWindowInStack(hwnd, modalPopup)) continue;
+            const WindowRegionState* state = windowRegionState(hwnd);
+            if (!state) continue;
+            result.hwnd = hwnd;
+            result.clientX = x - state->windowRect.left;
+            result.clientY = y - state->windowRect.top;
+            return result;
+        }
+        return result;
     }
     uint32_t ownerForMessage(const GuestMessage& message) const {
         const auto owner = messageOwners_.find(message.queueId);
@@ -341,6 +465,17 @@ public:
     }
 
 private:
+    static constexpr uint32_t kWindowStylePopup = 0x80000000u;
+    static constexpr uint32_t kWindowStyleChild = 0x40000000u;
+
+    static int stackPriority(const WindowRegionState* state) noexcept {
+        if (!state) return 4;
+        if ((state->style & kWindowStyleChild) == 0 && (state->style & kWindowStylePopup)) return 0;
+        if ((state->style & kWindowStyleChild) == 0 && state->owner) return 1;
+        if (state->style & kWindowStyleChild) return 2;
+        return 3;
+    }
+
     std::deque<GuestMessage>& queueFor(ThreadQueue& queue, MessageQueueKind kind) {
         switch (kind) {
         case MessageQueueKind::Sent:

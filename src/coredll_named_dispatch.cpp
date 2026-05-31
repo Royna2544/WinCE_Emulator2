@@ -808,13 +808,17 @@ void SyntheticDllRuntime::publishGuestWindowState(uint32_t hwnd) {
         ceGwe_.updateWindowState(candidateHwnd,
                                  candidate.ownerThread,
                                  candidate.parent,
+                                 inferredWindowOwner(candidateHwnd),
+                                 rootWindowForStack(candidateHwnd),
                                  candidate.style,
                                  candidate.exStyle,
+                                 candidate.zOrder,
                                  absoluteX,
                                  absoluteY,
                                  candidate.width,
                                  candidate.height,
                                  candidate.visible,
+                                 candidate.enabled,
                                  candidate.destroyed);
         const CeMgdi::Rect windowRect{absoluteX,
                                       absoluteY,
@@ -3439,6 +3443,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             const int32_t newWidth = int32_t(stackArg(4));
             const int32_t newHeight = int32_t(stackArg(5));
             const bool oldVisible = it->second.visible;
+            size_t discardedInput = 0;
             const bool sizeChanged = !(flags & 0x0001u) &&
                 (it->second.width != newWidth || it->second.height != newHeight);
             spdlog::info("SetWindowPos guest=0x{:08x} insertAfter=0x{:08x} x={} y={} cx={} cy={} flags=0x{:08x} oldRect={},{} {}x{} oldVisible={}",
@@ -3459,9 +3464,14 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                 it->second.visible = false; // SWP_HIDEWINDOW
                 it->second.paintBoundsValid = false;
                 const size_t discardedUpdates = discardQueuedWindowUpdateMessages(a0);
+                discardedInput = discardQueuedPointerMessagesForWindowStack(a0);
                 if (discardedUpdates) {
                     spdlog::info("SetWindowPos discarded {} queued update messages for hidden guest=0x{:08x}",
                                  discardedUpdates, a0);
+                }
+                if (discardedInput) {
+                    spdlog::info("SetWindowPos discarded {} queued pointer messages for hidden guest=0x{:08x}",
+                                 discardedInput, a0);
                 }
             }
             if (!(flags & 0x0004u)) { // SWP_NOZORDER
@@ -3473,6 +3483,9 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                         if (sibling != windows_.end()) bottom = std::min(bottom, sibling->second.zOrder);
                     }
                     it->second.zOrder = bottom ? bottom - 1 : 0;
+                } else if (a1 != 0 && a1 != 0xffffffffu) {
+                    auto after = windows_.find(a1);
+                    it->second.zOrder = after != windows_.end() ? after->second.zOrder + 1 : nextWindowZOrder();
                 } else {
                     it->second.zOrder = nextWindowZOrder();
                 }
@@ -3497,11 +3510,8 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                 message.wParam = it->second.visible ? 1 : 0;
                 message.time = uint32_t(++tick_ * 16);
                 ceGwe_.postPostedMessage(message);
-                if (!it->second.visible && it->second.parent) {
-                    eraseGuestWindowArea(a0, it->second);
-                    spdlog::info("SetWindowPos invalidating parent=0x{:08x} after hiding child=0x{:08x}",
-                                 it->second.parent, a0);
-                    queueGuestPaint(it->second.parent, true);
+                if (!it->second.visible) {
+                    repaintOwnerAfterStackChange(a0, true);
                 }
             }
             lastError_ = 0;
@@ -3579,7 +3589,6 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             ret = 0;
         } else {
             const bool wasVisible = it->second.visible;
-            const uint32_t parent = it->second.parent;
             for (auto timer = timers_.begin(); timer != timers_.end();) {
                 if (timer->second.hwnd == a0) timer = timers_.erase(timer);
                 else ++timer;
@@ -3587,7 +3596,8 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             if (focusedWindow_ == a0) focusedWindow_ = 0;
             if (capturedWindow_ == a0) capturedWindow_ = 0;
             if (hostPointerCaptureWindow_ == a0) hostPointerCaptureWindow_ = 0;
-            if (wasVisible) eraseGuestWindowArea(a0, it->second);
+            discardQueuedPointerMessagesForWindowStack(a0);
+            if (wasVisible) repaintOwnerAfterStackChange(a0, true);
             it->second.visible = false;
             it->second.destroyed = true;
             it->second.paintBoundsValid = false;
@@ -3604,10 +3614,6 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             ncDestroy.time = uint32_t(++tick_ * 16);
             ceGwe_.postPostedMessage(ncDestroy);
             destroyHostWindow(it->second);
-            if (wasVisible && parent) {
-                spdlog::info("DestroyWindow invalidating parent=0x{:08x} after child=0x{:08x}", parent, a0);
-                queueGuestPaint(parent, true);
-            }
             lastError_ = 0;
             ret = 1;
         }
@@ -3630,24 +3636,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             if (!it->second.visible) {
                 it->second.paintBoundsValid = false;
                 discardedUpdates = discardQueuedWindowUpdateMessages(a0);
-                auto isSameOrDescendant = [&](uint32_t hwnd) {
-                    for (uint32_t current = hwnd; current;) {
-                        if (current == a0) return true;
-                        auto window = windows_.find(current);
-                        if (window == windows_.end()) break;
-                        current = window->second.parent;
-                    }
-                    return false;
-                };
-                discardedInput = ceGwe_.eraseIf([&](const GuestMessage& message) {
-                    return message.message >= 0x0200 && message.message <= 0x0202 &&
-                           isSameOrDescendant(message.hwnd);
-                });
-                if (isSameOrDescendant(capturedWindow_)) capturedWindow_ = 0;
-                if (isSameOrDescendant(hostPointerCaptureWindow_)) hostPointerCaptureWindow_ = 0;
-                if (isSameOrDescendant(pendingSyntheticChildButtonUpWindow_)) {
-                    pendingSyntheticChildButtonUpWindow_ = 0;
-                }
+                discardedInput = discardQueuedPointerMessagesForWindowStack(a0);
             }
             spdlog::info("ShowWindow guest=0x{:08x} cmd={} oldVisible={} newVisible={}",
                          a0, int32_t(a1), wasVisible ? 1 : 0, it->second.visible ? 1 : 0);
@@ -3675,13 +3664,10 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                 message.wParam = it->second.visible ? 1 : 0;
                 message.time = uint32_t(++tick_ * 16);
                 ceGwe_.postPostedMessage(message);
-                if (!it->second.visible && it->second.parent) {
+                if (!it->second.visible) {
                     const bool exposesCoveredWindows =
                         wasVisible && isOwnedPopupWindow(a0) && guestWindowCoversFramebuffer(a0);
-                    eraseGuestWindowArea(a0, it->second);
-                    spdlog::info("ShowWindow invalidating parent=0x{:08x} after hiding child=0x{:08x}",
-                                 it->second.parent, a0);
-                    queueGuestPaint(it->second.parent, true);
+                    repaintOwnerAfterStackChange(a0, true);
                     if (exposesCoveredWindows) {
                         size_t exposed = 0;
                         for (const auto& [otherHwnd, window] : windows_) {
