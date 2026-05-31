@@ -2427,30 +2427,34 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
             const uint32_t transferOwner = ceGwe_.pendingMessageTransfers().back().ownerThread;
             if (transferOwner == ceKernel_.mainThreadPseudoHandle() &&
                 !pendingBlockingApis_.empty()) {
-                spdlog::debug("deferring main-owned message transfer while main wait is parked queued={} transfers={}",
+                spdlog::debug("resuming main-owned message transfer while main wait is parked queued={} transfers={}",
                               ceGwe_.messageCount(), ceGwe_.pendingMessageTransfers().size());
-                if (!runWorkerWhileMainBlocked("blocked-main-message-transfer", 5000000)) {
-                    return;
-                }
-                flushHostUiBatchPresentDeferral(50);
-                continue;
             }
-            if (transferOwner == ceKernel_.mainThreadPseudoHandle() &&
-                ceKernel_.activeGuestThread()) {
-                const uint32_t mainPc = guestContextReg(ceKernel_.mainThreadContext(), UC_MIPS_REG_PC);
-                if (mainPc && isGuestRangeReadable(mainPc, 4)) {
-                    const uint32_t activeThread = ceKernel_.activeGuestThread();
-                    auto active = ceKernel_.threads().find(activeThread);
-                    if (active != ceKernel_.threads().end()) {
-                        active->second.context = captureGuestCpuContext();
-                        if (active->second.state == GuestThreadRunState::Running) {
-                            active->second.state = GuestThreadRunState::Runnable;
+            if (transferOwner == ceKernel_.mainThreadPseudoHandle()) {
+                if (ceKernel_.activeGuestThread()) {
+                    const uint32_t mainPc = guestContextReg(ceKernel_.mainThreadContext(), UC_MIPS_REG_PC);
+                    if (mainPc && isGuestRangeReadable(mainPc, 4)) {
+                        const uint32_t activeThread = ceKernel_.activeGuestThread();
+                        auto active = ceKernel_.threads().find(activeThread);
+                        if (active != ceKernel_.threads().end()) {
+                            active->second.context = captureGuestCpuContext();
+                            if (active->second.state == GuestThreadRunState::Running) {
+                                active->second.state = GuestThreadRunState::Runnable;
+                            }
                         }
+                        ceKernel_.activeGuestThread() = 0;
+                        restoreMainThreadContextIfRunnable("message-transfer-owner");
+                        spdlog::debug("restored main owner for pending message transfer owner=0x{:08x} queued={}",
+                                      transferOwner, ceGwe_.messageCount());
                     }
-                    ceKernel_.activeGuestThread() = 0;
-                    restoreMainThreadContextIfRunnable("message-transfer-owner");
-                    spdlog::debug("restored main owner for pending message transfer owner=0x{:08x} queued={}",
-                                  transferOwner, ceGwe_.messageCount());
+                } else {
+                    uint32_t currentPc = 0;
+                    uc_reg_read(uc_, UC_MIPS_REG_PC, &currentPc);
+                    if ((!currentPc || !isGuestRangeReadable(currentPc, 4)) &&
+                        restoreMainThreadContextIfRunnable("message-transfer-owner")) {
+                        spdlog::debug("restored parked main owner for pending message transfer owner=0x{:08x} queued={}",
+                                      transferOwner, ceGwe_.messageCount());
+                    }
                 }
             } else if (transferOwner != CeGwe::kNoOwnerThread &&
                        transferOwner != ceKernel_.mainThreadPseudoHandle() &&

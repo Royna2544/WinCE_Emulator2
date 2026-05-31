@@ -1350,6 +1350,58 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
         // returns to GetMessage/DispatchMessage or enters a real message wait.
         return false;
     };
+    auto dispatchReceivedSendForMainWait = [&](PendingBlockingApi& pending, const char* reason) {
+        if (!messageTransferContinuationStub_) return false;
+        auto sent = ceGwe_.firstMatchingForOwner(
+            ceKernel_.mainThreadPseudoHandle(),
+            [](const GuestMessage& message) { return message.synchronousSender != 0; },
+            true);
+        if (!sent) return false;
+
+        auto window = ceGwe_.windows().find(sent->hwnd);
+        if (window == ceGwe_.windows().end() || !window->second.wndProc) {
+            spdlog::warn("{} dropped received sent message for missing target hwnd=0x{:08x} msg=0x{:08x} "
+                         "sender=0x{:08x}",
+                         pending.name, sent->hwnd, sent->message, sent->synchronousSender);
+            return false;
+        }
+
+        const uint32_t wndProc = translatedWndProc(window->second.wndProc, pending.name.c_str());
+        const uint32_t returnPc = blockingApiContinuationStub_;
+        ceGwe_.pendingMessageTransfers().push_back(PendingMessageTransfer{
+            sent->hwnd,
+            sent->message,
+            returnPc,
+            reg(UC_MIPS_REG_GP),
+            returnPc,
+            sent->synchronousSender,
+            ceKernel_.mainThreadPseudoHandle(),
+            wndProc,
+            hostTickMilliseconds(),
+            ceGwe_.messageCount(),
+            false,
+            pending.name,
+        });
+
+        setReg(UC_MIPS_REG_A0, sent->hwnd);
+        setReg(UC_MIPS_REG_A1, sent->message);
+        setReg(UC_MIPS_REG_A2, sent->wParam);
+        setReg(UC_MIPS_REG_A3, sent->lParam);
+        setReg(UC_MIPS_REG_GP, guestGpForCodeAddress(wndProc));
+        setReg(UC_MIPS_REG_T9, wndProc);
+        setReg(UC_MIPS_REG_RA, messageTransferContinuationStub_);
+        setReg(UC_MIPS_REG_PC, wndProc);
+        spdlog::info("{} dispatching received sent message while main wait parked reason={} hwnd=0x{:08x} "
+                     "msg=0x{:08x} sender=0x{:08x} queued={} transfers={}",
+                     pending.name,
+                     reason ? reason : "wait",
+                     sent->hwnd,
+                     sent->message,
+                     sent->synchronousSender,
+                     ceGwe_.messageCount(),
+                     ceGwe_.pendingMessageTransfers().size());
+        return true;
+    };
 
     if (isCoredll && pc == destroyWindowContinuationStub_) {
         if (ceGwe_.pendingDestroyWindows().empty()) {
@@ -2094,6 +2146,10 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                 setReg(UC_MIPS_REG_PC, blockingApiContinuationStub_);
                 ceKernel_.mainThreadContext() = captureGuestCpuContext();
                 updateCurrentThreadKData(ceKernel_.mainThreadPseudoHandle(), ceKernel_.mainThreadTls());
+                if (dispatchReceivedSendForMainWait(pendingBlockingApis_.back(), reason)) {
+                    pumpHostMessages();
+                    return true;
+                }
                 spdlog::info("WaitForSingleObject parked main wait wait=0x{:08x} timeout=0x{:08x} reason={} queued={} preferred=0x{:08x}",
                              a0,
                              a1,

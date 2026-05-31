@@ -1555,3 +1555,23 @@ Confirmed behavior difference:
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp:2165`.
   The 2026-05-31 Debug and Release builds passed with the known vcpkg duplicate
   import warning.
+- Debug interactive run `captures/inavi_autodrive_20260531_154920` reproduced
+  the search hang as a CE GWE received-send mismatch: a main-owned message
+  transfer stayed pending while the main owner was parked in a wait, and the
+  scheduler kept running workers with `ownerSent=1` instead of resuming the
+  received send path. The scheduler now no longer defers an already-started
+  main-owned message transfer solely because a main wait is parked, and
+  `WaitForSingleObject` parks on the main pseudo-thread now dispatch a pending
+  received sent message for that owner before yielding to workers. CE source
+  anchor: `cmsgque.h` describes separate posted, received-message, sent-stack,
+  paint, and quit queue components plus `m_hNewEvents`. Current source
+  references:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp:2427` and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp:1353`.
+  Release and Debug builds passed after the fix. Debug run
+  `captures/inavi_autodrive_20260531_160231` showed the key signature
+  changing from stuck `ownerSent=1` to
+  `WaitForSingleObject dispatching received sent message while main wait
+  parked`, after which subsequent watchdog lines returned to `ownerSent=0`.
+  The remaining visible delay is still posted-message backlog / route CPU work,
+  not the dead received-send lane.
