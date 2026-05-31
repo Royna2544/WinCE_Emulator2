@@ -252,6 +252,13 @@ Current emulator difference:
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_audio.h` and
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.h`. The 2026-05-31
   Release build passed with the existing vcpkg/Boost warnings.
+- `CeRemote` was added as the future owner for remote input/audio/serial/API
+  status. Legacy remote touch, key, and audio chunk type definitions now live
+  there with `SyntheticDllRuntime` keeping aliases and queue storage unchanged
+  for this buildable step. Current source anchors:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_remote.h` and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.h`. The 2026-05-31
+  Release build passed with the existing vcpkg/Boost warnings.
 - A follow-up live report showed the startup safety/fullscreen surface could
   visually overlap with the bottom strip again: stale fullscreen-popup pixels
   remained while exposed owner/child UI repainted. Log evidence from Debug run

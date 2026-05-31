@@ -7,6 +7,7 @@
 #include "ce_gwe.h"
 #include "ce_kernel.h"
 #include "ce_mgdi.h"
+#include "ce_remote.h"
 #include "cross_process_broker.h"
 #include "ordinal_dispatch_table.h"
 #include "runtime_diagnostics.h"
@@ -526,21 +527,9 @@ private:
     using GuestWaveOutState = CeAudio::GuestWaveOutState;
     using CachedWaveOutDevice = CeAudio::CachedWaveOutDevice;
     using GuestMessage = CeGwe::GuestMessage;
-    struct RemoteTouchEvent {
-        uint32_t message{};
-        int32_t x{};
-        int32_t y{};
-    };
-    struct RemoteKeyEvent {
-        uint32_t message{};
-        uint32_t vk{};
-    };
-    struct RemoteAudioChunk {
-        std::vector<uint8_t> payload;
-        uint64_t sequence{};
-        uint64_t ptsMs{};
-        uint32_t durationMs{};
-    };
+    using RemoteTouchEvent = CeRemote::TouchEvent;
+    using RemoteKeyEvent = CeRemote::KeyEvent;
+    using RemoteAudioChunk = CeRemote::AudioChunk;
     struct ResourceName {
         bool ordinal{};
         uint32_t id{};
@@ -604,6 +593,7 @@ private:
     CeAudio ceAudio_;
     CeGwe ceGwe_;
     CeMgdi ceMgdi_;
+    CeRemote ceRemote_;
     CrossProcessBroker crossProcessBroker_;
     RuntimeDiagnostics diagnostics_;
     uint32_t processHeapHandle_ = 0;

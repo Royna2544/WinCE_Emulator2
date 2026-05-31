@@ -497,6 +497,9 @@ results, or timing thresholds.
     runtime aliases and storage unchanged for this buildable step.
 - [ ] Move remote touch/key/audio/serial queues into a remote endpoint state
   helper so `remote_server.cpp` no longer reaches through runtime internals.
+  - [x] Add `CeRemote` and move legacy remote touch/key/audio chunk type
+    definitions there, keeping runtime aliases and queue storage unchanged for
+    this buildable step.
 - [x] Add a `CrossProcessBroker` owner for companion window registry paths,
   imported external HWNDs, cross-process message queue transport, and shared
   mapping backing files.

@@ -71,6 +71,7 @@
     <ClCompile Include="src\ce_gwe.cpp" />
     <ClCompile Include="src\ce_kernel.cpp" />
     <ClCompile Include="src\ce_mgdi.cpp" />
+    <ClCompile Include="src\ce_remote.cpp" />
     <ClCompile Include="src\cross_process_broker.cpp" />
     <ClCompile Include="src\coredll_bitmap.cpp" />
     <ClCompile Include="src\coredll_host_audio.cpp" />
@@ -111,6 +112,7 @@
     <ClInclude Include="src\ce_gwe.h" />
     <ClInclude Include="src\ce_kernel.h" />
     <ClInclude Include="src\ce_mgdi.h" />
+    <ClInclude Include="src\ce_remote.h" />
     <ClInclude Include="src\ce_slot_table.h" />
     <ClInclude Include="src\cross_process_broker.h" />
     <ClInclude Include="src\ordinal_dispatch_table.h" />
