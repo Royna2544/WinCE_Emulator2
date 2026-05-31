@@ -2480,10 +2480,32 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                 finishImmediateReturn(ret);
                 return;
             }
-            const uint32_t senderHandle = ceKernel_.activeGuestThread();
+            uint32_t senderHandle = ceKernel_.activeGuestThread();
             const uint32_t targetOwner = targetWindow == ceGwe_.windows().end()
                 ? CeGwe::kNoOwnerThread
                 : targetWindow->second.ownerThread;
+            bool recoveredSenderHandle = false;
+            if (isSendMessageW &&
+                !senderHandle &&
+                targetOwner == ceKernel_.mainThreadPseudoHandle() &&
+                !pendingBlockingApis_.empty()) {
+                const uint32_t candidate = ceKernel_.lastScheduledGuestThread();
+                auto candidateThread = ceKernel_.threads().find(candidate);
+                if (candidate &&
+                    candidate != targetOwner &&
+                    candidateThread != ceKernel_.threads().end() &&
+                    candidateThread->second.state != GuestThreadRunState::Waiting &&
+                    candidateThread->second.state != GuestThreadRunState::WaitingForMessage &&
+                    candidateThread->second.state != GuestThreadRunState::WaitingForSendMessage &&
+                    candidateThread->second.state != GuestThreadRunState::WaitingForSerialRead &&
+                    candidateThread->second.state != GuestThreadRunState::Terminated) {
+                    senderHandle = candidate;
+                    recoveredSenderHandle = true;
+                    spdlog::info("SendMessageW recovered sender from last scheduled thread sender=0x{:08x} "
+                                 "hwnd=0x{:08x} msg=0x{:08x} targetOwner=0x{:08x}",
+                                 senderHandle, hwnd, msg, targetOwner);
+                }
+            }
             if (isSendMessageW && senderHandle &&
                 targetOwner != CeGwe::kNoOwnerThread &&
                 targetOwner != senderHandle) {
@@ -2501,7 +2523,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                 lastError_ = 0;
                 auto sender = ceKernel_.threads().find(senderHandle);
                 if (sender != ceKernel_.threads().end() &&
-                    sender->second.state == GuestThreadRunState::Running) {
+                    (sender->second.state == GuestThreadRunState::Running || recoveredSenderHandle)) {
                     sender->second.context = captureGuestCpuContext();
                     sender->second.context.registers[UC_MIPS_REG_PC] = ra;
                     sender->second.state = GuestThreadRunState::WaitingForSendMessage;
