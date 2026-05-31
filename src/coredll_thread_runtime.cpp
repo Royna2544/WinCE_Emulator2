@@ -579,8 +579,6 @@ bool SyntheticDllRuntime::yieldActiveGuestThread(const char* reason, uint32_t re
                          ? active->second.context.registers.at(UC_MIPS_REG_PC)
                          : 0);
     }
-    ceKernel_.activeGuestThread() = 0;
-    if (restoreMainThreadContextIfRunnable(reason)) return true;
     return switchToRunnableGuestThread(reason);
 }
 

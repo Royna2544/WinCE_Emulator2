@@ -61,8 +61,12 @@ Active refactor checklist: `PLAN.md`.
      GWE has pending messages for that owner, matching CE's queue new-events
      signal more closely. Next validation should confirm remote button-up
      dispatch is no longer delayed until unrelated worker/event pulses.
-     Host-backed
-     mapped serial open now does only one immediate host COM probe before
+     A follow-up source-aligned scheduler fix keeps active worker context
+     visible during `queued-message-preempt` yields, so owner-priority
+     selection can switch to the actual pending GWE message owner instead of
+     restoring any parked main context first. Next validation should confirm
+     the previous preempt bounce is gone in the remote button-stuck path.
+     Host-backed mapped serial open now does only one immediate host COM probe before
      falling back to the virtual serial device, so missing host COM devices no
      longer add multi-retry startup delay.
 

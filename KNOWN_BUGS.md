@@ -98,6 +98,14 @@ Status:
   because the window owner was parked in a non-message multi-object wait;
   `CeKernel` now wakes such owner waits when their GWE queue has pending input,
   modeling CE `MsgQueue::m_hNewEvents`.
+  A later 2026-05-31 remote run showed the release could be retrieved quickly
+  but the scheduler still bounced through repeated `queued-message-preempt`
+  yields while pending UI work remained. The active-thread yield path now
+  leaves the active worker visible to the owner-priority switcher so it can
+  save that worker and select the real pending GWE owner, matching CE's
+  owner-thread queue shape instead of restoring a parked main context first.
+  Current source:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_thread_runtime.cpp:569`.
   The bug remains open until the queue model, wake categories, and
   send-message edge cases are the behavioral truth.
 

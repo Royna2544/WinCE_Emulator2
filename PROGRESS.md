@@ -145,6 +145,18 @@ Current emulator difference:
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_thread_runtime.cpp:345`. CE
   reference:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/cmsgque.h:590`.
+- A later remote run showed `WM_LBUTTONUP` could be retrieved quickly but the
+  scheduler still spun through repeated `queued-message-preempt` worker yields
+  while pending input/paint work remained. The active-thread yield path now
+  keeps the active worker visible to `switchToRunnableGuestThread`, letting the
+  existing owner-priority scheduler save that worker and choose the actual GWE
+  message owner instead of restoring a parked main context first. This follows
+  CE's owner-thread `MsgQueue` model (`m_hthdOwner`, `m_hNewEvents`, and
+  input queues). CE reference:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/cmsgque.h:568`.
+  Current source anchor:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_thread_runtime.cpp:569`.
+  The 2026-05-31 Release build passed with zero warnings.
 - Host-backed serial open no longer retries a missing/unavailable Win32 COM
   port inside the guest `CreateFileW` path. A mapped `win32_com` backend gets
   one immediate host-open probe; if unavailable, the guest still receives the
