@@ -2507,8 +2507,29 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
                               ceGwe_.messageCount(), ceGwe_.pendingMessageTransfers().size());
             }
             if (transferOwner == ceKernel_.mainThreadPseudoHandle()) {
+                const uint32_t mainPc = guestContextReg(ceKernel_.mainThreadContext(), UC_MIPS_REG_PC);
+                const bool mainParkedInBlockingWait =
+                    !pendingBlockingApis_.empty() &&
+                    (!mainPc || mainPc == blockingApiContinuationStub_ ||
+                     !isGuestRangeReadable(mainPc, 4));
+                if (mainParkedInBlockingWait) {
+                    if (!ceKernel_.activeGuestThread()) {
+                        switchToRunnableGuestThread("blocked-main-message-transfer");
+                    }
+                    if (ceKernel_.activeGuestThread()) {
+                        if (!resumeGuestSlice(5000000, "blocked-main-message-transfer")) {
+                            return;
+                        }
+                        flushHostUiBatchPresentDeferral(50);
+                        continue;
+                    }
+                    logGuestSchedulerDiag("blocked-main-message-transfer-no-runnable");
+                    pumpHostMessages();
+                    presentHostWindows(false);
+                    flushHostUiBatchPresentDeferral(50);
+                    continue;
+                }
                 if (ceKernel_.activeGuestThread()) {
-                    const uint32_t mainPc = guestContextReg(ceKernel_.mainThreadContext(), UC_MIPS_REG_PC);
                     if (mainPc && isGuestRangeReadable(mainPc, 4)) {
                         const uint32_t activeThread = ceKernel_.activeGuestThread();
                         auto active = ceKernel_.threads().find(activeThread);

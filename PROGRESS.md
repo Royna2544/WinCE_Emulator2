@@ -1657,3 +1657,19 @@ Confirmed behavior difference:
   run `captures/inavi_autodrive_20260531_170817` was probed with
   `POST /api/v1/input/touch {"type":"tap","x":10,"y":10}` and the log shows
   `WM_LBUTTONDOWN`/`WM_LBUTTONUP` queued and retrieved immediately.
+- The same `170817` run then reproduced the route-search apparent hang with a
+  different signature: the main owner had an in-progress synchronous
+  message-transfer parked at a blocking wait, while worker route CPU was still
+  running under `reason=message-transfer`. Because posted/serial traffic kept
+  the main owner queue nonempty, those worker slices were clamped to the tiny
+  UI-pressure transfer budget and `ownerPosted` grew from dozens to hundreds
+  while `ownerSent` stayed nonzero. This is not a place to pump posted paint or
+  fake route UI; CE `MsgQueue` keeps received-send/sent-stack state distinct
+  from posted/paint queues. The scheduler now treats that state as
+  blocked-main dependency work and runs the active/runnable worker with the
+  `blocked-main-message-transfer` budget until the main wait can resume.
+  Current source reference:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp:2507`.
+  Release and Debug builds passed with the known vcpkg duplicate import
+  warning, and Debug run `captures/inavi_autodrive_20260531_172037` is live for
+  interactive route-search validation.

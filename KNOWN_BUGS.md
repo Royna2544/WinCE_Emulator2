@@ -235,6 +235,20 @@ Status:
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp:2327`.
   Debug run `captures/inavi_autodrive_20260531_165013` no longer repeats the
   fake main-wait queue-stall signature.
+- Follow-up run `captures/inavi_autodrive_20260531_170817` showed another
+  route-search latency form: a legitimate main-owned synchronous
+  message-transfer was parked in a blocking wait, but worker route CPU kept
+  being scheduled through the `message-transfer` path. That path intentionally
+  uses tiny slices under UI pressure, so the worker made little progress while
+  posted companion/serial traffic grew the main owner queue. The scheduler now
+  detects a pending main-owned transfer whose parked main PC is the blocking
+  API continuation and schedules workers as `blocked-main-message-transfer`
+  instead of active `message-transfer`. This preserves CE's distinction between
+  received-send state and ordinary posted/paint queues while reducing emulator
+  overhead. Current source:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp:2507`.
+  Debug run `captures/inavi_autodrive_20260531_172037` is live for route-search
+  validation.
 
 ## UI Can Stall During Host Waits Or Shared Mapping Storms
 

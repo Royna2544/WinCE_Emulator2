@@ -224,6 +224,17 @@ Active refactor checklist: `PLAN.md`.
      confirmed both messages queued and were retrieved. Next validation should
      use the real remote client gesture on a meaningful UI button, not only the
      synthetic API probe at `10,10`.
+     The same `170817` route-search run showed worker route CPU still running
+     while a main-owned synchronous message transfer was parked in a blocking
+     wait, but the scheduler mislabeled those worker slices as
+     `message-transfer`, forcing 100k-instruction UI-pressure slices and
+     letting the main owner queue grow. Source now schedules that case as
+     `blocked-main-message-transfer`, preserving CE/MFC ordering while giving
+     the worker a blocked-main CPU budget. Debug run
+     `captures/inavi_autodrive_20260531_172037` is live on
+     `192.168.0.39:8765`; next validation should drive the route-search path
+     and confirm the old `reason=message-transfer ... ownerSent`
+     queue-growth signature is gone.
 
 2. Introduce a CE-shaped internal `MsgQueue` model.
    - CE reference:
