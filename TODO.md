@@ -27,13 +27,17 @@ Active refactor checklist: `PLAN.md`.
      slices. Websocket clients now join active playback near the current
      offset instead of receiving stale startup PCM or silence until the next
      `waveOutWrite`. Guest completion is virtual; host WinMM is a backend
-     opened with `CALLBACK_NULL`, and local WinMM playback is fed from a small
-     backend chunk queue instead of one whole guest buffer. Next step is Debug
-     interactive validation with a mid-startup websocket connect and short
-     button-click sounds. Also verify the old route-guide signature no longer
-     appears: `WaitForSingleObject(..., INFINITE)` must not resume with
-     `WAIT_TIMEOUT`, and `waveOutUnprepareHeader` must not run while
-     `WHDR_INQUEUE` is still set just because cooperative paint drained.
+     opened with `CALLBACK_NULL`, and local WinMM playback is fed from a
+     backend chunk queue that waits for `WHDR_DONE` before freeing each copied
+     buffer. The websocket tap now drops a chunk if conversion to the remote
+     advertised format fails instead of sending mismatched raw guest PCM.
+     Next step is Debug interactive validation after closing the old Debug
+     emulator process: confirm no buzzing/distortion, test a mid-startup
+     websocket connect, and test short button-click sounds. Also verify the
+     old route-guide signature no longer appears: `WaitForSingleObject(...,
+     INFINITE)` must not resume with `WAIT_TIMEOUT`, and
+     `waveOutUnprepareHeader` must not run while `WHDR_INQUEUE` is still set
+     just because cooperative paint drained.
 
 1. Finish virtual serial wait semantics and scheduler responsiveness.
    - CE reference:
@@ -217,7 +221,14 @@ Active refactor checklist: `PLAN.md`.
      the runtime compatibility copy. `GetPixel` now overlays that MGDI palette
      before decoding indexed bitmap pixels, and bitmap rectangle/line/polygon
      and host-text writes now refresh the compatibility palette from MGDI
-     before indexed writes. DIB-to-bitmap, `TransparentImage`, `BitBlt`, and
+     before indexed writes. Route-guide source comparison added the next
+     missing CE region/drawing
+     surface: `RoundRect`, `FillRgn`, `SetRectRgn`, `SelectClipRgn`,
+     `PtInRegion`, and `RectInRegion` are exported/handled, and framebuffer
+     polygon fills now honor the effective MGDI clip. Next validation should
+     check whether the route-guide rounded overlay no longer paints a
+     rectangular black backing and whether the noisy route-guide area still
+     leaks stale pixels. DIB-to-bitmap, `TransparentImage`, `BitBlt`, and
      `StretchBlt` paths now do the same before indexed reads/writes. Selected
      brush/pen/font lookups and `SelectObject` return values now also read
      through the MGDI DC shadow. Text color, background color/mode, text

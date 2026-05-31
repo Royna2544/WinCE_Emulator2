@@ -207,8 +207,13 @@ Status:
   and
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/remote_server.cpp:1022`.
 - Local WinMM playback is now a backend and no longer the guest-visible
-  clock; it is fed through a small backend chunk queue instead of a single
-  whole-buffer host submission.
+  clock; it is fed through a backend chunk queue instead of a single
+  whole-buffer host submission. A follow-up report found the chunked backend
+  could buzz/distort because copied local buffers were released after a
+  duration estimate instead of waiting for WinMM to mark the `WAVEHDR` done.
+  The backend now waits for `WHDR_DONE`/successful unprepare before freeing
+  the copied chunk, and the websocket path now refuses to send raw guest PCM as
+  the configured remote format if miniaudio conversion fails.
 - A later route-guide run found that cooperative paint around a blocking
   `WaitForSingleObject(..., INFINITE)` could still return `WAIT_TIMEOUT` from
   the named wait shim. That caused audio buffers to be unprepared while still
@@ -458,6 +463,12 @@ Status:
   also read through MGDI object state. Region bounds/ownership now mirror into
   MGDI for `CreateRectRgn`, `CombineRgn`, region deletion, and `SetWindowRgn`
   transfer. `GetClipBox` now reports an MGDI effective clip, and framebuffer
-  drawing now uses the system/app clip intersection. The bug remains open until
-  more pixel storage/DC object ownership moves behind MGDI instead of runtime
-  GDI-object maps and saved backing heuristics remaining the clipping truth.
+  drawing now uses the system/app clip intersection. After a route-guide
+  visual artifact report, CE region/rounded drawing exports `RoundRect`,
+  `FillRgn`, `SetRectRgn`, `SelectClipRgn`, `PtInRegion`, and `RectInRegion`
+  were added to the coredll boundary and dispatcher, and framebuffer polygon
+  fills now honor the effective MGDI clip. The bug remains open until route
+  guide visual validation confirms whether the noisy rectangle and rectangular
+  black backing are gone, and until more pixel storage/DC object ownership
+  moves behind MGDI instead of runtime GDI-object maps and saved backing
+  heuristics remaining the clipping truth.

@@ -159,9 +159,35 @@ Current emulator difference:
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_host_audio.cpp:135`,
   and
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/remote_server.cpp:1022`.
-  The 2026-05-31 Release build passed with the existing Boost Beast warning
-  from `remote_server.cpp`; a later Debug build compiled but could not link
-  because the old Debug emulator process was still running.
+  A follow-up live report found the backend/tap refactor could produce
+  distorted buzzing. Two source-aligned transport bugs were fixed: the local
+  WinMM backend now keeps each copied backend buffer alive until WinMM marks
+  the `WAVEHDR` done/unpreparable instead of freeing it after an estimated
+  sleep, and the websocket tap no longer falls back to sending raw guest PCM
+  while advertising the configured remote format if miniaudio conversion
+  fails. The 2026-05-31 Release build passed with the existing Boost Beast
+  warning from `remote_server.cpp`; a later Debug build compiled but could not
+  link because the old Debug emulator process was still running.
+- CE GWE/MGDI source comparison for the route-guide visual artifacts found
+  missing region/rounded drawing exports in the emulator boundary:
+  `RoundRect`, `FillRgn`, `SetRectRgn`, `SelectClipRgn`, `PtInRegion`, and
+  `RectInRegion`. The coredll export table now exposes those CE ordinals, the
+  dispatcher implements bounds-backed region/clip behavior plus polygonal
+  `RoundRect`, and framebuffer polygon fills now honor the MGDI effective clip.
+  This targets the observed rectangular black backing behind rounded route
+  overlays without adding route-specific drawing. CE references:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/CORE/DLL/core_common.def:2006`,
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/CORE/DLL/core_common.def:2026`,
+  and
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/INC/gweapiset1.hpp:2716`.
+  Current source anchors:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll_modules.cpp:146`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_named_dispatch.cpp:151`,
+  and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_bitmap.cpp:877`.
+  The 2026-05-31 Release build passed with zero warnings before the later
+  audio transport edit, and the combined Release build passed afterward with
+  the existing Boost Beast warning.
 - A route-guide run from the old Debug process showed a source-alignment bug
   in the cooperative blocking-wait continuation: while pumping paint around
   `WaitForSingleObject(..., INFINITE)`, the continuation re-dispatched the
