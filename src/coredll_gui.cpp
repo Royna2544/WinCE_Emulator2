@@ -114,15 +114,15 @@ bool SyntheticDllRuntime::handleAdjustWindowRectEx(SyntheticExportCode, const Gu
 }
 
 bool SyntheticDllRuntime::handleGetDlgItem(SyntheticExportCode, const GuestCallArgs& args, uint32_t& ret) {
-    auto parent = windows_.find(args.a0);
-    if (parent == windows_.end()) {
+    auto parent = ceGwe_.windows().find(args.a0);
+    if (parent == ceGwe_.windows().end()) {
         lastError_ = 1400;
         ret = 0;
         return true;
     }
 
     ret = 0;
-    for (const auto& [hwnd, window] : windows_) {
+    for (const auto& [hwnd, window] : ceGwe_.windows()) {
         if (window.parent == args.a0 && window.menu == args.a1) {
             ret = hwnd;
             break;
@@ -133,8 +133,8 @@ bool SyntheticDllRuntime::handleGetDlgItem(SyntheticExportCode, const GuestCallA
 }
 
 bool SyntheticDllRuntime::handleGetDlgCtrlID(SyntheticExportCode, const GuestCallArgs& args, uint32_t& ret) {
-    auto it = windows_.find(args.a0);
-    if (it == windows_.end()) {
+    auto it = ceGwe_.windows().find(args.a0);
+    if (it == ceGwe_.windows().end()) {
         lastError_ = 1400;
         ret = 0xffffffffu;
     } else {
@@ -146,10 +146,10 @@ bool SyntheticDllRuntime::handleGetDlgCtrlID(SyntheticExportCode, const GuestCal
 
 bool SyntheticDllRuntime::handleGetForegroundWindow(SyntheticExportCode, const GuestCallArgs&, uint32_t& ret) {
     auto firstWindow = [&]() -> uint32_t {
-        for (const auto& [hwnd, window] : windows_) {
+        for (const auto& [hwnd, window] : ceGwe_.windows()) {
             if (!window.destroyed && !window.parent) return hwnd;
         }
-        for (const auto& [hwnd, window] : windows_) {
+        for (const auto& [hwnd, window] : ceGwe_.windows()) {
             if (!window.destroyed) return hwnd;
         }
         return 0;
@@ -160,7 +160,7 @@ bool SyntheticDllRuntime::handleGetForegroundWindow(SyntheticExportCode, const G
 }
 
 bool SyntheticDllRuntime::handleSetForegroundWindow(SyntheticExportCode, const GuestCallArgs& args, uint32_t& ret) {
-    if (windows_.count(args.a0)) {
+    if (ceGwe_.windows().count(args.a0)) {
         ceGwe_.postPostedMessage({args.a0, 0x0006, 1, 0, uint32_t(++tick_ * 16), 0, 0});
         ceGwe_.postPostedMessage({args.a0, 0x0007, 0, 0, uint32_t(++tick_ * 16), 0, 0});
         focusedWindow_ = args.a0;
@@ -175,8 +175,8 @@ bool SyntheticDllRuntime::handleSetForegroundWindow(SyntheticExportCode, const G
 
 bool SyntheticDllRuntime::handleSetActiveWindow(SyntheticExportCode, const GuestCallArgs& args, uint32_t& ret) {
     const uint32_t previous = focusedWindow_;
-    auto target = windows_.find(args.a0);
-    if (!args.a0 || (target != windows_.end() && !target->second.destroyed)) {
+    auto target = ceGwe_.windows().find(args.a0);
+    if (!args.a0 || (target != ceGwe_.windows().end() && !target->second.destroyed)) {
         focusedWindow_ = args.a0;
         ret = previous;
         lastError_ = 0;
@@ -189,14 +189,14 @@ bool SyntheticDllRuntime::handleSetActiveWindow(SyntheticExportCode, const Guest
 
 bool SyntheticDllRuntime::handleGetActiveWindow(SyntheticExportCode, const GuestCallArgs&, uint32_t& ret) {
     ret = 0;
-    for (const auto& [hwnd, window] : windows_) {
+    for (const auto& [hwnd, window] : ceGwe_.windows()) {
         if (!window.destroyed && !window.parent) {
             ret = hwnd;
             break;
         }
     }
     if (!ret) {
-        for (const auto& [hwnd, window] : windows_) {
+        for (const auto& [hwnd, window] : ceGwe_.windows()) {
             if (!window.destroyed) {
                 ret = hwnd;
                 break;
@@ -223,8 +223,8 @@ bool SyntheticDllRuntime::handleTranslateAcceleratorW(SyntheticExportCode, const
 }
 
 bool SyntheticDllRuntime::handleIsWindowVisible(SyntheticExportCode, const GuestCallArgs& args, uint32_t& ret) {
-    auto it = windows_.find(args.a0);
-    if (it == windows_.end()) {
+    auto it = ceGwe_.windows().find(args.a0);
+    if (it == ceGwe_.windows().end()) {
         lastError_ = 1400;
         ret = 0;
         spdlog::debug("IsWindowVisible hwnd=0x{:08x} missing -> 0", args.a0);

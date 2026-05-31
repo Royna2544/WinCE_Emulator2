@@ -842,9 +842,9 @@ uint32_t SyntheticDllRuntime::makeGuestWindow(const std::string& className, cons
     window.width = std::max<int32_t>(1, width);
     window.height = std::max<int32_t>(1, height);
     window.visible = visible;
-    windows_[hwnd] = window;
+    ceGwe_.windows()[hwnd] = window;
     ceGwe_.registerWindowOwner(hwnd, window.ownerThread);
-    ensureHostWindow(hwnd, windows_[hwnd]);
+    ensureHostWindow(hwnd, ceGwe_.windows()[hwnd]);
     publishGuestWindowState(hwnd);
     return hwnd;
 }
@@ -854,19 +854,19 @@ uint64_t SyntheticDllRuntime::nextWindowZOrder() {
 }
 
 uint64_t SyntheticDllRuntime::windowZOrder(uint32_t hwnd) const {
-    const auto it = windows_.find(hwnd);
-    return it == windows_.end() ? 0 : it->second.zOrder;
+    const auto it = ceGwe_.windows().find(hwnd);
+    return it == ceGwe_.windows().end() ? 0 : it->second.zOrder;
 }
 
 std::vector<uint32_t> SyntheticDllRuntime::orderedWindowsTopToBottom() const {
     std::vector<uint32_t> ordered;
-    ordered.reserve(windows_.size());
-    for (const auto& [hwnd, _] : windows_) ordered.push_back(hwnd);
+    ordered.reserve(ceGwe_.windows().size());
+    for (const auto& [hwnd, _] : ceGwe_.windows()) ordered.push_back(hwnd);
     std::sort(ordered.begin(), ordered.end(), [&](uint32_t left, uint32_t right) {
-        const auto leftIt = windows_.find(left);
-        const auto rightIt = windows_.find(right);
-        const uint64_t leftZ = leftIt == windows_.end() ? 0 : leftIt->second.zOrder;
-        const uint64_t rightZ = rightIt == windows_.end() ? 0 : rightIt->second.zOrder;
+        const auto leftIt = ceGwe_.windows().find(left);
+        const auto rightIt = ceGwe_.windows().find(right);
+        const uint64_t leftZ = leftIt == ceGwe_.windows().end() ? 0 : leftIt->second.zOrder;
+        const uint64_t rightZ = rightIt == ceGwe_.windows().end() ? 0 : rightIt->second.zOrder;
         if (leftZ != rightZ) return leftZ > rightZ;
         return left > right;
     });
@@ -876,17 +876,17 @@ std::vector<uint32_t> SyntheticDllRuntime::orderedWindowsTopToBottom() const {
 std::vector<uint32_t> SyntheticDllRuntime::orderedSiblingWindows(uint32_t parent,
                                                                  bool childWindow) const {
     std::vector<uint32_t> siblings;
-    for (const auto& [hwnd, window] : windows_) {
+    for (const auto& [hwnd, window] : ceGwe_.windows()) {
         if (!window.destroyed && window.parent == parent &&
             ((window.style & kWindowStyleChild) != 0) == childWindow) {
             siblings.push_back(hwnd);
         }
     }
     std::sort(siblings.begin(), siblings.end(), [&](uint32_t left, uint32_t right) {
-        const auto leftIt = windows_.find(left);
-        const auto rightIt = windows_.find(right);
-        const uint64_t leftZ = leftIt == windows_.end() ? 0 : leftIt->second.zOrder;
-        const uint64_t rightZ = rightIt == windows_.end() ? 0 : rightIt->second.zOrder;
+        const auto leftIt = ceGwe_.windows().find(left);
+        const auto rightIt = ceGwe_.windows().find(right);
+        const uint64_t leftZ = leftIt == ceGwe_.windows().end() ? 0 : leftIt->second.zOrder;
+        const uint64_t rightZ = rightIt == ceGwe_.windows().end() ? 0 : rightIt->second.zOrder;
         if (leftZ != rightZ) return leftZ > rightZ;
         return left > right;
     });
@@ -939,7 +939,7 @@ void SyntheticDllRuntime::destroyHostWindow(GuestWindow& window) {
         if (IsWindow(hwnd)) {
             uint32_t replacementHwnd = 0;
             GuestWindow* replacementWindow = nullptr;
-            for (auto it = windows_.rbegin(); it != windows_.rend(); ++it) {
+            for (auto it = ceGwe_.windows().rbegin(); it != ceGwe_.windows().rend(); ++it) {
                 GuestWindow& candidate = it->second;
                 if (candidate.hwnd == window.hwnd || candidate.destroyed || !candidate.visible || candidate.hostHwnd) {
                     continue;
@@ -1008,7 +1008,7 @@ void SyntheticDllRuntime::presentHostWindows(bool force) {
     if (!force && lastHostPresentMs_ && now - lastHostPresentMs_ < kMinPresentIntervalMs) return;
     hostPresentDirty_ = false;
     lastHostPresentMs_ = now;
-    for (auto& [guestHwnd, window] : windows_) {
+    for (auto& [guestHwnd, window] : ceGwe_.windows()) {
         (void)guestHwnd;
         if (!window.hostHwnd) continue;
         HWND hwnd = reinterpret_cast<HWND>(window.hostHwnd);
@@ -1050,7 +1050,7 @@ void SyntheticDllRuntime::flushHostUiBatchPresentDeferral(uint64_t maxDeferredMs
     const uint64_t now = hostTickMilliseconds();
     if (hostPresentUiBatchStartMs_ && now - hostPresentUiBatchStartMs_ < maxDeferredMs) return;
     releaseHostUiBatchPresentDeferral();
-    if (ceGwe_.hasMessages() || !pendingMessageTransfers_.empty()) {
+    if (ceGwe_.hasMessages() || !ceGwe_.pendingMessageTransfers().empty()) {
         beginHostUiBatchPresentDeferral();
     }
 }
@@ -1077,8 +1077,8 @@ void SyntheticDllRuntime::releaseHostErasePresentDeferral(uint32_t hwnd) {
 }
 
 void SyntheticDllRuntime::queueGuestPaint(uint32_t hwnd, bool erase) {
-    auto it = windows_.find(hwnd);
-    if (!hwnd || it == windows_.end() || it->second.destroyed || !it->second.visible) return;
+    auto it = ceGwe_.windows().find(hwnd);
+    if (!hwnd || it == ceGwe_.windows().end() || it->second.destroyed || !it->second.visible) return;
     const auto hasQueued = [&](uint32_t message) {
         return ceGwe_.anyMessage([&](const GuestMessage& queued) {
             return queued.hwnd == hwnd && queued.message == message;
@@ -1110,8 +1110,8 @@ size_t SyntheticDllRuntime::discardQueuedWindowUpdateMessages(uint32_t hwnd) {
     auto isSameOrDescendant = [&](uint32_t candidate) {
         for (uint32_t current = candidate; current;) {
             if (current == hwnd) return true;
-            auto window = windows_.find(current);
-            if (window == windows_.end()) break;
+            auto window = ceGwe_.windows().find(current);
+            if (window == ceGwe_.windows().end()) break;
             current = window->second.parent;
         }
         return false;
@@ -1134,12 +1134,12 @@ void SyntheticDllRuntime::prioritizeQueuedWindowMessages(uint32_t hwnd) {
 }
 
 void SyntheticDllRuntime::queueVisibleFullScreenPopupPaint(uint32_t hwnd) {
-    auto it = windows_.find(hwnd);
-    if (it == windows_.end() || it->second.destroyed || !it->second.visible ||
+    auto it = ceGwe_.windows().find(hwnd);
+    if (it == ceGwe_.windows().end() || it->second.destroyed || !it->second.visible ||
         !isOwnedPopupWindow(hwnd) || !guestWindowCoversFramebuffer(hwnd)) {
         return;
     }
-    const bool replacesOlderFullScreenPopup = std::any_of(windows_.begin(), windows_.end(),
+    const bool replacesOlderFullScreenPopup = std::any_of(ceGwe_.windows().begin(), ceGwe_.windows().end(),
                                                           [&](const auto& entry) {
                                                               const uint32_t otherHwnd = entry.first;
                                                               const GuestWindow& other = entry.second;
@@ -1168,8 +1168,8 @@ void SyntheticDllRuntime::queueVisibleFullScreenPopupPaint(uint32_t hwnd) {
 }
 
 void SyntheticDllRuntime::queueVisiblePopupPaint(uint32_t hwnd) {
-    auto it = windows_.find(hwnd);
-    if (it == windows_.end() || it->second.destroyed || !it->second.visible ||
+    auto it = ceGwe_.windows().find(hwnd);
+    if (it == ceGwe_.windows().end() || it->second.destroyed || !it->second.visible ||
         (it->second.style & kWindowStyleChild) || it->second.width <= 0 || it->second.height <= 0) {
         return;
     }
@@ -1207,7 +1207,7 @@ void SyntheticDllRuntime::queueVisiblePopupPaint(uint32_t hwnd) {
 
 void SyntheticDllRuntime::queueVisiblePopupPaintsAbove(uint32_t hwnd) {
     std::vector<uint32_t> popups;
-    for (const auto& [popupHwnd, window] : windows_) {
+    for (const auto& [popupHwnd, window] : ceGwe_.windows()) {
         if (windowZOrder(popupHwnd) <= windowZOrder(hwnd) || window.destroyed || !window.visible ||
             (window.style & kWindowStyleChild) || window.width <= 0 || window.height <= 0) {
             continue;
@@ -1234,8 +1234,8 @@ std::pair<int32_t, int32_t> SyntheticDllRuntime::guestWindowOrigin(uint32_t hwnd
     int32_t x = 0;
     int32_t y = 0;
     for (uint32_t current = hwnd; current;) {
-        auto it = windows_.find(current);
-        if (it == windows_.end()) break;
+        auto it = ceGwe_.windows().find(current);
+        if (it == ceGwe_.windows().end()) break;
         x += it->second.x;
         y += it->second.y;
         current = (it->second.style & kWindowStyleChild) ? it->second.parent : 0;
@@ -1248,8 +1248,8 @@ void SyntheticDllRuntime::noteGuestWindowPaint(uint32_t hwnd,
                                                int32_t top,
                                                int32_t right,
                                                int32_t bottom) {
-    auto it = windows_.find(hwnd);
-    if (it == windows_.end() || it->second.destroyed || left >= right || top >= bottom) return;
+    auto it = ceGwe_.windows().find(hwnd);
+    if (it == ceGwe_.windows().end() || it->second.destroyed || left >= right || top >= bottom) return;
     GuestWindow& window = it->second;
     if (!window.paintBoundsValid) {
         window.paintLeft = left;
@@ -1266,8 +1266,8 @@ void SyntheticDllRuntime::noteGuestWindowPaint(uint32_t hwnd,
 }
 
 void SyntheticDllRuntime::captureGuestWindowBacking(uint32_t hwnd) {
-    auto it = windows_.find(hwnd);
-    if (it == windows_.end()) return;
+    auto it = ceGwe_.windows().find(hwnd);
+    if (it == ceGwe_.windows().end()) return;
     if (it->second.destroyed || !it->second.visible) return;
     const bool childWindow = (it->second.style & kWindowStyleChild) != 0;
     const bool ownedPopup = isOwnedPopupWindow(hwnd);
@@ -1284,8 +1284,8 @@ void SyntheticDllRuntime::captureGuestWindowBacking(uint32_t hwnd) {
         return;
     }
     if (visualParent) {
-        auto parent = windows_.find(visualParent);
-        if (parent == windows_.end()) return;
+        auto parent = ceGwe_.windows().find(visualParent);
+        if (parent == ceGwe_.windows().end()) return;
         if (childWindow && !parent->second.parent) return;
     }
 
@@ -1314,8 +1314,8 @@ void SyntheticDllRuntime::captureGuestWindowBacking(uint32_t hwnd) {
 }
 
 bool SyntheticDllRuntime::guestWindowCoversFramebuffer(uint32_t hwnd) const {
-    auto it = windows_.find(hwnd);
-    if (it == windows_.end() || it->second.destroyed || !framebuffer_ ||
+    auto it = ceGwe_.windows().find(hwnd);
+    if (it == ceGwe_.windows().end() || it->second.destroyed || !framebuffer_ ||
         framebufferWidth_ <= 0 || framebufferHeight_ <= 0) {
         return false;
     }
@@ -1328,16 +1328,16 @@ bool SyntheticDllRuntime::guestWindowCoversFramebuffer(uint32_t hwnd) const {
 bool SyntheticDllRuntime::isWindowInOwnedPopupStack(uint32_t hwnd, uint32_t ancestor) const {
     for (uint32_t current = hwnd; current;) {
         if (current == ancestor) return true;
-        auto it = windows_.find(current);
-        if (it == windows_.end()) break;
+        auto it = ceGwe_.windows().find(current);
+        if (it == ceGwe_.windows().end()) break;
         current = it->second.parent;
     }
     return false;
 }
 
 uint32_t SyntheticDllRuntime::inferredWindowOwner(uint32_t hwnd) const {
-    auto it = windows_.find(hwnd);
-    if (it == windows_.end() || it->second.destroyed) return 0;
+    auto it = ceGwe_.windows().find(hwnd);
+    if (it == ceGwe_.windows().end() || it->second.destroyed) return 0;
     const GuestWindow& window = it->second;
     if (window.style & kWindowStyleChild) return 0;
     if (window.parent) return window.parent;
@@ -1346,7 +1346,7 @@ uint32_t SyntheticDllRuntime::inferredWindowOwner(uint32_t hwnd) const {
 
     uint32_t best = 0;
     uint64_t bestZ = 0;
-    for (const auto& [candidateHwnd, candidate] : windows_) {
+    for (const auto& [candidateHwnd, candidate] : ceGwe_.windows()) {
         if (candidateHwnd == hwnd || candidate.destroyed || !candidate.visible) continue;
         if (window.ownerThread && candidate.ownerThread && candidate.ownerThread != window.ownerThread) continue;
         if (candidate.parent || (candidate.style & kWindowStyleChild)) continue;
@@ -1358,7 +1358,7 @@ uint32_t SyntheticDllRuntime::inferredWindowOwner(uint32_t hwnd) const {
         }
     }
     if (best) return best;
-    for (const auto& [candidateHwnd, candidate] : windows_) {
+    for (const auto& [candidateHwnd, candidate] : ceGwe_.windows()) {
         if (candidateHwnd == hwnd || candidate.destroyed || !candidate.visible) continue;
         if (window.ownerThread && candidate.ownerThread && candidate.ownerThread != window.ownerThread) continue;
         if (candidate.style & kWindowStyleChild) continue;
@@ -1375,9 +1375,9 @@ uint32_t SyntheticDllRuntime::inferredWindowOwner(uint32_t hwnd) const {
 uint32_t SyntheticDllRuntime::rootWindowForStack(uint32_t hwnd) const {
     uint32_t root = hwnd;
     uint32_t current = hwnd;
-    for (size_t guard = 0; current && guard < windows_.size() + 1; ++guard) {
-        auto it = windows_.find(current);
-        if (it == windows_.end()) break;
+    for (size_t guard = 0; current && guard < ceGwe_.windows().size() + 1; ++guard) {
+        auto it = ceGwe_.windows().find(current);
+        if (it == ceGwe_.windows().end()) break;
         root = current;
         if (it->second.style & kWindowStyleChild) {
             current = it->second.parent;
@@ -1393,8 +1393,8 @@ bool SyntheticDllRuntime::isWindowInGweStack(uint32_t hwnd, uint32_t ancestor) c
     if (ceGwe_.isWindowInStack(hwnd, ancestor)) return true;
     for (uint32_t current = hwnd; current;) {
         if (current == ancestor) return true;
-        auto it = windows_.find(current);
-        if (it == windows_.end()) break;
+        auto it = ceGwe_.windows().find(current);
+        if (it == ceGwe_.windows().end()) break;
         current = (it->second.style & kWindowStyleChild) ? it->second.parent : inferredWindowOwner(current);
     }
     return false;
@@ -1414,8 +1414,8 @@ size_t SyntheticDllRuntime::discardQueuedPointerMessagesForWindowStack(uint32_t 
 }
 
 uint32_t SyntheticDllRuntime::repaintOwnerAfterStackChange(uint32_t hwnd, bool eraseHiddenWindow) {
-    auto it = windows_.find(hwnd);
-    if (it == windows_.end()) return 0;
+    auto it = ceGwe_.windows().find(hwnd);
+    if (it == ceGwe_.windows().end()) return 0;
     const uint32_t owner = inferredWindowOwner(hwnd);
     const uint32_t parent = it->second.parent;
     const uint32_t repaintTarget = parent ? parent : owner;
@@ -1436,16 +1436,16 @@ uint32_t SyntheticDllRuntime::coveringFullScreenOwnedPopup(uint32_t hwnd) const 
         bool traversedChild = false;
         for (uint32_t current = targetHwnd; current;) {
             if (current == ownerHwnd) return traversedChild;
-            auto it = windows_.find(current);
-            if (it == windows_.end() || !(it->second.style & kWindowStyleChild)) break;
+            auto it = ceGwe_.windows().find(current);
+            if (it == ceGwe_.windows().end() || !(it->second.style & kWindowStyleChild)) break;
             traversedChild = true;
             current = it->second.parent;
         }
         return false;
     };
     for (uint32_t popupHwnd : orderedWindowsTopToBottom()) {
-        const auto it = windows_.find(popupHwnd);
-        if (it == windows_.end()) continue;
+        const auto it = ceGwe_.windows().find(popupHwnd);
+        if (it == ceGwe_.windows().end()) continue;
         const GuestWindow& popup = it->second;
         if (popup.destroyed || !popup.visible ||
             !isOwnedPopupWindow(popupHwnd) || !guestWindowCoversFramebuffer(popupHwnd)) {
@@ -1461,14 +1461,14 @@ uint32_t SyntheticDllRuntime::coveringFullScreenOwnedPopup(uint32_t hwnd) const 
 }
 
 void SyntheticDllRuntime::retireOlderFullScreenOwnedPopupsForPopup(uint32_t popupHwnd) {
-    auto target = windows_.find(popupHwnd);
-    if (target == windows_.end() || target->second.destroyed || !target->second.visible ||
+    auto target = ceGwe_.windows().find(popupHwnd);
+    if (target == ceGwe_.windows().end() || target->second.destroyed || !target->second.visible ||
         !isOwnedPopupWindow(popupHwnd) || !guestWindowCoversFramebuffer(popupHwnd)) {
         return;
     }
 
     std::vector<uint32_t> retired;
-    for (auto& [hwnd, window] : windows_) {
+    for (auto& [hwnd, window] : ceGwe_.windows()) {
         if (window.zOrder >= target->second.zOrder || window.destroyed || !window.visible ||
             !isOwnedPopupWindow(hwnd) || !guestWindowCoversFramebuffer(hwnd)) {
             continue;
@@ -1507,7 +1507,7 @@ bool SyntheticDllRuntime::restoreGuestWindowBacking(uint32_t hwnd,
                    x + candidate.width >= framebufferWidth_ &&
                    y + candidate.height >= framebufferHeight_;
         };
-        for (const auto& [candidateHwnd, candidate] : windows_) {
+        for (const auto& [candidateHwnd, candidate] : ceGwe_.windows()) {
             if (candidate.zOrder > windowZOrder(hwnd) && !candidate.destroyed && candidate.visible &&
                 candidate.parent && !(candidate.style & kWindowStyleChild) && coversFramebuffer(candidate)) {
                 spdlog::info("skipped stale full-screen owned popup backing restore hwnd=0x{:08x} newer=0x{:08x}",
@@ -1559,17 +1559,17 @@ void SyntheticDllRuntime::eraseGuestWindowArea(uint32_t hwnd, const GuestWindow&
         window.width <= 0 || window.height <= 0) {
         return;
     }
-    auto mutableWindow = windows_.find(hwnd);
+    auto mutableWindow = ceGwe_.windows().find(hwnd);
     const bool childWindow = (window.style & kWindowStyleChild) != 0;
     constexpr uint32_t kWindowStylePopup = 0x80000000u;
     const bool ownerStackPopup =
         !childWindow && (window.style & kWindowStylePopup) &&
         (window.parent || inferredWindowOwner(hwnd));
-    if (mutableWindow != windows_.end() && childWindow) {
+    if (mutableWindow != ceGwe_.windows().end() && childWindow) {
         mutableWindow->second.backingValid = false;
         mutableWindow->second.backingPixels.clear();
     }
-    if (mutableWindow != windows_.end() && ownerStackPopup) {
+    if (mutableWindow != ceGwe_.windows().end() && ownerStackPopup) {
         if (guestWindowCoversFramebuffer(hwnd) &&
             restoreGuestWindowBacking(hwnd, mutableWindow->second)) {
             return;
@@ -1580,7 +1580,7 @@ void SyntheticDllRuntime::eraseGuestWindowArea(uint32_t hwnd, const GuestWindow&
                       hwnd);
         return;
     }
-    if (mutableWindow != windows_.end() && !childWindow &&
+    if (mutableWindow != ceGwe_.windows().end() && !childWindow &&
         restoreGuestWindowBacking(hwnd, mutableWindow->second)) {
         return;
     }
@@ -1589,16 +1589,16 @@ void SyntheticDllRuntime::eraseGuestWindowArea(uint32_t hwnd, const GuestWindow&
         return;
     }
     if (window.parent) {
-        auto parent = windows_.find(window.parent);
-        if (parent != windows_.end() && !parent->second.parent) return;
+        auto parent = ceGwe_.windows().find(window.parent);
+        if (parent != ceGwe_.windows().end() && !parent->second.parent) return;
     }
     uint32_t pixel = 0xff000000u;
     if (window.parent) {
-        auto parent = windows_.find(window.parent);
-        if (parent != windows_.end()) {
-            auto cls = windowClassesByName_.find(parent->second.className);
+        auto parent = ceGwe_.windows().find(window.parent);
+        if (parent != ceGwe_.windows().end()) {
+            auto cls = ceGwe_.windowClassesByName().find(parent->second.className);
             uint32_t brushHandle = 0;
-            if (cls != windowClassesByName_.end()) {
+            if (cls != ceGwe_.windowClassesByName().end()) {
                 std::memcpy(&brushHandle, cls->second.bytes.data() + 28, sizeof(brushHandle));
             }
             auto brush = brushes_.find(brushHandle);
@@ -1616,36 +1616,36 @@ void SyntheticDllRuntime::eraseGuestWindowArea(uint32_t hwnd, const GuestWindow&
 bool SyntheticDllRuntime::isWindowOrDescendant(uint32_t hwnd, uint32_t ancestor) const {
     for (uint32_t current = hwnd; current;) {
         if (current == ancestor) return true;
-        auto it = windows_.find(current);
-        if (it == windows_.end()) break;
+        auto it = ceGwe_.windows().find(current);
+        if (it == ceGwe_.windows().end()) break;
         current = (it->second.style & kWindowStyleChild) ? it->second.parent : 0;
     }
     return false;
 }
 
 bool SyntheticDllRuntime::isOwnedPopupWindow(uint32_t hwnd) const {
-    auto it = windows_.find(hwnd);
-    return it != windows_.end() && it->second.parent &&
+    auto it = ceGwe_.windows().find(hwnd);
+    return it != ceGwe_.windows().end() && it->second.parent &&
            !(it->second.style & kWindowStyleChild);
 }
 
 bool SyntheticDllRuntime::isTopLevelPopupWindow(uint32_t hwnd) const {
-    auto it = windows_.find(hwnd);
+    auto it = ceGwe_.windows().find(hwnd);
     constexpr uint32_t kWindowStylePopup = 0x80000000u;
-    return it != windows_.end() && !it->second.parent &&
+    return it != ceGwe_.windows().end() && !it->second.parent &&
            (it->second.style & kWindowStylePopup);
 }
 
 bool SyntheticDllRuntime::hasCoveringRootPopup(uint32_t hwnd) const {
-    auto target = windows_.find(hwnd);
-    if (target == windows_.end() || target->second.destroyed || isOwnedPopupWindow(hwnd)) return false;
+    auto target = ceGwe_.windows().find(hwnd);
+    if (target == ceGwe_.windows().end() || target->second.destroyed || isOwnedPopupWindow(hwnd)) return false;
 
     uint32_t current = hwnd;
     uint32_t root = hwnd;
     bool nestedChild = false;
     while (current) {
-        auto it = windows_.find(current);
-        if (it == windows_.end()) break;
+        auto it = ceGwe_.windows().find(current);
+        if (it == ceGwe_.windows().end()) break;
         if (it->second.style & kWindowStyleChild) {
             nestedChild = true;
             root = it->second.parent;
@@ -1655,8 +1655,8 @@ bool SyntheticDllRuntime::hasCoveringRootPopup(uint32_t hwnd) const {
             break;
         }
     }
-    auto rootWindow = windows_.find(root);
-    if (!nestedChild || rootWindow == windows_.end() || rootWindow->second.destroyed ||
+    auto rootWindow = ceGwe_.windows().find(root);
+    if (!nestedChild || rootWindow == ceGwe_.windows().end() || rootWindow->second.destroyed ||
         rootWindow->second.parent) {
         return false;
     }
@@ -1668,7 +1668,7 @@ bool SyntheticDllRuntime::hasCoveringRootPopup(uint32_t hwnd) const {
     const auto [rootX, rootY] = guestWindowOrigin(root);
     const int32_t rootRight = rootX + rootWindow->second.width;
     const int32_t rootBottom = rootY + rootWindow->second.height;
-    for (const auto& [popupHwnd, popup] : windows_) {
+    for (const auto& [popupHwnd, popup] : ceGwe_.windows()) {
         if (popup.zOrder <= target->second.zOrder) continue;
         if (!popup.visible || popup.destroyed || popup.parent != root ||
             (popup.style & kWindowStyleChild)) {
@@ -1696,7 +1696,7 @@ void SyntheticDllRuntime::pumpHostMessages() {
 
 void SyntheticDllRuntime::enqueueDueTimers() {
     const uint64_t now = hostTickMilliseconds();
-    for (auto& [key, timer] : timers_) {
+    for (auto& [key, timer] : ceGwe_.timers()) {
         (void)key;
         if (timer.intervalMs == 0 || now < timer.nextDueMs) continue;
         const bool alreadyQueued = ceGwe_.anyMessage([&](const GuestMessage& queued) {
@@ -1720,10 +1720,10 @@ void SyntheticDllRuntime::enqueueDueTimers() {
 }
 
 uint32_t SyntheticDllRuntime::timerWaitMilliseconds() const {
-    if (timers_.empty()) return 50;
+    if (ceGwe_.timers().empty()) return 50;
     const uint64_t now = hostTickMilliseconds();
     uint64_t best = 50;
-    for (const auto& [key, timer] : timers_) {
+    for (const auto& [key, timer] : ceGwe_.timers()) {
         (void)key;
         if (timer.nextDueMs <= now) return 1;
         best = std::min<uint64_t>(best, timer.nextDueMs - now);
@@ -1733,8 +1733,8 @@ uint32_t SyntheticDllRuntime::timerWaitMilliseconds() const {
 
 uint32_t SyntheticDllRuntime::windowAtPoint(uint32_t rootGuestHwnd, int32_t x, int32_t y,
                                             int32_t& clientX, int32_t& clientY) const {
-    auto root = windows_.find(rootGuestHwnd);
-    if (root == windows_.end() || root->second.destroyed) rootGuestHwnd = 0;
+    auto root = ceGwe_.windows().find(rootGuestHwnd);
+    if (root == ceGwe_.windows().end() || root->second.destroyed) rootGuestHwnd = 0;
     const CeGwe::HitTestResult hit = ceGwe_.hitTest(rootGuestHwnd, x, y);
     clientX = hit.clientX;
     clientY = hit.clientY;
@@ -1775,10 +1775,10 @@ void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t
         }
         return;
     }
-    auto root = windows_.find(rootGuestHwnd);
-    if (root == windows_.end() || root->second.destroyed) {
-        auto presenterRoot = windows_.find(hostPresenterGuestHwnd_);
-        if (presenterRoot != windows_.end() && !presenterRoot->second.destroyed) {
+    auto root = ceGwe_.windows().find(rootGuestHwnd);
+    if (root == ceGwe_.windows().end() || root->second.destroyed) {
+        auto presenterRoot = ceGwe_.windows().find(hostPresenterGuestHwnd_);
+        if (presenterRoot != ceGwe_.windows().end() && !presenterRoot->second.destroyed) {
             spdlog::info("rebased host mouse root from destroyed guest HWND=0x{:08x} to presenter guest HWND=0x{:08x}",
                          rootGuestHwnd, hostPresenterGuestHwnd_);
             rootGuestHwnd = hostPresenterGuestHwnd_;
@@ -1792,8 +1792,8 @@ void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t
     auto ownedPopupRootForInput = [&](uint32_t target) {
         for (uint32_t current = target; current;) {
             if (isOwnedPopupWindow(current)) return current;
-            auto window = windows_.find(current);
-            if (window == windows_.end()) break;
+            auto window = ceGwe_.windows().find(current);
+            if (window == ceGwe_.windows().end()) break;
             current = window->second.parent;
         }
         return 0u;
@@ -1802,8 +1802,8 @@ void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t
         const uint32_t popupRoot = ownedPopupRootForInput(capturedHwnd);
         bool abovePopupRoot = false;
         for (uint32_t current = capturedHwnd; current;) {
-            auto window = windows_.find(current);
-            if (window == windows_.end() || window->second.destroyed ||
+            auto window = ceGwe_.windows().find(current);
+            if (window == ceGwe_.windows().end() || window->second.destroyed ||
                 !ceGwe_.visibleRectForWindow(current) ||
                 (!window->second.enabled && !abovePopupRoot)) {
                 return false;
@@ -1814,15 +1814,15 @@ void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t
         return true;
     };
     if (message == kGuestWmLButtonUp && hostPointerCaptureWindow_) {
-        auto captured = windows_.find(hostPointerCaptureWindow_);
-        if (captured != windows_.end() && canUseCapturedWindow(hostPointerCaptureWindow_)) {
+        auto captured = ceGwe_.windows().find(hostPointerCaptureWindow_);
+        if (captured != ceGwe_.windows().end() && canUseCapturedWindow(hostPointerCaptureWindow_)) {
             hwnd = hostPointerCaptureWindow_;
         } else {
             hostPointerCaptureWindow_ = 0;
         }
     } else if (message != kGuestWmLButtonDown && capturedWindow_) {
-        auto captured = windows_.find(capturedWindow_);
-        if (captured != windows_.end() && canUseCapturedWindow(capturedWindow_)) {
+        auto captured = ceGwe_.windows().find(capturedWindow_);
+        if (captured != ceGwe_.windows().end() && canUseCapturedWindow(capturedWindow_)) {
             hwnd = capturedWindow_;
         } else {
             capturedWindow_ = 0;
@@ -1846,9 +1846,9 @@ void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t
         return;
     }
     if (message == kGuestWmMouseMove) {
-        if (hasQueuedPointer || !pendingMessageTransfers_.empty()) {
+        if (hasQueuedPointer || !ceGwe_.pendingMessageTransfers().empty()) {
             spdlog::debug("discarded host mouse move while pointer dispatch is in flight hwnd=0x{:08x} point={},{} queued={} transfers={}",
-                          hwnd, hostX, hostY, ceGwe_.messageCount(), pendingMessageTransfers_.size());
+                          hwnd, hostX, hostY, ceGwe_.messageCount(), ceGwe_.pendingMessageTransfers().size());
             return;
         }
         if (hostPointerCaptureWindow_) {
@@ -1883,8 +1883,8 @@ void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t
         return;
     }
 
-    auto targetWindow = windows_.find(hwnd);
-    if (targetWindow != windows_.end() && !targetWindow->second.parent &&
+    auto targetWindow = ceGwe_.windows().find(hwnd);
+    if (targetWindow != ceGwe_.windows().end() && !targetWindow->second.parent &&
         hwnd != rootGuestHwnd && (targetWindow->second.style & 0x80000000u) &&
         !ceGwe_.visibleRegionContainsPoint(hwnd, hostX, hostY)) {
         if (message == kGuestWmLButtonUp && hostPointerCaptureWindow_ == hwnd) {
@@ -1898,8 +1898,8 @@ void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t
     const uint32_t popupRoot = ownedPopupRootForInput(hwnd);
     bool abovePopupRoot = false;
     for (uint32_t current = hwnd; current;) {
-        auto window = windows_.find(current);
-        if (window == windows_.end()) break;
+        auto window = ceGwe_.windows().find(current);
+        if (window == ceGwe_.windows().end()) break;
         if (!window->second.enabled && !abovePopupRoot) {
             if (message == kGuestWmLButtonUp && hostPointerCaptureWindow_ == hwnd) {
                 hostPointerCaptureWindow_ = 0;
@@ -1916,8 +1916,8 @@ void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t
         int32_t x = 0;
         int32_t y = 0;
         for (uint32_t current = target; current;) {
-            auto it = windows_.find(current);
-            if (it == windows_.end()) break;
+            auto it = ceGwe_.windows().find(current);
+            if (it == ceGwe_.windows().end()) break;
             x += it->second.x;
             y += it->second.y;
             current = (it->second.style & kWindowStyleChild) ? it->second.parent : 0;
@@ -1960,8 +1960,8 @@ void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t
         hostPointerLastMoveY_ = hostY;
         hostPointerDragActive_ = false;
         if (focusedWindow_ != hwnd) {
-            auto focused = windows_.find(focusedWindow_);
-            if (focused != windows_.end() && !focused->second.destroyed) {
+            auto focused = ceGwe_.windows().find(focusedWindow_);
+            if (focused != ceGwe_.windows().end() && !focused->second.destroyed) {
                 queueInputMessage({focusedWindow_, 0x0008, hwnd, 0, uint32_t(++tick_ * 16), 0, 0});
             }
             queueInputMessage({hwnd, 0x0007, focusedWindow_, 0, uint32_t(++tick_ * 16), 0, 0});
@@ -1971,8 +1971,8 @@ void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t
         if (pendingSyntheticChildButtonUpWindow_) {
             const uint32_t childHwnd = pendingSyntheticChildButtonUpWindow_;
             pendingSyntheticChildButtonUpWindow_ = 0;
-            auto child = windows_.find(childHwnd);
-            if (child != windows_.end() && !child->second.destroyed) {
+            auto child = ceGwe_.windows().find(childHwnd);
+            if (child != ceGwe_.windows().end() && !child->second.destroyed) {
                 GuestMessage childUp{};
                 childUp.hwnd = childHwnd;
                 childUp.message = kGuestWmLButtonUp;
@@ -2007,7 +2007,7 @@ void SyntheticDllRuntime::queueHostMouseMessage(uint32_t rootGuestHwnd, uint32_t
 
 bool SyntheticDllRuntime::hasHostWindows() const {
 #if defined(_WIN32)
-    for (const auto& [guestHwnd, window] : windows_) {
+    for (const auto& [guestHwnd, window] : ceGwe_.windows()) {
         (void)guestHwnd;
         HWND hwnd = reinterpret_cast<HWND>(window.hostHwnd);
         if (hwnd && IsWindow(hwnd)) return true;
@@ -2037,7 +2037,7 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
                      int(hookErr), uc_strerror(hookErr));
     }
     if (showHostWindows) {
-        for (auto& [guestHwnd, window] : windows_) {
+        for (auto& [guestHwnd, window] : ceGwe_.windows()) {
             (void)guestHwnd;
             HWND hwnd = reinterpret_cast<HWND>(window.hostHwnd);
             if (!hwnd || !IsWindow(hwnd)) continue;
@@ -2231,8 +2231,8 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
         const auto elapsedMs =
             std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - sliceStart).count();
         if (elapsedMs >= 250) {
-            const uint32_t owner = servicingMessageTransfer && !pendingMessageTransfers_.empty()
-                ? pendingMessageTransfers_.back().ownerThread
+            const uint32_t owner = servicingMessageTransfer && !ceGwe_.pendingMessageTransfers().empty()
+                ? ceGwe_.pendingMessageTransfers().back().ownerThread
                 : ceGwe_.oldestPendingOwner().value_or(0);
             const auto ownerQueue = ceGwe_.ownerQueueSnapshot(owner);
             spdlog::info("long guest slice reason={} activeThread=0x{:08x} budget={} startPc=0x{:08x} pc=0x{:08x} ra=0x{:08x} queued={} owner=0x{:08x} ownerPosted={} ownerSent={} ownerInput={} ownerTimer={}",
@@ -2242,8 +2242,8 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
         }
         const bool mainOwnedMessageTransfer =
             servicingMessageTransfer &&
-            !pendingMessageTransfers_.empty() &&
-            pendingMessageTransfers_.back().ownerThread == ceKernel_.mainThreadPseudoHandle();
+            !ceGwe_.pendingMessageTransfers().empty() &&
+            ceGwe_.pendingMessageTransfers().back().ownerThread == ceKernel_.mainThreadPseudoHandle();
         if (stoppedByWatchdog && mainOwnedMessageTransfer && ceKernel_.activeGuestThread()) {
             const uint32_t displacedThread = ceKernel_.activeGuestThread();
             ceKernel_.mainThreadContext() = captureGuestCpuContext();
@@ -2335,7 +2335,7 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
             threads << " sleep=" << std::dec << thread.sleepUntilMs;
         }
         spdlog::info("guest scheduler diag where={} active=0x{:08x} queued={} timers={} threads=[{}]",
-                     where, ceKernel_.activeGuestThread(), ceGwe_.messageCount(), timers_.size(), threads.str());
+                     where, ceKernel_.activeGuestThread(), ceGwe_.messageCount(), ceGwe_.timers().size(), threads.str());
     };
     auto resumeReadyBlockingMain = [&]() -> bool {
         if (ceKernel_.activeGuestThread() ||
@@ -2353,7 +2353,7 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
     auto resumeQueuedWorkerBurst = [&]() -> bool {
         if (!ceGwe_.hasMessages() || !hasHostWindows() ||
             hasPendingUserInput() || hasPendingSynchronousMessage() ||
-            !pendingMessageTransfers_.empty()) {
+            !ceGwe_.pendingMessageTransfers().empty()) {
             return true;
         }
         if (ceGwe_.oldestPendingOwner()) {
@@ -2423,12 +2423,12 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
         if (ceGwe_.hasMessages()) {
             beginHostUiBatchPresentDeferral();
         }
-        if (!pendingMessageTransfers_.empty()) {
-            const uint32_t transferOwner = pendingMessageTransfers_.back().ownerThread;
+        if (!ceGwe_.pendingMessageTransfers().empty()) {
+            const uint32_t transferOwner = ceGwe_.pendingMessageTransfers().back().ownerThread;
             if (transferOwner == ceKernel_.mainThreadPseudoHandle() &&
                 !pendingBlockingApis_.empty()) {
                 spdlog::debug("deferring main-owned message transfer while main wait is parked queued={} transfers={}",
-                              ceGwe_.messageCount(), pendingMessageTransfers_.size());
+                              ceGwe_.messageCount(), ceGwe_.pendingMessageTransfers().size());
                 if (!runWorkerWhileMainBlocked("blocked-main-message-transfer", 5000000)) {
                     return;
                 }

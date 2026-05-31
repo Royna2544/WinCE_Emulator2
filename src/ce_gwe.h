@@ -203,6 +203,22 @@ public:
 
     std::deque<GuestMessage>& messages() noexcept { return messages_; }
     const std::deque<GuestMessage>& messages() const noexcept { return messages_; }
+    std::map<std::string, GuestWindowClass>& windowClassesByName() noexcept { return windowClassesByName_; }
+    const std::map<std::string, GuestWindowClass>& windowClassesByName() const noexcept { return windowClassesByName_; }
+    std::map<uint16_t, std::string>& windowClassNamesByAtom() noexcept { return windowClassNamesByAtom_; }
+    const std::map<uint16_t, std::string>& windowClassNamesByAtom() const noexcept { return windowClassNamesByAtom_; }
+    std::map<uint32_t, GuestWindow>& windows() noexcept { return windows_; }
+    const std::map<uint32_t, GuestWindow>& windows() const noexcept { return windows_; }
+    std::map<uint64_t, GuestTimer>& timers() noexcept { return timers_; }
+    const std::map<uint64_t, GuestTimer>& timers() const noexcept { return timers_; }
+    std::vector<PendingDestroyWindow>& pendingDestroyWindows() noexcept { return pendingDestroyWindows_; }
+    const std::vector<PendingDestroyWindow>& pendingDestroyWindows() const noexcept { return pendingDestroyWindows_; }
+    std::vector<PendingCreateWindow>& pendingCreateWindows() noexcept { return pendingCreateWindows_; }
+    const std::vector<PendingCreateWindow>& pendingCreateWindows() const noexcept { return pendingCreateWindows_; }
+    std::vector<PendingUpdateWindow>& pendingUpdateWindows() noexcept { return pendingUpdateWindows_; }
+    const std::vector<PendingUpdateWindow>& pendingUpdateWindows() const noexcept { return pendingUpdateWindows_; }
+    std::vector<PendingMessageTransfer>& pendingMessageTransfers() noexcept { return pendingMessageTransfers_; }
+    const std::vector<PendingMessageTransfer>& pendingMessageTransfers() const noexcept { return pendingMessageTransfers_; }
     size_t messageCount() const noexcept { return messages_.size(); }
     bool hasMessages() const noexcept { return !messages_.empty(); }
     void ensureThreadQueue(uint32_t ownerThread) {
@@ -673,6 +689,14 @@ private:
     }
 
     std::deque<GuestMessage> messages_;
+    std::map<std::string, GuestWindowClass> windowClassesByName_;
+    std::map<uint16_t, std::string> windowClassNamesByAtom_;
+    std::map<uint32_t, GuestWindow> windows_;
+    std::map<uint64_t, GuestTimer> timers_;
+    std::vector<PendingDestroyWindow> pendingDestroyWindows_;
+    std::vector<PendingCreateWindow> pendingCreateWindows_;
+    std::vector<PendingUpdateWindow> pendingUpdateWindows_;
+    std::vector<PendingMessageTransfer> pendingMessageTransfers_;
     std::map<uint32_t, ThreadQueue> threadQueues_;
     std::map<uint32_t, uint32_t> windowOwners_;
     std::map<uint32_t, WindowRegionState> windowRegions_;

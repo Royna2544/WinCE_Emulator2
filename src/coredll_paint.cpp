@@ -40,8 +40,8 @@ void SyntheticDllRuntime::registerCoredllPaintExports(SyntheticModule& module) {
 
 bool SyntheticDllRuntime::handleBeginPaint(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
     (void)code;
-    auto it = windows_.find(args.a0);
-    if (it == windows_.end()) {
+    auto it = ceGwe_.windows().find(args.a0);
+    if (it == ceGwe_.windows().end()) {
         lastError_ = 1400;
         ret = 0;
     } else {
@@ -77,7 +77,7 @@ bool SyntheticDllRuntime::handleEndPaint(SyntheticExportCode code, const GuestCa
         dcs_.erase(hdc);
         ceKernel_.handles().erase(hdc);
     }
-    ret = windows_.count(args.a0) ? 1 : 0;
+    ret = ceGwe_.windows().count(args.a0) ? 1 : 0;
     lastError_ = ret ? 0 : 1400;
     if (ret) {
         ceGwe_.validateWindow(args.a0);
@@ -110,7 +110,7 @@ void SyntheticDllRuntime::applyPaintUpdateClip(uint32_t hwnd, uint32_t hdc) {
 
 bool SyntheticDllRuntime::handleGetDC(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
     (void)code;
-    if (args.a0 && !windows_.count(args.a0)) {
+    if (args.a0 && !ceGwe_.windows().count(args.a0)) {
         lastError_ = 1400;
         ret = 0;
     } else {
@@ -198,7 +198,7 @@ bool SyntheticDllRuntime::handleReleaseDC(SyntheticExportCode code, const GuestC
 
 bool SyntheticDllRuntime::handleValidateRect(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
     (void)code;
-    ret = windows_.count(args.a0) ? 1 : 0;
+    ret = ceGwe_.windows().count(args.a0) ? 1 : 0;
     if (ret) ceGwe_.validateWindow(args.a0);
     lastError_ = ret ? 0 : 1400;
     return true;

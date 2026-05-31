@@ -485,6 +485,11 @@ results, or timing thresholds.
   - [x] Move legacy runtime window class/window/timer and pending
     create/destroy/update/message-transfer type definitions into `CeGwe`,
     keeping runtime aliases and storage unchanged for this buildable step.
+  - [x] Move runtime window class tables, window records, timer records, and
+    pending create/destroy/update/message-transfer storage behind `CeGwe`,
+    preserving current runtime orchestration and call-site behavior.
+    Current source anchors: `src/ce_gwe.h`, `src/synthetic_dll.cpp`,
+    `src/coredll_named_dispatch.cpp`, and `src/coredll_window_runtime.cpp`.
 - [ ] Move `GuestDc`, `GuestBitmap`, GDI objects, stock objects, palettes,
   clip state, and window bitmap state behind `CeMgdi`.
   - [x] Move legacy runtime DC, bitmap, brush, pen, font, and bitmap-probe type

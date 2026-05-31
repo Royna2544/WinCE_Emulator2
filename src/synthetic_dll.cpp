@@ -620,8 +620,8 @@ void SyntheticDllRuntime::hookBasicBlock(uc_engine* uc, uint64_t address, uint32
                               runtime->interactiveSliceInstructionBudget_, uint32_t(address), pc, ra,
                               runtime->ceGwe_.messageCount());
             } else {
-                const uint32_t owner = !runtime->pendingMessageTransfers_.empty()
-                    ? runtime->pendingMessageTransfers_.back().ownerThread
+                const uint32_t owner = !runtime->ceGwe_.pendingMessageTransfers().empty()
+                    ? runtime->ceGwe_.pendingMessageTransfers().back().ownerThread
                     : runtime->ceGwe_.oldestPendingOwner().value_or(0);
                 const auto ownerQueue = runtime->ceGwe_.ownerQueueSnapshot(owner);
                 spdlog::info("guest slice watchdog stop reason={} stopCause=deadline activeThread=0x{:08x} budget={} block=0x{:08x} pc=0x{:08x} ra=0x{:08x} queued={} owner=0x{:08x} ownerPosted={} ownerSent={} ownerInput={} ownerTimer={} transferStops={}",
@@ -652,9 +652,9 @@ uint32_t SyntheticDllRuntime::closeGuestHandle(uint32_t guestHandle) {
         return 0;
     }
     if (it->second.kind == GuestHandle::Kind::GuestWindow) {
-        auto window = windows_.find(guestHandle);
-        if (window != windows_.end()) destroyHostWindow(window->second);
-        windows_.erase(guestHandle);
+        auto window = ceGwe_.windows().find(guestHandle);
+        if (window != ceGwe_.windows().end()) destroyHostWindow(window->second);
+        ceGwe_.windows().erase(guestHandle);
         crossProcessBroker_.forgetImportedWindow(guestHandle);
     } else if (it->second.kind == GuestHandle::Kind::GuestDc) {
         dcs_.erase(guestHandle);
@@ -1305,14 +1305,14 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
     auto finalizeDestroyedWindow = [&](uint32_t hwnd,
                                        std::optional<bool> visibleOverride = std::nullopt,
                                        std::optional<uint32_t> parentOverride = std::nullopt) {
-        auto it = windows_.find(hwnd);
-        if (it == windows_.end()) return;
+        auto it = ceGwe_.windows().find(hwnd);
+        if (it == ceGwe_.windows().end()) return;
         const bool wasVisible = visibleOverride.value_or(it->second.visible);
         const uint32_t parent = parentOverride.value_or(it->second.parent);
         const bool exposesCoveredWindows =
             wasVisible && isOwnedPopupWindow(hwnd) && guestWindowCoversFramebuffer(hwnd);
-        for (auto timer = timers_.begin(); timer != timers_.end();) {
-            if (timer->second.hwnd == hwnd) timer = timers_.erase(timer);
+        for (auto timer = ceGwe_.timers().begin(); timer != ceGwe_.timers().end();) {
+            if (timer->second.hwnd == hwnd) timer = ceGwe_.timers().erase(timer);
             else ++timer;
         }
         if (focusedWindow_ == hwnd) focusedWindow_ = 0;
@@ -1335,7 +1335,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
         }
         if (exposesCoveredWindows) {
             size_t exposed = 0;
-            for (const auto& [otherHwnd, window] : windows_) {
+            for (const auto& [otherHwnd, window] : ceGwe_.windows()) {
                 if (otherHwnd == hwnd || window.destroyed || !window.visible) continue;
                 queueGuestPaint(otherHwnd, true);
                 ++exposed;
@@ -1352,18 +1352,18 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
     };
 
     if (isCoredll && pc == destroyWindowContinuationStub_) {
-        if (pendingDestroyWindows_.empty()) {
+        if (ceGwe_.pendingDestroyWindows().empty()) {
             spdlog::warn("DestroyWindow continuation reached with no pending window");
             setReg(UC_MIPS_REG_V0, 1);
             setReg(UC_MIPS_REG_PC, normalizeGuestCodeAddress(ra, name.c_str()));
             return;
         }
-        auto& pending = pendingDestroyWindows_.back();
+        auto& pending = ceGwe_.pendingDestroyWindows().back();
         if (pending.stage == 0) {
             pending.stage = 1;
             uint32_t wndProc = pending.wndProc;
-            auto window = windows_.find(pending.hwnd);
-            if (window != windows_.end() && window->second.wndProc) wndProc = window->second.wndProc;
+            auto window = ceGwe_.windows().find(pending.hwnd);
+            if (window != ceGwe_.windows().end() && window->second.wndProc) wndProc = window->second.wndProc;
             wndProc = translatedWndProc(wndProc, "DestroyWindow");
             spdlog::info("DestroyWindow synchronous WM_NCDESTROY hwnd=0x{:08x} wndproc=0x{:08x}",
                          pending.hwnd, wndProc);
@@ -1382,7 +1382,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
         const uint32_t originalGp = pending.originalGp;
         const uint32_t parent = pending.parent;
         const bool wasVisible = pending.wasVisible;
-        pendingDestroyWindows_.pop_back();
+        ceGwe_.pendingDestroyWindows().pop_back();
         finalizeDestroyedWindow(hwnd, wasVisible, parent);
         lastError_ = 0;
         setReg(UC_MIPS_REG_V0, 1);
@@ -1395,20 +1395,20 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
     }
 
     if (isCoredll && pc == createWindowContinuationStub_) {
-        if (pendingCreateWindows_.empty()) {
+        if (ceGwe_.pendingCreateWindows().empty()) {
             spdlog::warn("CreateWindowExW continuation reached with no pending window");
             setReg(UC_MIPS_REG_V0, 0);
             setReg(UC_MIPS_REG_PC, normalizeGuestCodeAddress(ra, name.c_str()));
             return;
         }
-        auto& pending = pendingCreateWindows_.back();
+        auto& pending = ceGwe_.pendingCreateWindows().back();
         const uint32_t wndProcResult = reg(UC_MIPS_REG_V0);
         if (pending.stage == 0) {
             if (wndProcResult == 0) {
                 const uint32_t originalRa = pending.originalRa;
                 const uint32_t originalGp = pending.originalGp;
                 const uint32_t hwnd = pending.hwnd;
-                pendingCreateWindows_.pop_back();
+                ceGwe_.pendingCreateWindows().pop_back();
                 finalizeDestroyedWindow(hwnd);
                 lastError_ = 0;
                 setReg(UC_MIPS_REG_V0, 0);
@@ -1420,9 +1420,9 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                 return;
             }
             pending.stage = 1;
-            auto window = windows_.find(pending.hwnd);
+            auto window = ceGwe_.windows().find(pending.hwnd);
             uint32_t wndProc = pending.wndProc;
-            if (window != windows_.end() && window->second.wndProc) wndProc = window->second.wndProc;
+            if (window != ceGwe_.windows().end() && window->second.wndProc) wndProc = window->second.wndProc;
             wndProc = translatedWndProc(wndProc, "CreateWindowExW");
             spdlog::info("CreateWindowExW synchronous WM_CREATE hwnd=0x{:08x} wndproc=0x{:08x}",
                          pending.hwnd, wndProc);
@@ -1439,10 +1439,10 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
         const uint32_t hwnd = pending.hwnd;
         const uint32_t originalRa = pending.originalRa;
         const uint32_t originalGp = pending.originalGp;
-        pendingCreateWindows_.pop_back();
-        auto completedWindow = windows_.find(hwnd);
+        ceGwe_.pendingCreateWindows().pop_back();
+        auto completedWindow = ceGwe_.windows().find(hwnd);
         if (wndProcResult == 0xffffffffu ||
-            completedWindow == windows_.end() ||
+            completedWindow == ceGwe_.windows().end() ||
             completedWindow->second.destroyed) {
             finalizeDestroyedWindow(hwnd);
             lastError_ = 0;
@@ -1551,17 +1551,17 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
     }
 
     if (isCoredll && pc == updateWindowContinuationStub_) {
-        if (pendingUpdateWindows_.empty()) {
+        if (ceGwe_.pendingUpdateWindows().empty()) {
             spdlog::warn("UpdateWindow continuation reached with no pending window");
             setReg(UC_MIPS_REG_V0, 1);
             setReg(UC_MIPS_REG_PC, normalizeGuestCodeAddress(ra, name.c_str()));
             return;
         }
-        auto& pending = pendingUpdateWindows_.back();
-        auto window = windows_.find(pending.hwnd);
+        auto& pending = ceGwe_.pendingUpdateWindows().back();
+        auto window = ceGwe_.windows().find(pending.hwnd);
         const std::string sourceName = pending.sourceName.empty() ? "UpdateWindow" : pending.sourceName;
         uint32_t wndProc = pending.wndProc;
-        if (window == windows_.end() || window->second.destroyed || !window->second.visible) {
+        if (window == ceGwe_.windows().end() || window->second.destroyed || !window->second.visible) {
             if (pending.deferredHostPresent) {
                 releaseHostErasePresentDeferral(pending.hwnd);
                 pending.deferredHostPresent = false;
@@ -1569,7 +1569,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
             const uint32_t originalRa = pending.originalRa;
             const uint32_t originalGp = pending.originalGp;
             const uint32_t hwnd = pending.hwnd;
-            pendingUpdateWindows_.pop_back();
+            ceGwe_.pendingUpdateWindows().pop_back();
             lastError_ = 0;
             setReg(UC_MIPS_REG_V0, 1);
             setReg(UC_MIPS_REG_RA, originalRa);
@@ -1602,7 +1602,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
             releaseHostErasePresentDeferral(hwnd);
             pending.deferredHostPresent = false;
         }
-        pendingUpdateWindows_.pop_back();
+        ceGwe_.pendingUpdateWindows().pop_back();
         lastError_ = 0;
         setReg(UC_MIPS_REG_V0, 1);
         setReg(UC_MIPS_REG_RA, originalRa);
@@ -1618,7 +1618,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
     }
 
     if (isCoredll && pc == messageTransferContinuationStub_) {
-        if (pendingMessageTransfers_.empty()) {
+        if (ceGwe_.pendingMessageTransfers().empty()) {
             spdlog::error("message transfer continuation reached with no pending message pc=0x{:08x} ra=0x{:08x} "
                           "v0=0x{:08x} queued={} activeThread=0x{:08x}",
                           pc, ra, reg(UC_MIPS_REG_V0), ceGwe_.messageCount(), ceKernel_.activeGuestThread());
@@ -1636,8 +1636,8 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
             }
             return;
         }
-        PendingMessageTransfer pending = pendingMessageTransfers_.back();
-        pendingMessageTransfers_.pop_back();
+        PendingMessageTransfer pending = ceGwe_.pendingMessageTransfers().back();
+        ceGwe_.pendingMessageTransfers().pop_back();
         const uint32_t wndProcResult = reg(UC_MIPS_REG_V0);
         const uint64_t completedMs = hostTickMilliseconds();
         const uint64_t transferElapsedMs =
@@ -1710,7 +1710,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                    isGuestRangeReadable(normalized, 4);
         };
         uint32_t returnRa = normalizeGuestCodeAddress(pending.originalRa, pending.sourceName.c_str());
-        if (returnRa == messageTransferContinuationStub_ && pendingMessageTransfers_.empty()) {
+        if (returnRa == messageTransferContinuationStub_ && ceGwe_.pendingMessageTransfers().empty()) {
             if (readableReturn(pending.outerReturnRa)) {
                 spdlog::warn("{} collapsed orphaned message-transfer continuation hwnd=0x{:08x} msg=0x{:08x} "
                              "result=0x{:08x} return=0x{:08x}",
@@ -1791,14 +1791,14 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                 finishImmediateReturn(0);
                 return;
             }
-            auto window = windows_.find(ret);
-            if (!ret || window == windows_.end() || !window->second.wndProc ||
+            auto window = ceGwe_.windows().find(ret);
+            if (!ret || window == ceGwe_.windows().end() || !window->second.wndProc ||
                 !window->second.createStruct || !createWindowContinuationStub_) {
                 finishImmediateReturn(ret);
                 return;
             }
             const uint32_t wndProc = translatedWndProc(window->second.wndProc, "CreateWindowExW");
-            pendingCreateWindows_.push_back(PendingCreateWindow{
+            ceGwe_.pendingCreateWindows().push_back(PendingCreateWindow{
                 ret, wndProc, ra, reg(UC_MIPS_REG_GP), window->second.createStruct, 0,
             });
             spdlog::info("CreateWindowExW synchronous WM_NCCREATE hwnd=0x{:08x} wndproc=0x{:08x} return=0x{:08x}",
@@ -1815,8 +1815,8 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
 
         }
         case 0x010B: {
-            auto it = windows_.find(a0);
-            if (it == windows_.end() || it->second.destroyed) {
+            auto it = ceGwe_.windows().find(a0);
+            if (it == ceGwe_.windows().end() || it->second.destroyed) {
                 lastError_ = 1400;
                 finishImmediateReturn(0);
                 return;
@@ -1837,7 +1837,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
             const uint32_t eraseDc = makeGuestDc(a0);
             applyPaintUpdateClip(a0, eraseDc);
             const bool deferredHostPresent = beginHostErasePresentDeferral(a0);
-            pendingUpdateWindows_.push_back(PendingUpdateWindow{
+            ceGwe_.pendingUpdateWindows().push_back(PendingUpdateWindow{
                 a0, wndProc, ra, reg(UC_MIPS_REG_GP), eraseDc, 0, deferredHostPresent, "UpdateWindow"});
             spdlog::info("UpdateWindow synchronous WM_ERASEBKGND hwnd=0x{:08x} wndproc=0x{:08x}",
                          a0, wndProc);
@@ -1853,8 +1853,8 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
 
         }
         case 0x0109: {
-            auto it = windows_.find(a0);
-            if (it == windows_.end() || it->second.destroyed) {
+            auto it = ceGwe_.windows().find(a0);
+            if (it == ceGwe_.windows().end() || it->second.destroyed) {
                 lastError_ = 1400;
                 finishImmediateReturn(0);
                 return;
@@ -1875,7 +1875,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                 finishImmediateReturn(1);
                 return;
             }
-            pendingDestroyWindows_.push_back(PendingDestroyWindow{
+            ceGwe_.pendingDestroyWindows().push_back(PendingDestroyWindow{
                 a0, wndProc, ra, reg(UC_MIPS_REG_GP), 0, parent, wasVisible});
             spdlog::info("DestroyWindow synchronous WM_DESTROY hwnd=0x{:08x} wndproc=0x{:08x} return=0x{:08x}",
                          a0, wndProc, ra);
@@ -2144,9 +2144,9 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
             if (!ceGwe_.hasMessages() && hasRunnableGuestThread()) {
                 if (parkMainWaitAndRunWorker("after-paint")) return;
             }
-            if (a1 == kInfiniteTimeout || ceGwe_.hasMessages() || !timers_.empty()) {
+            if (a1 == kInfiniteTimeout || ceGwe_.hasMessages() || !ceGwe_.timers().empty()) {
                 spdlog::debug("WaitForSingleObject parking main context wait=0x{:08x} timeout=0x{:08x} pc=0x{:08x} queued={} timers={}",
-                              a0, a1, pc, ceGwe_.messageCount(), timers_.size());
+                              a0, a1, pc, ceGwe_.messageCount(), ceGwe_.timers().size());
                 setReg(UC_MIPS_REG_PC, pc);
                 pumpHostMessages();
                 uc_emu_stop(uc_);
@@ -2386,19 +2386,19 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                     wndProc = lParam;
                     if (a0) uc_mem_read(uc_, a0 + 16, &lParam, sizeof(lParam));
                 } else {
-                    auto it = windows_.find(hwnd);
-                    wndProc = it == windows_.end() ? 0 : it->second.wndProc;
+                    auto it = ceGwe_.windows().find(hwnd);
+                    wndProc = it == ceGwe_.windows().end() ? 0 : it->second.wndProc;
                 }
             } else if (isSendMessageW) {
-                auto it = windows_.find(a0);
-                wndProc = it == windows_.end() ? 0 : it->second.wndProc;
+                auto it = ceGwe_.windows().find(a0);
+                wndProc = it == ceGwe_.windows().end() ? 0 : it->second.wndProc;
                 hwnd = a0;
                 msg = a1;
                 wParam = a2;
                 lParam = a3;
             }
-            auto targetWindow = windows_.find(hwnd);
-            if (targetWindow != windows_.end() && targetWindow->second.externalProcess) {
+            auto targetWindow = ceGwe_.windows().find(hwnd);
+            if (targetWindow != ceGwe_.windows().end() && targetWindow->second.externalProcess) {
                 const bool delivered = postCrossProcessGuestMessage(targetWindow->second.externalProcessId,
                                                                     targetWindow->second.externalHwnd,
                                                                     msg,
@@ -2421,7 +2421,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                 return;
             }
             const uint32_t senderHandle = ceKernel_.activeGuestThread();
-            const uint32_t targetOwner = targetWindow == windows_.end()
+            const uint32_t targetOwner = targetWindow == ceGwe_.windows().end()
                 ? CeGwe::kNoOwnerThread
                 : targetWindow->second.ownerThread;
             if (isSendMessageW && senderHandle &&
@@ -2537,8 +2537,8 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                 describePointer("lparam", lParam);
             }
             if (isSendMessageW && msg == 0x0201 && wParam == 0 && lParam == 0) {
-                auto target = windows_.find(hwnd);
-                if (target != windows_.end() && !target->second.destroyed &&
+                auto target = ceGwe_.windows().find(hwnd);
+                if (target != ceGwe_.windows().end() && !target->second.destroyed &&
                     (target->second.style & kWindowStyleChild) && target->second.parent) {
                     constexpr uint32_t kWmLButtonUp = 0x0202;
                     pendingSyntheticChildButtonUpWindow_ = hwnd;
@@ -2590,15 +2590,15 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                 };
                 const uint32_t parkedMainPc = guestContextReg(ceKernel_.mainThreadContext(), UC_MIPS_REG_PC);
                 const uint32_t outerReturnRa =
-                    (ra == messageTransferContinuationStub_ && !pendingMessageTransfers_.empty())
-                        ? pendingMessageTransfers_.back().outerReturnRa
+                    (ra == messageTransferContinuationStub_ && !ceGwe_.pendingMessageTransfers().empty())
+                        ? ceGwe_.pendingMessageTransfers().back().outerReturnRa
                         : (readableReturn(ra) ? ra : parkedMainPc);
                 if (ra != messageTransferContinuationStub_ && !readableReturn(ra)) {
                     spdlog::warn("{} transfer captured unreadable return hwnd=0x{:08x} msg=0x{:08x} "
                                  "ra=0x{:08x} outer=0x{:08x} parkedMain=0x{:08x} pendingTransfers={}",
-                                 name, hwnd, msg, ra, outerReturnRa, parkedMainPc, pendingMessageTransfers_.size());
+                                 name, hwnd, msg, ra, outerReturnRa, parkedMainPc, ceGwe_.pendingMessageTransfers().size());
                 }
-                pendingMessageTransfers_.push_back(PendingMessageTransfer{
+                ceGwe_.pendingMessageTransfers().push_back(PendingMessageTransfer{
                     hwnd,
                     msg,
                     ra,

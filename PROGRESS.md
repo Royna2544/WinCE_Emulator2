@@ -246,6 +246,15 @@ Current emulator difference:
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.h`. The first Release
   build caught a missing `<string>` include in `ce_gwe.h`; after fixing that,
   the 2026-05-31 Release build passed with only the existing vcpkg warning.
+- GWE storage for window class tables, guest windows, timers, and pending
+  create/destroy/update/message-transfer continuations now lives behind
+  `CeGwe`. Runtime call sites still orchestrate the ABI work and use CeGwe
+  accessors, so this step is behavior-neutral storage ownership. Current
+  source anchors: `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_gwe.h`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_named_dispatch.cpp`, and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp`. The
+  2026-05-31 Release build passed with the existing vcpkg/Boost warnings.
 - Legacy host-audio and guest waveOut type definitions now live in `CeAudio`
   with `SyntheticDllRuntime` keeping aliases and the existing storage for this
   behavior-preserving step. Current source anchors:

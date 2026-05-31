@@ -1017,8 +1017,8 @@ void SyntheticDllRuntime::drainRemoteInputEvents() {
     }
     for (const auto& event : keyEvents) {
         uint32_t hwnd = focusedWindow_;
-        auto focused = windows_.find(hwnd);
-        if (!hwnd || focused == windows_.end() || focused->second.destroyed || !focused->second.enabled) {
+        auto focused = ceGwe_.windows().find(hwnd);
+        if (!hwnd || focused == ceGwe_.windows().end() || focused->second.destroyed || !focused->second.enabled) {
             hwnd = hostPresenterGuestHwnd_;
         }
         if (!hwnd) continue;

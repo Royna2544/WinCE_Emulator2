@@ -30,8 +30,8 @@ void SyntheticDllRuntime::registerCoredllWindowExports(SyntheticModule& module) 
 
 bool SyntheticDllRuntime::handleSetWindowTextW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
     (void)code;
-    auto it = windows_.find(args.a0);
-    if (it == windows_.end() || it->second.destroyed) {
+    auto it = ceGwe_.windows().find(args.a0);
+    if (it == ceGwe_.windows().end() || it->second.destroyed) {
         lastError_ = 1400;
         ret = 0;
         return true;
@@ -47,16 +47,16 @@ bool SyntheticDllRuntime::handleSetWindowTextW(SyntheticExportCode code, const G
 
 bool SyntheticDllRuntime::handleGetWindowTextLengthW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
     (void)code;
-    auto it = windows_.find(args.a0);
-    ret = it == windows_.end() ? 0 : uint32_t(it->second.title.size());
-    lastError_ = it == windows_.end() ? 1400 : 0;
+    auto it = ceGwe_.windows().find(args.a0);
+    ret = it == ceGwe_.windows().end() ? 0 : uint32_t(it->second.title.size());
+    lastError_ = it == ceGwe_.windows().end() ? 1400 : 0;
     return true;
 }
 
 bool SyntheticDllRuntime::handleGetWindowTextW(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
     (void)code;
-    auto it = windows_.find(args.a0);
-    if (it == windows_.end()) {
+    auto it = ceGwe_.windows().find(args.a0);
+    if (it == ceGwe_.windows().end()) {
         lastError_ = 1400;
         ret = 0;
     } else if (!args.a1 || !args.a2) {
@@ -71,8 +71,8 @@ bool SyntheticDllRuntime::handleGetWindowTextW(SyntheticExportCode code, const G
 
 bool SyntheticDllRuntime::handleSetFocus(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
     (void)code;
-    auto target = windows_.find(args.a0);
-    if (!args.a0 || (target != windows_.end() && !target->second.destroyed)) {
+    auto target = ceGwe_.windows().find(args.a0);
+    if (!args.a0 || (target != ceGwe_.windows().end() && !target->second.destroyed)) {
         ret = focusedWindow_;
         focusedWindow_ = args.a0;
         if (args.a0) ceGwe_.postPostedMessage({args.a0, 0x0007, 0, 0, uint32_t(++tick_ * 16), 0, 0});
@@ -94,8 +94,8 @@ bool SyntheticDllRuntime::handleGetFocus(SyntheticExportCode code, const GuestCa
 
 bool SyntheticDllRuntime::handleSetCapture(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
     (void)code;
-    auto target = windows_.find(args.a0);
-    if (!args.a0 || (target != windows_.end() && !target->second.destroyed)) {
+    auto target = ceGwe_.windows().find(args.a0);
+    if (!args.a0 || (target != ceGwe_.windows().end() && !target->second.destroyed)) {
         ret = capturedWindow_;
         capturedWindow_ = args.a0;
         lastError_ = 0;
@@ -125,8 +125,8 @@ bool SyntheticDllRuntime::handleReleaseCapture(SyntheticExportCode code, const G
 
 bool SyntheticDllRuntime::handleEnableWindow(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
     (void)code;
-    auto it = windows_.find(args.a0);
-    if (it != windows_.end()) {
+    auto it = ceGwe_.windows().find(args.a0);
+    if (it != ceGwe_.windows().end()) {
         const bool wasEnabled = it->second.enabled;
         it->second.enabled = args.a1 != 0;
         size_t discardedInput = 0;
@@ -147,8 +147,8 @@ bool SyntheticDllRuntime::handleEnableWindow(SyntheticExportCode code, const Gue
 
 bool SyntheticDllRuntime::handleIsWindowEnabled(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
     (void)code;
-    auto it = windows_.find(args.a0);
-    if (it != windows_.end()) {
+    auto it = ceGwe_.windows().find(args.a0);
+    if (it != ceGwe_.windows().end()) {
         ret = it->second.enabled ? 1 : 0;
         lastError_ = 0;
     } else {

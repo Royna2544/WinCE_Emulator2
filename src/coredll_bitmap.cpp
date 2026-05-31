@@ -420,7 +420,7 @@ uint32_t SyntheticDllRuntime::readFramebufferTargetPixel(uint32_t targetHwnd,
     }
     const uint32_t coveringPopup = targetHwnd ? coveringFullScreenOwnedPopup(targetHwnd) : 0;
     const uint64_t targetZ = targetHwnd ? windowZOrder(targetHwnd) : 0;
-    for (const auto& [hwnd, window] : windows_) {
+    for (const auto& [hwnd, window] : ceGwe_.windows()) {
         if (!window.visible || !window.backingValid || window.backingPixels.empty() ||
             window.backingWidth <= 0 || window.backingHeight <= 0 ||
             isWindowOrDescendant(targetHwnd, hwnd)) {
@@ -449,7 +449,7 @@ void SyntheticDllRuntime::writeFramebufferTargetPixel(uint32_t targetHwnd,
     const uint32_t coveringPopup = targetHwnd ? coveringFullScreenOwnedPopup(targetHwnd) : 0;
     bool covered = false;
     const uint64_t targetZ = targetHwnd ? windowZOrder(targetHwnd) : 0;
-    for (auto& [hwnd, window] : windows_) {
+    for (auto& [hwnd, window] : ceGwe_.windows()) {
         if (!window.visible || !window.backingValid || window.backingPixels.empty() ||
             window.backingWidth <= 0 || window.backingHeight <= 0 ||
             isWindowOrDescendant(targetHwnd, hwnd)) {
@@ -548,7 +548,7 @@ void SyntheticDllRuntime::fillFramebufferRect(const GuestDc& dc,
 
     bool needsLayeredWrite = coveringPopup != 0;
     const uint64_t targetZ = dc.hwnd ? windowZOrder(dc.hwnd) : 0;
-    for (const auto& [hwnd, window] : windows_) {
+    for (const auto& [hwnd, window] : ceGwe_.windows()) {
         if (!window.visible || !window.backingValid || window.backingPixels.empty() ||
             window.backingWidth <= 0 || window.backingHeight <= 0 ||
             isWindowOrDescendant(dc.hwnd, hwnd)) {
@@ -1929,7 +1929,7 @@ bool SyntheticDllRuntime::bitBltToFramebuffer(const GuestDc& dstDc,
     };
     std::vector<BackingLayer> backingLayers;
     const uint64_t targetZ = dstDc.hwnd ? windowZOrder(dstDc.hwnd) : 0;
-    for (auto& [hwnd, window] : windows_) {
+    for (auto& [hwnd, window] : ceGwe_.windows()) {
         if (!window.visible || !window.backingValid || window.backingPixels.empty() ||
             window.backingWidth <= 0 || window.backingHeight <= 0 ||
             isWindowOrDescendant(dstDc.hwnd, hwnd)) {

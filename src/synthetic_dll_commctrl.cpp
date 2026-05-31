@@ -80,8 +80,8 @@ bool SyntheticDllRuntime::handleCommctrlInitClass(SyntheticExportCode, const Gue
 }
 
 bool SyntheticDllRuntime::handleCommctrlCommandBarCreate(SyntheticExportCode, const GuestCallArgs& args, uint32_t& ret) {
-    auto parent = windows_.find(args.a1);
-    const int32_t width = parent == windows_.end()
+    auto parent = ceGwe_.windows().find(args.a1);
+    const int32_t width = parent == ceGwe_.windows().end()
         ? (framebufferWidth_ > 0 ? framebufferWidth_ : 800)
         : std::max<int32_t>(1, parent->second.width);
     ret = makeGuestWindow("CommandBar", {}, 0x50000000u, 0, args.a1, uint32_t(args.a2), args.a0, 0,
@@ -91,8 +91,8 @@ bool SyntheticDllRuntime::handleCommctrlCommandBarCreate(SyntheticExportCode, co
 }
 
 bool SyntheticDllRuntime::handleCommctrlCommandBarShow(SyntheticExportCode, const GuestCallArgs& args, uint32_t& ret) {
-    auto it = windows_.find(args.a0);
-    if (it == windows_.end()) {
+    auto it = ceGwe_.windows().find(args.a0);
+    if (it == ceGwe_.windows().end()) {
         lastError_ = 1400;
         ret = 0;
     } else {
@@ -104,14 +104,14 @@ bool SyntheticDllRuntime::handleCommctrlCommandBarShow(SyntheticExportCode, cons
 }
 
 bool SyntheticDllRuntime::handleCommctrlCommandBarHeight(SyntheticExportCode, const GuestCallArgs& args, uint32_t& ret) {
-    ret = windows_.count(args.a0) ? uint32_t(commandBarHeight()) : 0;
+    ret = ceGwe_.windows().count(args.a0) ? uint32_t(commandBarHeight()) : 0;
     lastError_ = ret ? 0 : 1400;
     return true;
 }
 
 bool SyntheticDllRuntime::handleCommctrlCommandBarInsertComboBox(SyntheticExportCode, const GuestCallArgs& args, uint32_t& ret) {
-    auto it = windows_.find(args.a0);
-    if (it == windows_.end()) {
+    auto it = ceGwe_.windows().find(args.a0);
+    if (it == ceGwe_.windows().end()) {
         lastError_ = 1400;
         ret = 0;
         return true;
@@ -123,8 +123,8 @@ bool SyntheticDllRuntime::handleCommctrlCommandBarInsertComboBox(SyntheticExport
 }
 
 bool SyntheticDllRuntime::handleCommctrlCommandBarInsertControl(SyntheticExportCode, const GuestCallArgs& args, uint32_t& ret) {
-    auto it = windows_.find(args.a0);
-    if (it == windows_.end()) {
+    auto it = ceGwe_.windows().find(args.a0);
+    if (it == ceGwe_.windows().end()) {
         lastError_ = 1400;
         ret = 0;
         return true;
@@ -142,8 +142,8 @@ bool SyntheticDllRuntime::handleCommctrlCommandBarAddBitmap(SyntheticExportCode,
 }
 
 bool SyntheticDllRuntime::handleCommctrlCommandBarInsertMenubar(SyntheticExportCode, const GuestCallArgs& args, uint32_t& ret) {
-    auto it = windows_.find(args.a0);
-    if (it == windows_.end()) {
+    auto it = ceGwe_.windows().find(args.a0);
+    if (it == ceGwe_.windows().end()) {
         lastError_ = 1400;
         ret = 0;
         return true;
@@ -161,8 +161,8 @@ bool SyntheticDllRuntime::handleCommctrlCommandBarInsertMenubar(SyntheticExportC
 }
 
 bool SyntheticDllRuntime::handleCommctrlCommandBarGetMenu(SyntheticExportCode, const GuestCallArgs& args, uint32_t& ret) {
-    auto it = windows_.find(args.a0);
-    if (it == windows_.end()) {
+    auto it = ceGwe_.windows().find(args.a0);
+    if (it == ceGwe_.windows().end()) {
         lastError_ = 1400;
         ret = 0;
     } else {
@@ -173,8 +173,8 @@ bool SyntheticDllRuntime::handleCommctrlCommandBarGetMenu(SyntheticExportCode, c
 }
 
 bool SyntheticDllRuntime::handleCommctrlCommandBarAdornments(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
-    auto it = windows_.find(args.a0);
-    if (it == windows_.end()) {
+    auto it = ceGwe_.windows().find(args.a0);
+    if (it == ceGwe_.windows().end()) {
         lastError_ = 1400;
         ret = 0;
         return true;
@@ -183,8 +183,8 @@ bool SyntheticDllRuntime::handleCommctrlCommandBarAdornments(SyntheticExportCode
         uint32_t current = it->second.hwnd;
         GuestWindow* top = nullptr;
         for (;;) {
-            auto window = windows_.find(current);
-            if (window == windows_.end()) break;
+            auto window = ceGwe_.windows().find(current);
+            if (window == ceGwe_.windows().end()) break;
             if (!window->second.parent) {
                 top = &window->second;
                 break;
@@ -212,11 +212,11 @@ bool SyntheticDllRuntime::handleCommctrlIsCommandBarMessage(SyntheticExportCode,
 }
 
 bool SyntheticDllRuntime::handleCommctrlCreateStatusWindowW(SyntheticExportCode, const GuestCallArgs& args, uint32_t& ret) {
-    auto parent = windows_.find(args.a2);
-    const int32_t parentWidth = parent == windows_.end()
+    auto parent = ceGwe_.windows().find(args.a2);
+    const int32_t parentWidth = parent == ceGwe_.windows().end()
         ? (framebufferWidth_ > 0 ? framebufferWidth_ : 800)
         : std::max<int32_t>(1, parent->second.width);
-    const int32_t parentHeight = parent == windows_.end()
+    const int32_t parentHeight = parent == ceGwe_.windows().end()
         ? (framebufferHeight_ > 0 ? framebufferHeight_ : 480)
         : std::max<int32_t>(1, parent->second.height);
     constexpr int32_t height = 22;
@@ -229,8 +229,8 @@ bool SyntheticDllRuntime::handleCommctrlCreateStatusWindowW(SyntheticExportCode,
 bool SyntheticDllRuntime::handleCommctrlCreateToolbar(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
     const bool upDown = code == SyntheticExportCode::CommctrlCreateUpDownControl;
     const uint32_t parentHwnd = upDown ? stackArg(9) : args.a0;
-    auto parent = windows_.find(parentHwnd);
-    const int32_t parentWidth = parent == windows_.end()
+    auto parent = ceGwe_.windows().find(parentHwnd);
+    const int32_t parentWidth = parent == ceGwe_.windows().end()
         ? (framebufferWidth_ > 0 ? framebufferWidth_ : 800)
         : std::max<int32_t>(1, parent->second.width);
     ret = makeGuestWindow(upDown ? "msctls_updown32" : "ToolbarWindow32",
@@ -294,7 +294,7 @@ bool SyntheticDllRuntime::handleCommctrlPropertySheetW(SyntheticExportCode, cons
 }
 
 bool SyntheticDllRuntime::handleCommctrlListViewSetItemSpacing(SyntheticExportCode, const GuestCallArgs& args, uint32_t& ret) {
-    lastError_ = windows_.count(args.a0) ? 0 : 1400;
+    lastError_ = ceGwe_.windows().count(args.a0) ? 0 : 1400;
     ret = 0;
     return true;
 }

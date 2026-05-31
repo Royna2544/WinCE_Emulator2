@@ -637,9 +637,6 @@ private:
     std::unordered_map<uint32_t, uint32_t> tlsValues_;
     std::unordered_map<uint32_t, uint32_t> criticalSectionDepth_;
     std::unordered_map<uint32_t, uint32_t> syntheticHandleValues_;
-    std::map<std::string, GuestWindowClass> windowClassesByName_;
-    std::map<uint16_t, std::string> windowClassNamesByAtom_;
-    std::map<uint32_t, GuestWindow> windows_;
     std::unordered_map<uint32_t, GuestDc> dcs_;
     std::unordered_map<uint32_t, GuestBrush> brushes_;
     std::unordered_map<uint32_t, GuestPen> pens_;
@@ -656,12 +653,7 @@ private:
     std::unordered_map<uint32_t, uint32_t> fileSeekCounts_;
     std::map<uint32_t, GuestFileMapping> fileMappings_;
     std::map<uint32_t, GuestMappedView> mappedViews_;
-    std::map<uint64_t, GuestTimer> timers_;
-    std::vector<PendingDestroyWindow> pendingDestroyWindows_;
-    std::vector<PendingCreateWindow> pendingCreateWindows_;
     std::vector<PendingBlockingApi> pendingBlockingApis_;
-    std::vector<PendingUpdateWindow> pendingUpdateWindows_;
-    std::vector<PendingMessageTransfer> pendingMessageTransfers_;
     std::map<uint32_t, uint32_t> retrievedSyncSendersByMsgPtr_;
     bool interactiveSliceActive_{};
     bool interactiveSliceStopRequested_{};

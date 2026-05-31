@@ -787,23 +787,23 @@ std::filesystem::path SyntheticDllRuntime::ensureCrossProcessWindowRegistryPath(
 }
 
 void SyntheticDllRuntime::publishGuestWindowState(uint32_t hwnd) {
-    auto windowIt = windows_.find(hwnd);
-    if (windowIt == windows_.end()) {
+    auto windowIt = ceGwe_.windows().find(hwnd);
+    if (windowIt == ceGwe_.windows().end()) {
         return;
     }
     auto absoluteOrigin = [&](uint32_t target) {
         int32_t x = 0;
         int32_t y = 0;
         for (uint32_t current = target; current;) {
-            auto it = windows_.find(current);
-            if (it == windows_.end()) break;
+            auto it = ceGwe_.windows().find(current);
+            if (it == ceGwe_.windows().end()) break;
             x += it->second.x;
             y += it->second.y;
             current = (it->second.style & kWindowStyleChild) ? it->second.parent : 0;
         }
         return std::pair<int32_t, int32_t>{x, y};
     };
-    for (const auto& [candidateHwnd, candidate] : windows_) {
+    for (const auto& [candidateHwnd, candidate] : ceGwe_.windows()) {
         if (candidate.externalProcess) continue;
         if (candidate.destroyed) {
             ceGwe_.unregisterWindow(candidateHwnd);
@@ -969,8 +969,8 @@ std::optional<uint32_t> SyntheticDllRuntime::findExternalGuestWindow(const std::
         }
 
         if (auto existing = crossProcessBroker_.importedGuestWindow(processId, externalHwnd)) {
-            auto existingWindow = windows_.find(*existing);
-            if (existingWindow != windows_.end() && !existingWindow->second.destroyed) {
+            auto existingWindow = ceGwe_.windows().find(*existing);
+            if (existingWindow != ceGwe_.windows().end() && !existingWindow->second.destroyed) {
                 existingWindow->second.className = entryClass;
                 existingWindow->second.title = entryTitle;
                 existingWindow->second.visible = it->value("visible", false);
@@ -998,7 +998,7 @@ std::optional<uint32_t> SyntheticDllRuntime::findExternalGuestWindow(const std::
         window.externalProcess = true;
         window.externalProcessId = processId;
         window.externalHwnd = externalHwnd;
-        windows_[hwnd] = window;
+        ceGwe_.windows()[hwnd] = window;
         ceGwe_.registerWindowOwner(hwnd, window.ownerThread);
         crossProcessBroker_.rememberImportedWindow(processId, externalHwnd, hwnd);
         spdlog::info("FindWindowW imported external guest window hwnd=0x{:08x} remotePid={} remoteHwnd=0x{:08x} class=\"{}\" title=\"{}\"",
@@ -1224,8 +1224,8 @@ void SyntheticDllRuntime::pollCrossProcessGuestMessages() {
             return 0;
         }
         if (auto existing = crossProcessBroker_.importedGuestWindow(processId, externalHwnd)) {
-            auto existingWindow = windows_.find(*existing);
-            if (existingWindow != windows_.end() && !existingWindow->second.destroyed) {
+            auto existingWindow = ceGwe_.windows().find(*existing);
+            if (existingWindow != ceGwe_.windows().end() && !existingWindow->second.destroyed) {
                 return *existing;
             }
         }
@@ -1274,7 +1274,7 @@ void SyntheticDllRuntime::pollCrossProcessGuestMessages() {
             window.externalProcess = true;
             window.externalProcessId = processId;
             window.externalHwnd = externalHwnd;
-            windows_[hwnd] = window;
+            ceGwe_.windows()[hwnd] = window;
             ceGwe_.registerWindowOwner(hwnd, window.ownerThread);
             crossProcessBroker_.rememberImportedWindow(processId, externalHwnd, hwnd);
             spdlog::info("imported external guest window hwnd=0x{:08x} remotePid={} remoteHwnd=0x{:08x} class=\"{}\" title=\"{}\"",
@@ -1291,8 +1291,8 @@ void SyntheticDllRuntime::pollCrossProcessGuestMessages() {
         }
 
         const uint32_t hwnd = it->value("targetHwnd", 0u);
-        auto windowIt = windows_.find(hwnd);
-        if (windowIt != windows_.end() && !windowIt->second.destroyed) {
+        auto windowIt = ceGwe_.windows().find(hwnd);
+        if (windowIt != ceGwe_.windows().end() && !windowIt->second.destroyed) {
             GuestMessage guestMessage{};
             guestMessage.hwnd = hwnd;
             guestMessage.message = it->value("message", 0u);
@@ -1407,13 +1407,13 @@ bool SyntheticDllRuntime::handleHostSetTimer(const GuestCallArgs& args,
     const uint32_t a1 = args.a1;
     const uint32_t a2 = args.a2;
 
-    if (a0 && !windows_.count(a0)) {
+    if (a0 && !ceGwe_.windows().count(a0)) {
         lastError_ = 1400;
         ret = 0;
     } else {
         const uint32_t timerId = a1 ? a1 : uint32_t(++tick_);
         const uint32_t interval = std::max<uint32_t>(1, a2);
-        timers_[guestTimerKey(a0, timerId)] = GuestTimer{
+        ceGwe_.timers()[guestTimerKey(a0, timerId)] = GuestTimer{
             a0, timerId, interval, args.a3, hostTickMilliseconds() + interval,
         };
         lastError_ = 0;
@@ -1603,8 +1603,8 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
         int32_t x = 0;
         int32_t y = 0;
         for (uint32_t current = hwnd; current;) {
-            auto it = windows_.find(current);
-            if (it == windows_.end()) break;
+            auto it = ceGwe_.windows().find(current);
+            if (it == ceGwe_.windows().end()) break;
             x += it->second.x;
             y += it->second.y;
             current = (it->second.style & kWindowStyleChild) ? it->second.parent : 0;
@@ -1612,10 +1612,10 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
         return std::pair<int32_t, int32_t>{x, y};
     };
     auto firstWindow = [&]() -> uint32_t {
-        for (const auto& [hwnd, window] : windows_) {
+        for (const auto& [hwnd, window] : ceGwe_.windows()) {
             if (!window.destroyed && !window.parent) return hwnd;
         }
-        for (const auto& [hwnd, window] : windows_) {
+        for (const auto& [hwnd, window] : ceGwe_.windows()) {
             if (!window.destroyed) return hwnd;
         }
         return 0;
@@ -1706,9 +1706,9 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
         window.width = width;
         window.height = height;
         window.visible = (style & 0x10000000u) != 0;
-        windows_[ret] = window;
+        ceGwe_.windows()[ret] = window;
         ceGwe_.registerWindowOwner(ret, window.ownerThread);
-        ensureHostWindow(ret, windows_[ret]);
+        ensureHostWindow(ret, ceGwe_.windows()[ret]);
         publishGuestWindowState(ret);
 
         GuestMessage size{};
@@ -1720,7 +1720,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
         lastError_ = 0;
         spdlog::info("CreateDialogIndirectParamW guest=0x{:08x} class=\"{}\" title=\"{}\" parent=0x{:08x} "
                      "style=0x{:08x} ex=0x{:08x} dlgproc=0x{:08x} init=0x{:08x} rect={},{} {}x{} items={} menu=\"{}\"",
-                     ret, windows_[ret].className, title, parent, style, exStyle, dlgProc, initParam,
+                     ret, ceGwe_.windows()[ret].className, title, parent, style, exStyle, dlgProc, initParam,
                      x, y, width, height, itemCount, menuName);
         return true;
     }
@@ -1730,7 +1730,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
         // dispatches messages itself, so only report that the message was not
         // consumed by dialog navigation.
         ret = 0;
-        lastError_ = windows_.count(a0) || !a0 ? 0 : 1400;
+        lastError_ = ceGwe_.windows().count(a0) || !a0 ? 0 : 1400;
         return true;
     }
     case ord(CoredllOrdinal::KernelIoControl):
@@ -2252,14 +2252,14 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                 ? ("#" + std::to_string(classNamePtr))
                 : lowerAscii(readUtf16(classNamePtr));
             if (className.empty()) className = "#anonymous";
-            auto existing = windowClassesByName_.find(className);
-            if (existing == windowClassesByName_.end()) {
+            auto existing = ceGwe_.windowClassesByName().find(className);
+            if (existing == ceGwe_.windowClassesByName().end()) {
                 GuestWindowClass wndClass{};
                 wndClass.bytes = bytes;
                 wndClass.name = className;
                 wndClass.atom = nextAtom_++;
-                existing = windowClassesByName_.emplace(className, wndClass).first;
-                windowClassNamesByAtom_[existing->second.atom] = className;
+                existing = ceGwe_.windowClassesByName().emplace(className, wndClass).first;
+                ceGwe_.windowClassNamesByAtom()[existing->second.atom] = className;
             } else {
                 existing->second.bytes = bytes;
             }
@@ -2273,13 +2273,13 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
     {
         std::string className;
         if (a1 < 0x10000) {
-            auto it = windowClassNamesByAtom_.find(uint16_t(a1));
-            if (it != windowClassNamesByAtom_.end()) className = it->second;
+            auto it = ceGwe_.windowClassNamesByAtom().find(uint16_t(a1));
+            if (it != ceGwe_.windowClassNamesByAtom().end()) className = it->second;
         } else {
             className = lowerAscii(readUtf16(a1));
         }
-        auto it = windowClassesByName_.find(className);
-        if (it != windowClassesByName_.end() && a2) {
+        auto it = ceGwe_.windowClassesByName().find(className);
+        if (it != ceGwe_.windowClassesByName().end() && a2) {
             uc_mem_write(uc_, a2, it->second.bytes.data(), it->second.bytes.size());
             ret = 1;
             lastError_ = 0;
@@ -2293,10 +2293,10 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
     {
         ret = 0;
         const std::string className = a0 < 0x10000
-            ? (windowClassNamesByAtom_.count(uint16_t(a0)) ? windowClassNamesByAtom_[uint16_t(a0)] : std::string{})
+            ? (ceGwe_.windowClassNamesByAtom().count(uint16_t(a0)) ? ceGwe_.windowClassNamesByAtom()[uint16_t(a0)] : std::string{})
             : lowerAscii(readUtf16(a0));
         const std::string title = readUtf16(a1);
-        for (const auto& [hwnd, window] : windows_) {
+        for (const auto& [hwnd, window] : ceGwe_.windows()) {
             if (!window.destroyed && (!a0 || window.className == className) && (!a1 || window.title == title)) {
                 ret = hwnd;
                 break;
@@ -2316,8 +2316,8 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
     {
         std::string className;
         if (a1 < 0x10000) {
-            auto it = windowClassNamesByAtom_.find(uint16_t(a1));
-            if (it != windowClassNamesByAtom_.end()) className = it->second;
+            auto it = ceGwe_.windowClassNamesByAtom().find(uint16_t(a1));
+            if (it != ceGwe_.windowClassNamesByAtom().end()) className = it->second;
         } else {
             className = lowerAscii(readUtf16(a1));
         }
@@ -2340,8 +2340,8 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
         const uint32_t rawWidth = stackArg(6);
         const uint32_t rawHeight = stackArg(7);
         uint32_t wndProc = 0;
-        auto cls = windowClassesByName_.find(className);
-        if (cls != windowClassesByName_.end()) {
+        auto cls = ceGwe_.windowClassesByName().find(className);
+        if (cls != ceGwe_.windowClassesByName().end()) {
             std::memcpy(&wndProc, cls->second.bytes.data() + 4, sizeof(wndProc));
         }
         ret = makeGuestHandle({GuestHandle::Kind::GuestWindow, 0, 0});
@@ -2384,9 +2384,9 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             writeU32(createStruct + 44, window.exStyle);
             window.createStruct = createStruct;
         }
-        windows_[ret] = window;
+        ceGwe_.windows()[ret] = window;
         ceGwe_.registerWindowOwner(ret, window.ownerThread);
-        ensureHostWindow(ret, windows_[ret]);
+        ensureHostWindow(ret, ceGwe_.windows()[ret]);
         publishGuestWindowState(ret);
         GuestMessage size{};
         size.hwnd = ret;
@@ -2399,9 +2399,9 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
     }
     case ord(CoredllOrdinal::GetWindowRect):
     {
-        auto it = windows_.find(a0);
-        if (!a1 || it == windows_.end()) {
-            lastError_ = it == windows_.end() ? 1400 : 87;
+        auto it = ceGwe_.windows().find(a0);
+        if (!a1 || it == ceGwe_.windows().end()) {
+            lastError_ = it == ceGwe_.windows().end() ? 1400 : 87;
             ret = 0;
         } else {
             const auto [x, y] = windowOrigin(a0);
@@ -2413,9 +2413,9 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
     }
     case ord(CoredllOrdinal::GetClientRect):
     {
-        auto it = windows_.find(a0);
-        if (!a1 || it == windows_.end()) {
-            lastError_ = it == windows_.end() ? 1400 : 87;
+        auto it = ceGwe_.windows().find(a0);
+        if (!a1 || it == ceGwe_.windows().end()) {
+            lastError_ = it == ceGwe_.windows().end() ? 1400 : 87;
             ret = 0;
         } else {
             writeGuestRect(a1, 0, 0, it->second.width, it->second.height);
@@ -2427,7 +2427,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
     case ord(CoredllOrdinal::InvalidateRect):
     {
         const uint32_t target = a0 ? a0 : firstWindow();
-        if (!target || !windows_.count(target)) {
+        if (!target || !ceGwe_.windows().count(target)) {
             lastError_ = 1400;
             ret = 0;
         } else {
@@ -2453,9 +2453,9 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
     case ord(CoredllOrdinal::ClientToScreen):
     case ord(CoredllOrdinal::ScreenToClient):
     {
-        auto it = windows_.find(a0);
-        if (!a1 || it == windows_.end()) {
-            lastError_ = it == windows_.end() ? 1400 : 87;
+        auto it = ceGwe_.windows().find(a0);
+        if (!a1 || it == ceGwe_.windows().end()) {
+            lastError_ = it == ceGwe_.windows().end() ? 1400 : 87;
             ret = 0;
         } else {
             int32_t x = int32_t(readU32(a1));
@@ -2478,11 +2478,11 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
     }
     case ord(CoredllOrdinal::KillTimer):
     {
-        if (a0 && !windows_.count(a0)) {
+        if (a0 && !ceGwe_.windows().count(a0)) {
             lastError_ = 1400;
             ret = 0;
         } else {
-            timers_.erase(guestTimerKey(a0, a1));
+            ceGwe_.timers().erase(guestTimerKey(a0, a1));
             lastError_ = 0;
             ret = 1;
         }
@@ -2684,7 +2684,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                     const int32_t height = std::abs(bitmap->heightRaw);
                     clip = CeMgdi::Rect{0, 0, bitmap->width, height};
                 } else if (dc->hwnd) {
-                    if (auto window = windows_.find(dc->hwnd); window != windows_.end()) {
+                    if (auto window = ceGwe_.windows().find(dc->hwnd); window != ceGwe_.windows().end()) {
                         const auto [originX, originY] = guestWindowOrigin(dc->hwnd);
                         clip = CeMgdi::Rect{
                             originX,
@@ -3514,8 +3514,8 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
     }
     case ord(CoredllOrdinal::GetWindowLongW):
     {
-        auto it = windows_.find(a0);
-        if (it == windows_.end() || it->second.destroyed) {
+        auto it = ceGwe_.windows().find(a0);
+        if (it == ceGwe_.windows().end() || it->second.destroyed) {
             lastError_ = 1400;
             ret = 0;
         } else {
@@ -3531,8 +3531,8 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
     }
     case ord(CoredllOrdinal::SetWindowLongW):
     {
-        auto it = windows_.find(a0);
-        if (it == windows_.end() || it->second.destroyed) {
+        auto it = ceGwe_.windows().find(a0);
+        if (it == ceGwe_.windows().end() || it->second.destroyed) {
             lastError_ = 1400;
             ret = 0;
         } else {
@@ -3548,8 +3548,8 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
     }
     case ord(CoredllOrdinal::GetParent):
     {
-        auto it = windows_.find(a0);
-        if (it == windows_.end() || it->second.destroyed) {
+        auto it = ceGwe_.windows().find(a0);
+        if (it == ceGwe_.windows().end() || it->second.destroyed) {
             lastError_ = 1400;
             ret = 0;
         } else {
@@ -3560,15 +3560,15 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
     }
     case ord(CoredllOrdinal::IsWindow):
     {
-        auto it = windows_.find(a0);
-        ret = it != windows_.end() && !it->second.destroyed ? 1 : 0;
+        auto it = ceGwe_.windows().find(a0);
+        ret = it != ceGwe_.windows().end() && !it->second.destroyed ? 1 : 0;
         lastError_ = 0;
         break;
     }
     case ord(CoredllOrdinal::GetWindow):
     {
-        auto it = windows_.find(a0);
-        if (it == windows_.end() || it->second.destroyed) {
+        auto it = ceGwe_.windows().find(a0);
+        if (it == ceGwe_.windows().end() || it->second.destroyed) {
             lastError_ = 1400;
             ret = 0;
         } else if (a1 == 5) {
@@ -3576,9 +3576,9 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             ret = children.empty() ? 0 : children.front();
             lastError_ = ret ? 0 : 1400;
         } else if (a1 == 4) {
-            const auto owner = windows_.find(it->second.parent);
+            const auto owner = ceGwe_.windows().find(it->second.parent);
             ret = !(it->second.style & kWindowStyleChild) &&
-                  owner != windows_.end() && !owner->second.destroyed ? it->second.parent : 0;
+                  owner != ceGwe_.windows().end() && !owner->second.destroyed ? it->second.parent : 0;
             lastError_ = ret ? 0 : 1400;
         } else if (a1 == 2 || a1 == 3) {
             const bool childWindow = (it->second.style & kWindowStyleChild) != 0;
@@ -3607,8 +3607,8 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
     }
     case ord(CoredllOrdinal::MoveWindow):
     {
-        auto it = windows_.find(a0);
-        if (it == windows_.end() || it->second.destroyed) {
+        auto it = ceGwe_.windows().find(a0);
+        if (it == ceGwe_.windows().end() || it->second.destroyed) {
             lastError_ = 1400;
             ret = 0;
         } else {
@@ -3637,8 +3637,8 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
     }
     case ord(CoredllOrdinal::SetWindowPos):
     {
-        auto it = windows_.find(a0);
-        if (it == windows_.end() || it->second.destroyed) {
+        auto it = ceGwe_.windows().find(a0);
+        if (it == ceGwe_.windows().end() || it->second.destroyed) {
             lastError_ = 1400;
             ret = 0;
         } else {
@@ -3682,13 +3682,13 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                     uint64_t bottom = it->second.zOrder;
                     const bool childWindow = (it->second.style & kWindowStyleChild) != 0;
                     for (uint32_t siblingHwnd : orderedSiblingWindows(it->second.parent, childWindow)) {
-                        auto sibling = windows_.find(siblingHwnd);
-                        if (sibling != windows_.end()) bottom = std::min(bottom, sibling->second.zOrder);
+                        auto sibling = ceGwe_.windows().find(siblingHwnd);
+                        if (sibling != ceGwe_.windows().end()) bottom = std::min(bottom, sibling->second.zOrder);
                     }
                     it->second.zOrder = bottom ? bottom - 1 : 0;
                 } else if (a1 != 0 && a1 != 0xffffffffu) {
-                    auto after = windows_.find(a1);
-                    it->second.zOrder = after != windows_.end() ? after->second.zOrder + 1 : nextWindowZOrder();
+                    auto after = ceGwe_.windows().find(a1);
+                    it->second.zOrder = after != ceGwe_.windows().end() ? after->second.zOrder + 1 : nextWindowZOrder();
                 } else {
                     it->second.zOrder = nextWindowZOrder();
                 }
@@ -3724,8 +3724,8 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
     }
     case ord(CoredllOrdinal::SetWindowRgn):
     {
-        auto it = windows_.find(a0);
-        if (it == windows_.end()) {
+        auto it = ceGwe_.windows().find(a0);
+        if (it == ceGwe_.windows().end()) {
             lastError_ = 1400;
             ret = 0;
         } else {
@@ -3761,8 +3761,8 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
     }
     case ord(CoredllOrdinal::GetWindowRgn):
     {
-        auto it = windows_.find(a0);
-        if (it == windows_.end()) {
+        auto it = ceGwe_.windows().find(a0);
+        if (it == ceGwe_.windows().end()) {
             lastError_ = 1400;
             ret = 0;
         } else {
@@ -3786,14 +3786,14 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
     }
     case ord(CoredllOrdinal::DestroyWindow):
     {
-        auto it = windows_.find(a0);
-        if (it == windows_.end() || it->second.destroyed) {
+        auto it = ceGwe_.windows().find(a0);
+        if (it == ceGwe_.windows().end() || it->second.destroyed) {
             lastError_ = 1400;
             ret = 0;
         } else {
             const bool wasVisible = it->second.visible;
-            for (auto timer = timers_.begin(); timer != timers_.end();) {
-                if (timer->second.hwnd == a0) timer = timers_.erase(timer);
+            for (auto timer = ceGwe_.timers().begin(); timer != ceGwe_.timers().end();) {
+                if (timer->second.hwnd == a0) timer = ceGwe_.timers().erase(timer);
                 else ++timer;
             }
             if (focusedWindow_ == a0) focusedWindow_ = 0;
@@ -3824,8 +3824,8 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
     }
     case ord(CoredllOrdinal::ShowWindow):
     {
-        auto it = windows_.find(a0);
-        if (it == windows_.end() || it->second.destroyed) {
+        auto it = ceGwe_.windows().find(a0);
+        if (it == ceGwe_.windows().end() || it->second.destroyed) {
             lastError_ = 1400;
             ret = 0;
         } else {
@@ -3873,7 +3873,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                     repaintOwnerAfterStackChange(a0, true);
                     if (exposesCoveredWindows) {
                         size_t exposed = 0;
-                        for (const auto& [otherHwnd, window] : windows_) {
+                        for (const auto& [otherHwnd, window] : ceGwe_.windows()) {
                             if (otherHwnd == a0 || window.destroyed || !window.visible) continue;
                             queueGuestPaint(otherHwnd, true);
                             ++exposed;
@@ -3890,8 +3890,8 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
     }
     case ord(CoredllOrdinal::UpdateWindow):
     {
-        auto it = windows_.find(a0);
-        if (it == windows_.end() || it->second.destroyed) {
+        auto it = ceGwe_.windows().find(a0);
+        if (it == ceGwe_.windows().end() || it->second.destroyed) {
             lastError_ = 1400;
             ret = 0;
         } else {
@@ -3907,8 +3907,8 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
         if (a1 == 0x0081) { // WM_NCCREATE defaults to TRUE.
             ret = 1;
         } else if (a1 == 0x000c) { // WM_SETTEXT
-            auto it = windows_.find(a0);
-            if (it == windows_.end() || it->second.destroyed) {
+            auto it = ceGwe_.windows().find(a0);
+            if (it == ceGwe_.windows().end() || it->second.destroyed) {
                 lastError_ = 1400;
                 ret = 0;
             } else {
@@ -3919,8 +3919,8 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                 ret = 1;
             }
         } else if (a1 == 0x000d) { // WM_GETTEXT
-            auto it = windows_.find(a0);
-            if (it == windows_.end() || it->second.destroyed) {
+            auto it = ceGwe_.windows().find(a0);
+            if (it == ceGwe_.windows().end() || it->second.destroyed) {
                 lastError_ = 1400;
                 ret = 0;
             } else if (!a2 || !a3) {
@@ -3931,9 +3931,9 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                 lastError_ = 0;
             }
         } else if (a1 == 0x000e) { // WM_GETTEXTLENGTH
-            auto it = windows_.find(a0);
-            ret = it == windows_.end() || it->second.destroyed ? 0 : uint32_t(it->second.title.size());
-            lastError_ = it == windows_.end() || it->second.destroyed ? 1400 : 0;
+            auto it = ceGwe_.windows().find(a0);
+            ret = it == ceGwe_.windows().end() || it->second.destroyed ? 0 : uint32_t(it->second.title.size());
+            lastError_ = it == ceGwe_.windows().end() || it->second.destroyed ? 1400 : 0;
         } else {
             ret = 0;
         }
@@ -3953,7 +3953,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
     {
         quitPosted_ = true;
         std::string visibleRoots;
-        for (const auto& [hwnd, window] : windows_) {
+        for (const auto& [hwnd, window] : ceGwe_.windows()) {
             if (window.destroyed || !window.visible || window.parent) {
                 continue;
             }
@@ -4018,7 +4018,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
         }
         if (a0 == 0xffff) {
             bool posted = false;
-            for (const auto& [hwnd, window] : windows_) {
+            for (const auto& [hwnd, window] : ceGwe_.windows()) {
                 if (window.destroyed || window.parent) {
                     continue;
                 }
@@ -4057,15 +4057,15 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             if (tracePostMessage) {
                 spdlog::info("PostMessageW thread msg=0x{:08x} queued={}", a1, ceGwe_.messageCount());
             }
-        } else if (!windows_.count(a0)) {
+        } else if (!ceGwe_.windows().count(a0)) {
             lastError_ = 1400;
             ret = 0;
             if (tracePostMessage) {
                 spdlog::info("PostMessageW target missing hwnd=0x{:08x} msg=0x{:08x}", a0, a1);
             }
         } else {
-            auto postedWindow = windows_.find(a0);
-            if (postedWindow != windows_.end() && postedWindow->second.externalProcess) {
+            auto postedWindow = ceGwe_.windows().find(a0);
+            if (postedWindow != ceGwe_.windows().end() && postedWindow->second.externalProcess) {
                 const bool delivered = postCrossProcessGuestMessage(postedWindow->second.externalProcessId,
                                                                     postedWindow->second.externalHwnd,
                                                                     a1,
@@ -4095,8 +4095,8 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             lastError_ = 0;
             ret = 1;
             if (tracePostMessage) {
-                const std::string className = postedWindow == windows_.end() ? std::string{} : postedWindow->second.className;
-                const std::string title = postedWindow == windows_.end() ? std::string{} : postedWindow->second.title;
+                const std::string className = postedWindow == ceGwe_.windows().end() ? std::string{} : postedWindow->second.className;
+                const std::string title = postedWindow == ceGwe_.windows().end() ? std::string{} : postedWindow->second.title;
                 spdlog::info("PostMessageW target hwnd=0x{:08x} class=\"{}\" title=\"{}\" msg=0x{:08x} queued={}",
                              a0, className, title, a1, ceGwe_.messageCount());
             }
@@ -4158,9 +4158,9 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                     if (candidate.hwnd != 0) return false;
                 } else if (a1 != 0 && candidate.hwnd != a1 && !isWindowOrDescendant(candidate.hwnd, a1)) {
                     if (!candidate.crossProcess) return false;
-                    const auto candidateWindow = windows_.find(candidate.hwnd);
-                    const auto filterWindow = windows_.find(a1);
-                    if (candidateWindow == windows_.end() || filterWindow == windows_.end()) {
+                    const auto candidateWindow = ceGwe_.windows().find(candidate.hwnd);
+                    const auto filterWindow = ceGwe_.windows().find(a1);
+                    if (candidateWindow == ceGwe_.windows().end() || filterWindow == ceGwe_.windows().end()) {
                         return false;
                     }
                     if (candidateWindow->second.ownerThread != filterWindow->second.ownerThread) {
@@ -4183,13 +4183,13 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             return true;
         };
         haveMessage = takeMessage();
-        if (!haveMessage && !peek && !quitPosted_ && !timers_.empty() && !hasHostWindows()) {
+        if (!haveMessage && !peek && !quitPosted_ && !ceGwe_.timers().empty() && !hasHostWindows()) {
             const uint64_t now = hostTickMilliseconds();
-            auto next = std::min_element(timers_.begin(), timers_.end(),
+            auto next = std::min_element(ceGwe_.timers().begin(), ceGwe_.timers().end(),
                                          [](const auto& left, const auto& right) {
                                              return left.second.nextDueMs < right.second.nextDueMs;
                                          });
-            if (next != timers_.end()) {
+            if (next != ceGwe_.timers().end()) {
                 next->second.nextDueMs = now;
                 enqueueDueTimers();
                 haveMessage = takeMessage();
