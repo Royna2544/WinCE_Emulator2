@@ -217,6 +217,13 @@ Active refactor checklist: `PLAN.md`.
      Source now marks remote input pending and wakes the presenter queue so the
      watchdog can stop with `stopCause=remote-input`; Debug interactive run
      `captures/inavi_autodrive_20260531_165924` is live for validation.
+     A follow-up single-touch report showed the REST/control remote API was
+     not translating one-shot tap gestures; it only accepted explicit
+     down/move/up phases. `tap`/single-touch now expands into a CE-style
+     down/up pair, and probe run `captures/inavi_autodrive_20260531_170817`
+     confirmed both messages queued and were retrieved. Next validation should
+     use the real remote client gesture on a meaningful UI button, not only the
+     synthetic API probe at `10,10`.
 
 2. Introduce a CE-shaped internal `MsgQueue` model.
    - CE reference:

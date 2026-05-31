@@ -139,6 +139,11 @@ Status:
   let the normal scheduler drain the input promptly. Current source:
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/remote_server.cpp:1007` and
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp:586`.
+  A later "single touch" no-response report was traced to the remote API
+  boundary rather than GWE: the REST endpoint treated `type` as a phase and
+  did not convert `tap`/single-touch into a down/up pair. This is fixed in
+  source, and `captures/inavi_autodrive_20260531_170817` confirms a `tap`
+  request queues and retrieves `WM_LBUTTONDOWN` and `WM_LBUTTONUP`.
   The bug remains open until the queue model, wake categories, and
   send-message edge cases are the behavioral truth.
 

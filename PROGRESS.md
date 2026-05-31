@@ -1644,3 +1644,16 @@ Confirmed behavior difference:
   Release and Debug builds passed with the known vcpkg/Boost warnings. Debug
   interactive run `captures/inavi_autodrive_20260531_165924` is live for
   remote input validation.
+- The next live report found that a "single touch" still produced no guest
+  response. Log review of `captures/inavi_autodrive_20260531_165924` showed no
+  `queued host mouse`, `stopCause=remote-input`, or retrieved mouse input at
+  all, so the event was not reaching GWE. The remote REST endpoint accepted
+  only phase-style `type` values (`down`, `move`, `up`, `cancel`), while common
+  clients send a one-shot `tap`/single touch. The endpoint and control
+  websocket now expand `tap`/empty/single-touch into normal CE mouse
+  down/up input. Current source reference:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/remote_server.cpp:751`.
+  Release and Debug builds passed with the known vcpkg/Boost warnings. Debug
+  run `captures/inavi_autodrive_20260531_170817` was probed with
+  `POST /api/v1/input/touch {"type":"tap","x":10,"y":10}` and the log shows
+  `WM_LBUTTONDOWN`/`WM_LBUTTONUP` queued and retrieved immediately.

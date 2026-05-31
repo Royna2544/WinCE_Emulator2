@@ -206,6 +206,11 @@ server keeps only a short live backlog and paces chunk delivery; clients should
 play chunks as a real-time stream rather than treating the endpoint as a file
 download.
 
+`POST /api/v1/input/touch` accepts `type` values `down`, `move`, `up`,
+`cancel`, or `tap`; `tap` expands to a normal down/up pair at the supplied
+guest `x`,`y`. The control websocket accepts `{ "type": "touch", "phase": ... }`
+and defaults a missing phase to `tap`.
+
 If `--remote-token` is set, pass `Authorization: Bearer <token>`.
 
 Guest `CreateProcessW` children default to separate child emulator processes

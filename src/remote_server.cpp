@@ -33,6 +33,7 @@
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <iomanip>
 #include <sstream>
@@ -753,15 +754,22 @@ struct RemoteServerHandle {
     void handleTouch(tcp::socket& socket, const http::request<http::string_body>& req) {
         const auto body = nlohmann::json::parse(req.body(), nullptr, false);
         if (body.is_discarded() || !body.contains("type") || !body.contains("x") || !body.contains("y")) {
+            spdlog::warn("remote touch rejected: invalid body");
             writeResponse(socket, makeJsonResponse(req, http::status::bad_request,
                                                    {{"ok", false}, {"error", "invalid touch body"}}));
             return;
         }
+        const std::string type = body.value("type", std::string{});
+        const std::string phase = type == "touch" ? body.value("phase", std::string{"tap"}) : type;
         std::string error;
-        const bool ok = runtime.enqueueRemoteTouch(body.value("type", std::string{}),
+        const bool ok = runtime.enqueueRemoteTouch(phase,
                                                    body.value("x", 0),
                                                    body.value("y", 0),
                                                    error);
+        if (!ok) {
+            spdlog::warn("remote touch rejected: type={} phase={} x={} y={} error={}",
+                         type, phase, body.value("x", 0), body.value("y", 0), error);
+        }
         writeResponse(socket, makeJsonResponse(req, ok ? http::status::ok : http::status::bad_request,
                                                ok ? nlohmann::json{{"ok", true}}
                                                   : nlohmann::json{{"ok", false}, {"error", error}}));
@@ -830,7 +838,7 @@ struct RemoteServerHandle {
         try {
             if (type == "touch") {
                 std::string error;
-                const bool ok = runtime.enqueueRemoteTouch(message.value("phase", std::string{}),
+                const bool ok = runtime.enqueueRemoteTouch(message.value("phase", std::string{"tap"}),
                                                            message.value("x", 0),
                                                            message.value("y", 0),
                                                            error);
@@ -1049,13 +1057,21 @@ void SyntheticDllRuntime::drainRemoteInputEvents() {
 }
 
 bool SyntheticDllRuntime::enqueueRemoteTouch(const std::string& phase, int32_t x, int32_t y, std::string& error) {
-    uint32_t message = 0;
+    constexpr uint32_t kRemoteWmMouseMove = 0x0200;
+    constexpr uint32_t kRemoteWmLButtonDown = 0x0201;
+    constexpr uint32_t kRemoteWmLButtonUp = 0x0202;
+    std::array<uint32_t, 2> messages{};
+    size_t messageCount = 1;
     if (phase == "down") {
-        message = 0x0201;
+        messages[0] = kRemoteWmLButtonDown;
     } else if (phase == "move") {
-        message = 0x0200;
+        messages[0] = kRemoteWmMouseMove;
     } else if (phase == "up" || phase == "cancel") {
-        message = 0x0202;
+        messages[0] = kRemoteWmLButtonUp;
+    } else if (phase == "tap" || phase == "click" || phase == "single" || phase == "single-touch" || phase.empty()) {
+        messages[0] = kRemoteWmLButtonDown;
+        messages[1] = kRemoteWmLButtonUp;
+        messageCount = 2;
     } else {
         error = "unsupported touch type";
         return false;
@@ -1066,7 +1082,9 @@ bool SyntheticDllRuntime::enqueueRemoteTouch(const std::string& phase, int32_t x
     }
     {
         std::lock_guard<std::mutex> lock(ceRemote_.mutex());
-        ceRemote_.touchEvents().push_back({message, x, y});
+        for (size_t index = 0; index < messageCount; ++index) {
+            ceRemote_.touchEvents().push_back({messages[index], x, y});
+        }
     }
     notifyRemoteInputQueued();
     return true;
