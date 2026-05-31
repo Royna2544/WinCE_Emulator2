@@ -3458,6 +3458,11 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             if (flags & 0x0080u) {
                 it->second.visible = false; // SWP_HIDEWINDOW
                 it->second.paintBoundsValid = false;
+                const size_t discardedUpdates = discardQueuedWindowUpdateMessages(a0);
+                if (discardedUpdates) {
+                    spdlog::info("SetWindowPos discarded {} queued update messages for hidden guest=0x{:08x}",
+                                 discardedUpdates, a0);
+                }
             }
             if (!(flags & 0x0004u)) { // SWP_NOZORDER
                 if (a1 == 1) { // HWND_BOTTOM
@@ -3621,8 +3626,10 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                 it->second.zOrder = nextWindowZOrder();
             }
             size_t discardedInput = 0;
+            size_t discardedUpdates = 0;
             if (!it->second.visible) {
                 it->second.paintBoundsValid = false;
+                discardedUpdates = discardQueuedWindowUpdateMessages(a0);
                 auto isSameOrDescendant = [&](uint32_t hwnd) {
                     for (uint32_t current = hwnd; current;) {
                         if (current == a0) return true;
@@ -3647,6 +3654,10 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             if (discardedInput) {
                 spdlog::info("ShowWindow discarded {} queued pointer messages for hidden guest=0x{:08x}",
                              discardedInput, a0);
+            }
+            if (discardedUpdates) {
+                spdlog::info("ShowWindow discarded {} queued update messages for hidden guest=0x{:08x}",
+                             discardedUpdates, a0);
             }
             ensureHostWindow(a0, it->second);
 #if defined(_WIN32)

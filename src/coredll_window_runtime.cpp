@@ -1059,23 +1059,42 @@ void SyntheticDllRuntime::queueGuestPaint(uint32_t hwnd, bool erase) {
         });
     };
     if (erase) {
-        if (!hasQueued(0x0014)) {
+        if (!hasQueued(kGuestWmEraseBkgnd)) {
             GuestMessage eraseMessage{};
             eraseMessage.hwnd = hwnd;
-            eraseMessage.message = 0x0014; // WM_ERASEBKGND
+            eraseMessage.message = kGuestWmEraseBkgnd;
             eraseMessage.wParam = makeGuestDc(hwnd);
             eraseMessage.time = uint32_t(++tick_ * 16);
             ceGwe_.postPostedMessage(eraseMessage);
         }
     }
-    if (!hasQueued(0x000f)) {
+    if (!hasQueued(kGuestWmPaint)) {
         GuestMessage paint{};
         paint.hwnd = hwnd;
-        paint.message = 0x000f; // WM_PAINT
+        paint.message = kGuestWmPaint;
         paint.time = uint32_t(++tick_ * 16);
         ceGwe_.postPostedMessage(paint);
     }
     invalidateHostWindows();
+}
+
+size_t SyntheticDllRuntime::discardQueuedWindowUpdateMessages(uint32_t hwnd) {
+    if (!hwnd) return 0;
+    auto isSameOrDescendant = [&](uint32_t candidate) {
+        for (uint32_t current = candidate; current;) {
+            if (current == hwnd) return true;
+            auto window = windows_.find(current);
+            if (window == windows_.end()) break;
+            current = window->second.parent;
+        }
+        return false;
+    };
+    return ceGwe_.eraseIf([&](const GuestMessage& message) {
+        if (!isSameOrDescendant(message.hwnd)) return false;
+        return message.message == kGuestWmPaint ||
+               message.message == kGuestWmEraseBkgnd ||
+               message.message == kGuestWmShowWindow;
+    });
 }
 
 void SyntheticDllRuntime::prioritizeQueuedWindowMessages(uint32_t hwnd) {
@@ -1106,12 +1125,12 @@ void SyntheticDllRuntime::queueVisibleFullScreenPopupPaint(uint32_t hwnd) {
 
     retireOlderFullScreenOwnedPopupsForPopup(hwnd);
     const bool hasShow = ceGwe_.anyMessage([&](const GuestMessage& message) {
-        return message.hwnd == hwnd && message.message == 0x0018;
+        return message.hwnd == hwnd && message.message == kGuestWmShowWindow;
     });
     if (!hasShow) {
         GuestMessage show{};
         show.hwnd = hwnd;
-        show.message = 0x0018; // WM_SHOWWINDOW
+        show.message = kGuestWmShowWindow;
         show.wParam = 1;
         show.time = uint32_t(++tick_ * 16);
         ceGwe_.postPostedMessage(show);
@@ -1134,12 +1153,12 @@ void SyntheticDllRuntime::queueVisiblePopupPaint(uint32_t hwnd) {
     if (ownedPopup && guestWindowCoversFramebuffer(hwnd)) return;
 
     const bool hasShow = ceGwe_.anyMessage([&](const GuestMessage& message) {
-        return message.hwnd == hwnd && message.message == 0x0018;
+        return message.hwnd == hwnd && message.message == kGuestWmShowWindow;
     });
     if (!hasShow) {
         GuestMessage show{};
         show.hwnd = hwnd;
-        show.message = 0x0018; // WM_SHOWWINDOW
+        show.message = kGuestWmShowWindow;
         show.wParam = 1;
         show.time = uint32_t(++tick_ * 16);
         ceGwe_.postPostedMessage(show);
@@ -1222,6 +1241,7 @@ void SyntheticDllRuntime::noteGuestWindowPaint(uint32_t hwnd,
 void SyntheticDllRuntime::captureGuestWindowBacking(uint32_t hwnd) {
     auto it = windows_.find(hwnd);
     if (it == windows_.end()) return;
+    if (it->second.destroyed || !it->second.visible) return;
     const bool childWindow = (it->second.style & kWindowStyleChild) != 0;
     const bool ownedPopup = isOwnedPopupWindow(hwnd);
     const bool smallTopLevelPopup = isTopLevelPopupWindow(hwnd) && !guestWindowCoversFramebuffer(hwnd);

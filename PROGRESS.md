@@ -1069,3 +1069,20 @@ Confirmed behavior difference:
   down/up pairing without adding app-specific button behavior. Current source
   reference:
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp:2448`.
+- A Debug remote-server run for the full-screen return/bottom-bar redraw issue
+  showed a full-screen popup could leave queued `WM_PAINT`/`WM_ERASEBKGND`/
+  `WM_SHOWWINDOW` work behind after it was hidden, and the hidden popup could
+  later recapture its saved backing. CE GWE models visible/update state on the
+  window (`m_hrgnVisible`, `m_hrgnUpdate`) and has explicit
+  clear/recalculate/invalidate hooks, so hidden windows should not keep stale
+  update work as display truth. The runtime now discards queued update messages
+  for a hidden window subtree on `ShowWindow(SW_HIDE)`/`SetWindowPos`
+  `SWP_HIDEWINDOW`, and saved backing capture refuses hidden/destroyed
+  windows. CE reference:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/window.hpp:1123`.
+  Current source references:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp:1081`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp:1241`,
+  and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_named_dispatch.cpp:3630`.
+  The 2026-05-31 Release build passed with the known Boost Beast warning.

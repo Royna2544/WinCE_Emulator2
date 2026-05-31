@@ -1352,6 +1352,7 @@ private:
     bool hasHostErasePresentDeferral(uint32_t hwnd) const;
     void releaseHostErasePresentDeferral(uint32_t hwnd);
     void queueGuestPaint(uint32_t hwnd, bool erase);
+    size_t discardQueuedWindowUpdateMessages(uint32_t hwnd);
     void prioritizeQueuedWindowMessages(uint32_t hwnd);
     void queueVisibleFullScreenPopupPaint(uint32_t hwnd);
     void queueVisiblePopupPaint(uint32_t hwnd);
@@ -1459,6 +1460,11 @@ private:
     uint32_t reg(int regId) const;
     void setReg(int regId, uint32_t value) const;
     uint32_t stackArg(uint32_t index) const;
+
+    static constexpr uint32_t kGuestWmPaint = 0x000fu;
+    static constexpr uint32_t kGuestWmEraseBkgnd = 0x0014u;
+    static constexpr uint32_t kGuestWmShowWindow = 0x0018u;
+
     uint32_t allocate(uint32_t size, bool zeroFill);
     void releaseAllocation(uint32_t address);
     uint32_t allocationSize(uint32_t address) const;

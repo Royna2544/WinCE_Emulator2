@@ -125,7 +125,10 @@ Active refactor checklist: `PLAN.md`.
      consumes the GWE client-update rectangle when present, and `EndPaint`
      clears the GWE update region. Next step is to broaden region-owned
      visibility and DC clipping. Input hit testing now uses GWE visible-region
-     rectangles for its point checks.
+     rectangles for its point checks. Full-screen hide/return redraw now also
+     discards stale queued update messages for hidden subtrees and blocks
+     backing recapture for hidden/destroyed windows, matching CE's visible/
+     update region ownership more closely.
 
 5. Make paint APIs consume update regions.
    - CE reference:

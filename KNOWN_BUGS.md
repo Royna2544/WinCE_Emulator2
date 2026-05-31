@@ -322,7 +322,9 @@ Status:
   new `CeGwe` window-region shadow, and `BeginPaint` now reports the
   GWE client-update rectangle when present. The bug remains open until update
   regions are intersected with real visible/client regions and DC clipping uses
-  the same model.
+  the same model. A narrower full-screen hide/return redraw bug is mitigated:
+  hidden window subtrees now drop stale queued update messages and cannot
+  recapture saved backing while hidden.
 
 ## GDI Clipping Is Not Yet A First-Class DC/Window Invariant
 
