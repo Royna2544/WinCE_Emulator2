@@ -28,30 +28,30 @@ uint32_t SyntheticDllRuntime::allocate(uint32_t size, bool zeroFill) {
     const uint32_t capacity = (size + 0x0fu) & ~0x0fu;
     uint32_t address = 0;
     uint32_t blockCapacity = capacity;
-    auto freeIt = freeBlocksBySize_.lower_bound(capacity);
-    if (freeIt != freeBlocksBySize_.end()) {
+    auto freeIt = ceMemory_.freeBlocksBySize().lower_bound(capacity);
+    if (freeIt != ceMemory_.freeBlocksBySize().end()) {
         blockCapacity = freeIt->first;
         address = freeIt->second;
-        freeBlocksBySize_.erase(freeIt);
+        ceMemory_.freeBlocksBySize().erase(freeIt);
         const uint32_t remainder = blockCapacity - capacity;
         blockCapacity = capacity;
         if (remainder >= 0x20u) {
-            freeBlocksBySize_.emplace(remainder, address + capacity);
+            ceMemory_.freeBlocksBySize().emplace(remainder, address + capacity);
         } else {
             blockCapacity += remainder;
         }
     } else {
-        if (nextHeap_ + capacity > heapLimit_) {
+        if (ceMemory_.nextHeap() + capacity > ceMemory_.heapLimit()) {
             spdlog::warn("guest heap exhausted requested={} capacity={} next=0x{:08x} limit=0x{:08x} freeBlocks={}",
-                         size, capacity, nextHeap_, heapLimit_, freeBlocksBySize_.size());
+                         size, capacity, ceMemory_.nextHeap(), ceMemory_.heapLimit(), ceMemory_.freeBlocksBySize().size());
             lastError_ = 14; // ERROR_OUTOFMEMORY
             return 0;
         }
-        address = nextHeap_;
-        nextHeap_ += capacity;
+        address = ceMemory_.nextHeap();
+        ceMemory_.nextHeap() += capacity;
     }
-    allocationSizes_[address] = size;
-    allocationCapacities_[address] = blockCapacity;
+    ceMemory_.allocationSizes()[address] = size;
+    ceMemory_.allocationCapacities()[address] = blockCapacity;
     if (zeroFill) {
         std::vector<uint8_t> zeros(blockCapacity);
         uc_mem_write(uc_, address, zeros.data(), zeros.size());
@@ -62,18 +62,18 @@ uint32_t SyntheticDllRuntime::allocate(uint32_t size, bool zeroFill) {
 
 void SyntheticDllRuntime::releaseAllocation(uint32_t address) {
     if (!address) return;
-    auto sizeIt = allocationSizes_.find(address);
-    auto capacityIt = allocationCapacities_.find(address);
-    if (sizeIt == allocationSizes_.end() || capacityIt == allocationCapacities_.end()) return;
+    auto sizeIt = ceMemory_.allocationSizes().find(address);
+    auto capacityIt = ceMemory_.allocationCapacities().find(address);
+    if (sizeIt == ceMemory_.allocationSizes().end() || capacityIt == ceMemory_.allocationCapacities().end()) return;
     const uint32_t capacity = capacityIt->second;
-    allocationSizes_.erase(sizeIt);
-    allocationCapacities_.erase(capacityIt);
-    if (capacity) freeBlocksBySize_.emplace(capacity, address);
+    ceMemory_.allocationSizes().erase(sizeIt);
+    ceMemory_.allocationCapacities().erase(capacityIt);
+    if (capacity) ceMemory_.freeBlocksBySize().emplace(capacity, address);
 }
 
 uint32_t SyntheticDllRuntime::allocationSize(uint32_t address) const {
-    auto it = allocationSizes_.find(address);
-    return it == allocationSizes_.end() ? 0 : it->second;
+    auto it = ceMemory_.allocationSizes().find(address);
+    return it == ceMemory_.allocationSizes().end() ? 0 : it->second;
 }
 
 uint32_t SyntheticDllRuntime::readU32(uint32_t address) const {

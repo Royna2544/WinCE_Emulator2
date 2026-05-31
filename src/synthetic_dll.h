@@ -8,6 +8,7 @@
 #include "ce_gwe.h"
 #include "ce_ipc.h"
 #include "ce_kernel.h"
+#include "ce_memory.h"
 #include "ce_mgdi.h"
 #include "ce_registry.h"
 #include "ce_remote.h"
@@ -552,9 +553,6 @@ private:
 
     uc_engine* uc_{};
     uint32_t nextModuleBase_ = 0x70000000;
-    uint32_t heapBase_ = 0x30000000;
-    uint32_t heapLimit_ = 0x34000000;
-    uint32_t nextHeap_ = 0x30010000;
     uint32_t lastError_ = 0;
     CeKernel ceKernel_;
     CeDevice ceDevice_;
@@ -562,6 +560,7 @@ private:
     CeAudio ceAudio_;
     CeGwe ceGwe_;
     CeIpc ceIpc_;
+    CeMemory ceMemory_;
     CeMgdi ceMgdi_;
     CeRegistry ceRegistry_;
     CeRemote ceRemote_;
@@ -602,9 +601,6 @@ private:
     uint16_t nextAtom_ = 0xc000;
     std::unordered_map<uint32_t, ExportEntry> exportsByAddress_;
     std::map<std::string, RegisteredSyntheticDll> registeredDllsByName_;
-    std::unordered_map<uint32_t, uint32_t> allocationSizes_;
-    std::unordered_map<uint32_t, uint32_t> allocationCapacities_;
-    std::multimap<uint32_t, uint32_t> freeBlocksBySize_;
     std::unordered_map<uint32_t, uint32_t> tlsValues_;
     std::unordered_map<uint32_t, uint32_t> criticalSectionDepth_;
     std::unordered_map<uint32_t, uint32_t> syntheticHandleValues_;

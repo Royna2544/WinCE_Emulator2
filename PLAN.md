@@ -479,6 +479,11 @@ results, or timing thresholds.
   SDK ordinal metadata and unknown-ordinal logging.
   Current source anchors: `src/ordinal_dispatch_table.h`,
   `src/synthetic_dll.h`, and `src/synthetic_dll_modules.cpp`.
+- [x] Add a `CeMemory` owner for guest heap bounds, allocation metadata, and
+  reusable free-block bookkeeping while preserving current runtime allocation
+  behavior.
+  Current source anchors: `src/ce_memory.h` and
+  `src/coredll_memory_runtime.cpp`.
 - [ ] Move window classes, `GuestWindow`, focus/capture/pointer state, timers,
   z-order, and pending window lifecycle state behind `CeGwe`. CE source
   anchors: `gweapiset1.hpp`, `cmsgque.h`, and `window.hpp`.

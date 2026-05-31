@@ -361,7 +361,7 @@ SyntheticDllRuntime::SyntheticDllRuntime(uc_engine* uc) : uc_(uc) {
 #else
     diagnostics_.setDumpsEnabled(envFlagEnabled("INAVI_EMU_DUMPS"));
 #endif
-    uc_mem_map(uc_, heapBase_, heapLimit_ - heapBase_, UC_PROT_ALL);
+    uc_mem_map(uc_, ceMemory_.heapBase(), ceMemory_.heapLimit() - ceMemory_.heapBase(), UC_PROT_ALL);
     uc_mem_map(uc_, 0x00005000, 0x00001000, UC_PROT_ALL);
     initializeUserKData();
 }

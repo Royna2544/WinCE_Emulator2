@@ -1862,8 +1862,8 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             writeU32(a0 + 12, 32u * 1024u * 1024u);
             writeU32(a0 + 16, 64u * 1024u * 1024u);
             writeU32(a0 + 20, 32u * 1024u * 1024u);
-            writeU32(a0 + 24, heapLimit_ - heapBase_);
-            writeU32(a0 + 28, heapLimit_ - nextHeap_);
+            writeU32(a0 + 24, ceMemory_.heapLimit() - ceMemory_.heapBase());
+            writeU32(a0 + 28, ceMemory_.heapLimit() - ceMemory_.nextHeap());
 #endif
             ret = 0;
             lastError_ = 0;

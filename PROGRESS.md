@@ -209,6 +209,13 @@ Current emulator difference:
   Bounded Release startup smoke `captures/inavi_autodrive_20260531_144707`
   captured the initial window and log scan found no fatal, unsupported-ordinal,
   `UC_ERR`, or false-`PC == 0` signatures.
+- `CeMemory` now owns guest heap bounds, allocation sizes/capacities, and the
+  reusable free-block map. Runtime allocation/release still performs the same
+  Unicorn memory writes and out-of-memory reporting through CeMemory accessors.
+  Current source anchors: `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_memory.h`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_memory_runtime.cpp`, and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp`. The 2026-05-31
+  Release build passed with the existing vcpkg/Boost warnings.
 - Lookup-only hot integer maps in `SyntheticDllRuntime` now use
   `std::unordered_map` instead of ordered maps where iteration order is not
   guest-visible: synthetic exports by address, allocation metadata, TLS and
