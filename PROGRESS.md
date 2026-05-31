@@ -137,6 +137,29 @@ Current emulator difference:
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/remote_server.cpp:759`. The
   2026-05-31 Release builds passed with the existing Boost Beast warning from
   `remote_server.cpp`.
+- Guest-visible `waveOut` timing now has a virtual CE-shaped owner. `CeAudio`
+  queues copied guest `WAVEHDR` PCM, computes buffer completion from
+  `nAvgBytesPerSec`, and marks headers done/signals guest events from the
+  virtual timeline instead of letting host WinMM callbacks own CE completion.
+  The websocket audio endpoint now taps the active `CeAudio` timeline; a
+  client connecting mid-buffer starts near the current playback offset instead
+  of hearing stale startup PCM or waiting for a future `waveOutWrite`. Host
+  WinMM is opened with `CALLBACK_NULL`, so local playback remains a backend
+  rather than the guest-visible clock. CE references:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/CORE/DLL/core_common.def:944`,
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COMM/BLUETOOTH/AV/A2DP/wavemain.cpp:396`,
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COMM/BLUETOOTH/AV/A2DP/strmctxt.cpp:130`,
+  and
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COMM/BLUETOOTH/AV/A2DP/strmctxt.h:93`.
+  Current source anchors:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_audio.h:10`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_host_audio.cpp:135`,
+  and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/remote_server.cpp:1022`.
+  The 2026-05-31 Release build passed with the existing Boost Beast warning
+  from `remote_server.cpp`. Remaining follow-up: feed host/local WinMM from
+  smaller backend chunks instead of submitting the full guest buffer as one
+  local playback buffer.
 - Remote input press/release now wakes a window-owner thread parked in a
   non-`waitAll` multi-object wait when that owner has pending GWE messages.
   This models CE `MsgQueue::m_hNewEvents` enough to avoid button-up messages

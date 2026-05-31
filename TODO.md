@@ -10,6 +10,28 @@ Active refactor checklist: `PLAN.md`.
 
 ## Immediate
 
+0. Validate and finish the CE-shaped audio timeline.
+   - CE reference:
+     `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/CORE/DLL/core_common.def:944`,
+     `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COMM/BLUETOOTH/AV/A2DP/wavemain.cpp:396`,
+     `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COMM/BLUETOOTH/AV/A2DP/strmctxt.cpp:130`,
+     and
+     `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COMM/BLUETOOTH/AV/A2DP/strmctxt.h:93`.
+   - Current source:
+     `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_audio.h:10`,
+     `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_host_audio.cpp:135`,
+     and
+     `/mnt/d/GitHub/WinCE_Emulator_v2/src/remote_server.cpp:1022`.
+   - Current status: `CeAudio` owns queued guest wave-output buffers,
+     completion timing, header done/in-queue transitions, and live websocket
+     slices. Websocket clients now join active playback near the current
+     offset instead of receiving stale startup PCM or silence until the next
+     `waveOutWrite`. Guest completion is virtual; host WinMM is a backend
+     opened with `CALLBACK_NULL`. Next step is Debug interactive validation
+     with a mid-startup websocket connect and short button-click sounds, then
+     a follow-up pass to feed local WinMM from smaller backend chunks if local
+     playback still stacks behind a long guest buffer.
+
 1. Finish virtual serial wait semantics and scheduler responsiveness.
    - CE reference:
      `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/DRIVERS/SERDEV/serial.c`,

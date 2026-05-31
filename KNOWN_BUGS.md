@@ -155,7 +155,7 @@ Status:
   info logging no longer amplifies that churn; the remaining question is how
   much of the visible delay is guest work versus emulator scheduling/rendering.
 
-## Resolved: Remote Audio WebSocket Was Disabled Or Could Replay Stale Startup Audio
+## Partially Resolved: Remote Audio WebSocket And Host Audio Timing
 
 Symptom:
 
@@ -169,6 +169,12 @@ Symptom:
 - When a websocket client was connected during a long guest `waveOutWrite`,
   the remote audio queue could hold seconds of old PCM, so later click sounds
   waited behind that backlog.
+- A websocket client connecting while a long startup buffer was already
+  playing could not join the current audio position because the old path only
+  published PCM at `waveOutWrite` submit time.
+- Host/local WinMM was still too close to the guest-visible timing model:
+  callbacks/events from host playback could act like CE completion instead of
+  a virtual wave stream returning queued buffers.
 
 Evidence:
 
@@ -178,15 +184,33 @@ Evidence:
 
 Status:
 
-- Fixed on 2026-05-31. `tools/autodrive_inavi.ps1` now enables remote audio by
-  default when `-RemoteServer` is used, with `-NoRemoteAudio` available for
-  explicit opt-out. Remote PCM is only queued while at least one audio
-  websocket client is connected, and stale queued audio is dropped on first
-  connect and last disconnect. The audio websocket now wakes when new PCM is
-  published and sets `TCP_NODELAY` on the socket so short sounds are delivered
-  without waiting for poll ticks or TCP coalescing. The live audio queue is
-  capped to a small latency window, dropping older PCM instead of letting long
-  guest wave buffers delay later click sounds.
+- Partially fixed on 2026-05-31. `tools/autodrive_inavi.ps1` now enables
+  remote audio by default when `-RemoteServer` is used, with `-NoRemoteAudio`
+  available for explicit opt-out. Remote PCM is only queued while at least one
+  audio websocket client is connected, and stale queued audio is dropped on
+  first connect and last disconnect. The audio websocket wakes when new PCM is
+  available and sets `TCP_NODELAY`.
+- `CeAudio` now owns the virtual CE wave-output timeline. `waveOutWrite`
+  queues copied guest PCM, virtual completion marks `WHDR_DONE`, clears
+  `WHDR_INQUEUE`, and signals the guest completion event. The websocket now
+  materializes live slices from the active timeline, so a mid-playback client
+  can join near the current offset without replaying stale audio. CE
+  references:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/CORE/DLL/core_common.def:944`,
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COMM/BLUETOOTH/AV/A2DP/wavemain.cpp:396`,
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COMM/BLUETOOTH/AV/A2DP/strmctxt.cpp:130`,
+  and
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COMM/BLUETOOTH/AV/A2DP/strmctxt.h:93`.
+  Current source:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_audio.h:10`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_host_audio.cpp:135`,
+  and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/remote_server.cpp:1022`.
+- Remaining open piece: local WinMM playback is now a backend and no longer
+  the guest-visible clock, but it is still fed as host buffers rather than a
+  fully chunked backend timeline. Validate whether local playback still stacks
+  behind long startup audio, then split host backend submission into smaller
+  chunks if needed.
 
 ## Resolved: Missing Host Serial Port Added Startup Delay
 

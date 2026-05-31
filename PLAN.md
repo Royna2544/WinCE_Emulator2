@@ -458,15 +458,20 @@ results, or timing thresholds.
   completed behavior phase, keeping CE source references beside behavior
   changes.
 
-## Cross-Cutting: Audio Wait Fairness
+## Cross-Cutting: CE Audio Timeline And Live WebSocket Tap
 
-- [ ] Preserve CE's asynchronous wave-output behavior while fixing wait
+- [x] Preserve CE's asynchronous wave-output behavior while fixing wait
   fairness. CE `WODM_WRITE` queues a prepared `WAVEHDR` and returns without
   playing the whole buffer inline:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/CORE/DLL/core_common.def:944`,
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COMM/BLUETOOTH/AV/A2DP/wavemain.cpp:396`
   and
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COMM/BLUETOOTH/AV/A2DP/strmctxt.cpp:130`.
-- [ ] Model audio completion as an asynchronous virtual-kernel/device event,
+- [x] Add `src/ce_audio.h` and `src/ce_audio.cpp` as the virtual owner for
+  wave-output stream timing, queued buffers, active playback spans, and live
+  PCM slices. Current source anchors: `src/coredll_host_audio.cpp`,
+  `src/remote_server.cpp`, and `src/synthetic_dll.h`.
+- [x] Model audio completion as an asynchronous virtual-kernel/device event,
   not as a reason to stall global guest progress. CE driver output work is
   performed by separate rendering/output threads and completion marks
   `WHDR_DONE`, clears `WHDR_INQUEUE`, and reports `WOM_DONE`:
@@ -474,7 +479,18 @@ results, or timing thresholds.
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COMM/BLUETOOTH/AV/A2DP/hwctxt.cpp:1575`,
   and
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COMM/BLUETOOTH/AV/A2DP/strmctxt.h:93`.
-- [ ] Audit the current host-audio shim and wait loop before changing
+- [x] Audit and decouple the current host-audio shim from guest-visible
+  completion. `waveOutOpen` now opens the host backend with `CALLBACK_NULL`,
+  `waveOutWrite` queues the guest buffer into `CeAudio`, and virtual
+  completion updates guest `WAVEHDR` flags and signals the guest event.
+- [x] Replace websocket publish-on-submit with a live tap over the active
+  `CeAudio` timeline. A client connecting mid-buffer starts from the current
+  playback offset, not from stale startup PCM and not only from the next
+  `waveOutWrite`.
+- [ ] Feed host/local WinMM from smaller backend chunks instead of submitting
+  the whole guest buffer as one host buffer. Guest-visible timing is now
+  virtual, but local host playback still uses WinMM as the playback backend.
+- [x] Audit the current host-audio shim and wait loop before changing
   behavior. Current `waveOutWrite` already returns immediately for the observed
   11.2s buffer, but `WaitForSingleObject` on the audio event blocks inside the
   coredll handler, which can serialize initialization that CE would let other
@@ -482,7 +498,7 @@ results, or timing thresholds.
   `src/coredll_host_audio.cpp:539`,
   `src/coredll_named_dispatch.cpp:1849`, and
   `src/coredll_thread_runtime.cpp:252`.
-- [ ] Do not fake success by completing audio immediately or skipping playback.
+- [x] Do not fake success by completing audio immediately or skipping playback.
   The target direction is scheduler-aware guest waiting: the waiting guest
   thread blocks, while the virtual CE kernel/GWE scheduler continues runnable
   guest work until the audio completion event becomes signaled.

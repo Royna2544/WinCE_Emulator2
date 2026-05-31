@@ -3,6 +3,7 @@
 #include <unicorn/unicorn.h>
 
 #include "ce_device.h"
+#include "ce_audio.h"
 #include "ce_gwe.h"
 #include "ce_kernel.h"
 #include "ce_mgdi.h"
@@ -746,6 +747,7 @@ private:
     uint32_t lastError_ = 0;
     CeKernel ceKernel_;
     CeDevice ceDevice_;
+    CeAudio ceAudio_;
     CeGwe ceGwe_;
     CeMgdi ceMgdi_;
     uint32_t processHeapHandle_ = 0;
@@ -1274,6 +1276,7 @@ private:
     void injectRemoteSerialBytes(const std::string& bytes);
     size_t readRemoteSerialBytes(uint8_t* dst, size_t maxBytes);
     size_t remoteSerialByteCount() const;
+    bool materializeRemoteAudioChunkLocked(uint32_t durationMs);
     void publishRemoteAudioChunk(const std::vector<uint8_t>& pcm,
                                  uint16_t sourceFormatTag,
                                  uint32_t sourceSampleRate,

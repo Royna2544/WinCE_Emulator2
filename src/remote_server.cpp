@@ -1019,13 +1019,57 @@ void SyntheticDllRuntime::publishRemoteAudioChunk(const std::vector<uint8_t>& pc
     if (wasEmpty && !remoteAudioChunks_.empty()) remoteAudioCv_.notify_all();
 }
 
+bool SyntheticDllRuntime::materializeRemoteAudioChunkLocked(uint32_t durationMs) {
+    if (!remoteConfig_.audioEnabled || remoteAudioClientCount_ == 0) return false;
+
+    const uint64_t nowMs = GetTickCount64();
+    if (!remoteAudioNextPtsMs_ || remoteAudioNextPtsMs_ + 250 < nowMs) {
+        remoteAudioNextPtsMs_ = nowMs;
+    }
+
+    const std::optional<CeAudio::LiveSlice> slice =
+        ceAudio_.liveSlice(remoteAudioNextPtsMs_, std::max<uint32_t>(1, durationMs));
+    if (!slice || slice->pcm.empty()) return false;
+
+    const uint32_t targetSampleRate = static_cast<uint32_t>(std::max(1, remoteConfig_.audioSampleRate));
+    const uint16_t targetChannels = static_cast<uint16_t>(std::max(1, remoteConfig_.audioChannels));
+    const std::string targetFormatName = remoteConfig_.audioFormat;
+    const ma_format targetFormat = remoteAudioFormat(targetFormatName);
+    const size_t targetSampleBytes = ma_get_bytes_per_sample(targetFormat);
+    if (targetFormat == ma_format_unknown || !targetSampleBytes) return false;
+
+    std::vector<uint8_t> converted = convertRemotePcm(slice->pcm,
+                                                      slice->format.formatTag,
+                                                      slice->format.samplesPerSec,
+                                                      slice->format.channels,
+                                                      slice->format.blockAlign,
+                                                      slice->format.bitsPerSample,
+                                                      targetFormatName,
+                                                      targetSampleRate,
+                                                      targetChannels);
+    const std::vector<uint8_t>& payload = converted.empty() ? slice->pcm : converted;
+    if (payload.empty()) return false;
+
+    RemoteAudioChunk chunk;
+    chunk.payload = payload;
+    chunk.sequence = ++remoteAudioSequence_;
+    chunk.ptsMs = remoteAudioNextPtsMs_;
+    chunk.durationMs = std::max<uint32_t>(1, slice->durationMs);
+    remoteAudioNextPtsMs_ = slice->startMs + chunk.durationMs;
+    remoteAudioChunks_.push_back(std::move(chunk));
+    while (remoteAudioChunks_.size() > kMaxRemoteAudioQueuedChunks) remoteAudioChunks_.pop_front();
+    return true;
+}
+
 void SyntheticDllRuntime::registerRemoteAudioClient() {
     std::lock_guard<std::mutex> lock(remoteMutex_);
     if (remoteAudioClientCount_ == 0) {
         remoteAudioChunks_.clear();
-        remoteAudioNextPtsMs_ = 0;
+        remoteAudioNextPtsMs_ = GetTickCount64();
     }
     ++remoteAudioClientCount_;
+    materializeRemoteAudioChunkLocked(kRemoteAudioChunkDurationMs);
+    remoteAudioCv_.notify_all();
 }
 
 void SyntheticDllRuntime::unregisterRemoteAudioClient() {
@@ -1043,14 +1087,19 @@ void SyntheticDllRuntime::unregisterRemoteAudioClient() {
 void SyntheticDllRuntime::clearRemoteAudioChunks() {
     std::lock_guard<std::mutex> lock(remoteMutex_);
     remoteAudioChunks_.clear();
+    remoteAudioNextPtsMs_ = GetTickCount64();
 }
 
 bool SyntheticDllRuntime::waitForRemoteAudioChunks(uint32_t timeoutMs) {
     std::unique_lock<std::mutex> lock(remoteMutex_);
+    if (remoteAudioChunks_.empty()) materializeRemoteAudioChunkLocked(kRemoteAudioChunkDurationMs);
     if (!remoteAudioChunks_.empty() || remoteAudioClientCount_ == 0) return !remoteAudioChunks_.empty();
     remoteAudioCv_.wait_for(lock,
                             std::chrono::milliseconds(std::max<uint32_t>(1, timeoutMs)),
                             [&] {
+                                if (remoteAudioChunks_.empty()) {
+                                    materializeRemoteAudioChunkLocked(kRemoteAudioChunkDurationMs);
+                                }
                                 return !remoteAudioChunks_.empty() || remoteAudioClientCount_ == 0;
                             });
     return !remoteAudioChunks_.empty();
@@ -1059,6 +1108,7 @@ bool SyntheticDllRuntime::waitForRemoteAudioChunks(uint32_t timeoutMs) {
 std::vector<SyntheticDllRuntime::RemoteAudioChunk> SyntheticDllRuntime::takeRemoteAudioChunks(size_t maxChunks) {
     std::vector<RemoteAudioChunk> chunks;
     std::lock_guard<std::mutex> lock(remoteMutex_);
+    if (remoteAudioChunks_.empty()) materializeRemoteAudioChunkLocked(kRemoteAudioChunkDurationMs);
     while (!remoteAudioChunks_.empty() && chunks.size() < maxChunks) {
         chunks.push_back(std::move(remoteAudioChunks_.front()));
         remoteAudioChunks_.pop_front();
