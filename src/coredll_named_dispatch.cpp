@@ -1908,6 +1908,9 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                 ceKernel_.queryWaitObject(a0, hostWaitProbe, true);
             ret = wait.result;
             lastError_ = wait.error;
+            if (ret == CeKernel::kWaitObject0) {
+                ceKernel_.consumeAutoResetEvent(a0);
+            }
         } else
 #endif
         if (handle && (handle->kind == GuestHandle::Kind::GuestThread ||
@@ -1915,6 +1918,9 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             const CeKernel::WaitQueryResult wait = ceKernel_.queryWaitObject(a0, {}, true);
             ret = wait.result;
             lastError_ = wait.error;
+            if (ret == CeKernel::kWaitObject0) {
+                ceKernel_.consumeAutoResetEvent(a0);
+            }
         } else
         {
             ret = handle ? 0 : 0xffffffffu;

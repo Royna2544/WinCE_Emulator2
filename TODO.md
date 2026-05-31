@@ -153,6 +153,38 @@ Active refactor checklist: `PLAN.md`.
      `captures/inavi_autodrive_20260531_131703` is live on
      `192.168.0.39:8765`. Next validation should repeat the same remote route
      UI path and confirm the host no longer wedges or cuts the endpoint.
+     That run also exposed route-guide audio arriving before the matching
+     fullscreen UI transition: main-owner work was pending, but owner-priority
+     selection fell through to worker slices when no active worker context had
+     to be saved. The scheduler now restores the parked main pump for pending
+     main-owner queues in that case, unless the main context is parked in a
+     plain blocking wait. Next validation should repeat route guidance and
+     confirm the `waveOutWrite` to fullscreen `ShowWindow` gap no longer spans
+     several seconds.
+     Latest search-freeze follow-up:
+     `captures/inavi_autodrive_20260531_143011` shows main parked on
+     `WaitForSingleObject(0x10021, INFINITE)`, worker `0x124d6` repeatedly
+     doing route/search CPU work, and one sent message queued to the main
+     owner. The crash at serial wake / worker return is fixed, and blocked
+     main-worker slices now use a larger CPU budget when no input is pending.
+     Next step is to decide the CE-shaped fix for this specific wait shape:
+     either model GWE received sent messages as a waitable queue event that can
+     re-enter the owner safely, or prove from logs that the delay is pure guest
+     route CPU and attack emulator throughput/log overhead. Do not synthesize
+     route UI updates or force `0x10021`.
+     A host-only freeze was also found in the presenter batching path: remote
+     API/framebuffer output could continue while the local host window stayed
+     stale because long `message-transfer` work deferred batch release. Source
+     now heartbeat-flushes host-presentation batches during sent-message
+     transfers. Next Debug interactive validation should confirm the local host
+     window keeps refreshing while route/search message transfers run, and that
+     the remote endpoint no longer appears ahead of the host by several
+     seconds.
+     Another overlap regression was fixed in source: full-screen owned popup
+     teardown now restores captured backing before exposed owner/child repaint,
+     instead of discarding backing and leaving stale popup pixels under the
+     bottom strip. Next validation should confirm the startup safety screen no
+     longer visually overlaps with the bottom bar during the transition.
 
 2. Introduce a CE-shaped internal `MsgQueue` model.
    - CE reference:

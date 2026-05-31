@@ -606,7 +606,9 @@ void SyntheticDllRuntime::hookBasicBlock(uc_engine* uc, uint64_t address, uint32
                           runtime->interactiveSliceInstructionBudget_, uint32_t(address), pc, ra,
                           runtime->ceGwe_.messageCount());
         } else {
-            const bool messageTransfer = runtime->interactiveSliceReason_ == "message-transfer";
+            const bool messageTransfer =
+                runtime->interactiveSliceReason_ == "message-transfer" ||
+                runtime->interactiveSliceReason_ == "blocked-main-message-transfer";
             if (messageTransfer) ++runtime->messageTransferWatchdogStops_;
             const uint64_t nowMs = hostTickMilliseconds();
             const bool rateLimitedMessageTransfer =
@@ -1494,10 +1496,13 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
             CeKernel::HostWaitProbe hostWaitProbe;
 #endif
             refreshCompletedHostWaveBuffers();
-            const CeKernel::WaitQueryResult wait =
-                ceKernel_.queryWaitObject(pendingCall.args.a0, hostWaitProbe, true);
-            ret = wait.result;
-            lastError_ = wait.error;
+	            const CeKernel::WaitQueryResult wait =
+	                ceKernel_.queryWaitObject(pendingCall.args.a0, hostWaitProbe, true);
+	            ret = wait.result;
+	            lastError_ = wait.error;
+	            if (ret == CeKernel::kWaitObject0) {
+	                ceKernel_.consumeAutoResetEvent(pendingCall.args.a0);
+	            }
             const bool finiteExpired =
                 pendingCall.deadlineMs && hostTickMilliseconds() >= pendingCall.deadlineMs;
             waitStillBlocked = ret == kWaitTimeout &&
@@ -1914,13 +1919,14 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                         : 0;
                     spdlog::debug("guest thread sleep handle=0x{:08x} timeout={} return=0x{:08x} savedRa=0x{:08x} savedSp=0x{:08x}",
                                   ceKernel_.activeGuestThread(), a0, ra, savedRa, savedSp);
-                }
-                ceKernel_.activeGuestThread() = 0;
-                if (!restoreMainThreadContextIfRunnable(name.c_str())) {
-                    switchToRunnableGuestThread(name.c_str());
-                }
-                pumpHostMessages();
-                return;
+	                }
+	                ceKernel_.activeGuestThread() = 0;
+	                if (!pendingBlockingApis_.empty() ||
+	                    !restoreMainThreadContextIfRunnable(name.c_str())) {
+	                    switchToRunnableGuestThread(name.c_str());
+	                }
+	                pumpHostMessages();
+	                return;
 
             }
             if (blockingApiContinuationStub_) {
@@ -1971,13 +1977,14 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                             : hostTickMilliseconds() + uint64_t(a3);
                         spdlog::info("guest thread wait-multiple handle=0x{:08x} count={} waitAll={} timeout=0x{:08x} return=0x{:08x}",
                                      ceKernel_.activeGuestThread(), a0, a2 != 0, a3, ra);
-                    }
-                    ceKernel_.activeGuestThread() = 0;
-                    if (!restoreMainThreadContextIfRunnable(name.c_str())) {
-                        switchToRunnableGuestThread(name.c_str());
-                    }
-                    pumpHostMessages();
-                    return;
+	                    }
+	                    ceKernel_.activeGuestThread() = 0;
+	                    if (!pendingBlockingApis_.empty() ||
+	                        !restoreMainThreadContextIfRunnable(name.c_str())) {
+	                        switchToRunnableGuestThread(name.c_str());
+	                    }
+	                    pumpHostMessages();
+	                    return;
                 }
                 setReg(UC_MIPS_REG_V0, ret);
                 setReg(UC_MIPS_REG_PC, ra);
@@ -2037,8 +2044,11 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
             if (ceKernel_.activeGuestThread()) {
                 uint32_t ret = kWaitFailed;
                 uint32_t ignoredPreferredThread = 0;
-                pollSingleWait(ret, ignoredPreferredThread);
-                const bool wouldBlock = ret == kWaitTimeout && a1 != 0;
+	                pollSingleWait(ret, ignoredPreferredThread);
+	                if (ret == CeKernel::kWaitObject0) {
+	                    ceKernel_.consumeAutoResetEvent(a0);
+	                }
+	                const bool wouldBlock = ret == kWaitTimeout && a1 != 0;
                 if (wouldBlock) {
                     auto active = ceKernel_.threads().find(ceKernel_.activeGuestThread());
                     if (active != ceKernel_.threads().end()) {
@@ -2058,13 +2068,14 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                             : hostTickMilliseconds() + uint64_t(a1);
                         spdlog::info("guest thread wait handle=0x{:08x} wait=0x{:08x} return=0x{:08x}",
                                      ceKernel_.activeGuestThread(), a0, ra);
-                    }
-                    ceKernel_.activeGuestThread() = 0;
-                    if (!restoreMainThreadContextIfRunnable(name.c_str())) {
-                        switchToRunnableGuestThread(name.c_str());
-                    }
-                    pumpHostMessages();
-                    return;
+	                    }
+	                    ceKernel_.activeGuestThread() = 0;
+	                    if (!pendingBlockingApis_.empty() ||
+	                        !restoreMainThreadContextIfRunnable(name.c_str())) {
+	                        switchToRunnableGuestThread(name.c_str());
+	                    }
+	                    pumpHostMessages();
+	                    return;
                 }
                 setReg(UC_MIPS_REG_V0, ret);
                 setReg(UC_MIPS_REG_PC, ra);
@@ -2095,31 +2106,37 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                 pumpHostMessages();
                 return true;
             };
-            pollSingleWait(immediate, preferredThread);
-            if (immediate != kWaitTimeout || a1 == 0) {
-                setReg(UC_MIPS_REG_V0, a1 == 0 && immediate == kWaitTimeout ? kWaitTimeout : immediate);
-                setReg(UC_MIPS_REG_PC, ra);
-                pumpHostMessages();
-                return;
-            }
-            if (parkMainWaitAndRunWorker("initial")) return;
-
-            if (blockingApiContinuationStub_) {
-                PendingBlockingApi pending{name, ordinal, args};
-                if (a1 != kInfiniteTimeout) {
-                    pending.deadlineMs = hostTickMilliseconds() + uint64_t(a1);
-                }
+	            pollSingleWait(immediate, preferredThread);
+	            if (immediate != kWaitTimeout || a1 == 0) {
+	                if (immediate == CeKernel::kWaitObject0) {
+	                    ceKernel_.consumeAutoResetEvent(a0);
+	                }
+	                setReg(UC_MIPS_REG_V0, a1 == 0 && immediate == kWaitTimeout ? kWaitTimeout : immediate);
+	                setReg(UC_MIPS_REG_PC, ra);
+	                pumpHostMessages();
+	                return;
+	            }
+	            if (blockingApiContinuationStub_) {
+	                PendingBlockingApi pending{name, ordinal, args};
+	                if (a1 != kInfiniteTimeout) {
+	                    pending.deadlineMs = hostTickMilliseconds() + uint64_t(a1);
+	                }
                 pendingBlockingApis_.push_back(std::move(pending));
                 if (dispatchQueuedPaintForBlockingApi(pendingBlockingApis_.back(), "before block")) {
                     return;
                 }
                 pendingBlockingApis_.pop_back();
 
-            }
+	            }
 
-            pollSingleWait(immediate, preferredThread);
-            if (immediate != kWaitTimeout) {
-                setReg(UC_MIPS_REG_V0, immediate);
+	            if (parkMainWaitAndRunWorker("initial")) return;
+
+	            pollSingleWait(immediate, preferredThread);
+	            if (immediate != kWaitTimeout) {
+	                if (immediate == CeKernel::kWaitObject0) {
+	                    ceKernel_.consumeAutoResetEvent(a0);
+	                }
+	                setReg(UC_MIPS_REG_V0, immediate);
                 setReg(UC_MIPS_REG_PC, ra);
                 pumpHostMessages();
                 return;

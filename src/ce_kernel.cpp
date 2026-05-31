@@ -56,9 +56,12 @@ CeKernel::WaitQueryResult CeKernel::queryWaitObject(uint32_t guestHandle,
     uint32_t preferredThread = 0;
     if (handle->kind == GuestHandle::Kind::GuestThread) preferredThread = guestHandle;
 
+    if (handle->kind == GuestHandle::Kind::HostEvent) {
+        return {handle->eventSignaled ? kWaitObject0 : kWaitTimeout, 0, preferredThread};
+    }
+
     if (handle->hostValue &&
-        (handle->kind == GuestHandle::Kind::HostEvent ||
-         handle->kind == GuestHandle::Kind::HostMutex ||
+        (handle->kind == GuestHandle::Kind::HostMutex ||
          handle->kind == GuestHandle::Kind::GuestProcess ||
          handle->kind == GuestHandle::Kind::GuestThread)) {
         const HostWaitResult wait = hostWaitProbe ? hostWaitProbe(*handle) : HostWaitResult{};
@@ -88,6 +91,12 @@ CeKernel::WaitQueryResult CeKernel::queryWaitObject(uint32_t guestHandle,
     }
 
     return {kWaitObject0, 0, 0};
+}
+
+void CeKernel::consumeAutoResetEvent(uint32_t guestHandle) {
+    auto* handle = lookupHandle(guestHandle);
+    if (!handle || handle->kind != GuestHandle::Kind::HostEvent) return;
+    if (!handle->eventManualReset) handle->eventSignaled = false;
 }
 
 CeKernel::WaitQueryResult CeKernel::queryWaitObjects(const std::vector<uint32_t>& guestHandles,
@@ -183,9 +192,10 @@ std::vector<CeKernel::WaitRefreshEvent> CeKernel::refreshSignaledWaits(
             bool ready = false;
             bool failed = false;
             uint32_t error = 0;
-            if (handle->hostValue &&
-                (handle->kind == GuestHandle::Kind::HostEvent ||
-                 handle->kind == GuestHandle::Kind::HostMutex ||
+            if (handle->kind == GuestHandle::Kind::HostEvent) {
+                ready = handle->eventSignaled;
+            } else if (handle->hostValue &&
+                (handle->kind == GuestHandle::Kind::HostMutex ||
                  handle->kind == GuestHandle::Kind::GuestProcess ||
                  handle->kind == GuestHandle::Kind::GuestThread)) {
                 const HostWaitResult wait = hostWaitProbe ? hostWaitProbe(*handle) : HostWaitResult{};
@@ -214,6 +224,10 @@ std::vector<CeKernel::WaitRefreshEvent> CeKernel::refreshSignaledWaits(
 
             allReady = allReady && ready;
             if (!thread.waitAll && ready) {
+                if (handle->kind == GuestHandle::Kind::HostEvent &&
+                    !handle->eventManualReset) {
+                    const_cast<GuestHandle*>(handle)->eventSignaled = false;
+                }
                 thread.state = GuestThreadRunState::Runnable;
                 thread.waitHandle = 0;
                 thread.waitHandles.clear();
@@ -226,6 +240,13 @@ std::vector<CeKernel::WaitRefreshEvent> CeKernel::refreshSignaledWaits(
             }
         }
         if (thread.state == GuestThreadRunState::Waiting && thread.waitAll && allReady) {
+            for (uint32_t waitHandle : handles) {
+                auto* handle = lookupHandle(waitHandle);
+                if (handle && handle->kind == GuestHandle::Kind::HostEvent &&
+                    !handle->eventManualReset) {
+                    handle->eventSignaled = false;
+                }
+            }
             thread.state = GuestThreadRunState::Runnable;
             thread.waitHandle = 0;
             thread.waitHandles.clear();

@@ -48,6 +48,8 @@ public:
         Kind kind{Kind::GuestHeap};
         uintptr_t hostValue{};
         uint32_t filePointer{};
+        bool eventManualReset{};
+        bool eventSignaled{};
     };
 
     struct GuestCpuContext {
@@ -161,6 +163,7 @@ public:
                                      bool waitAll,
                                      const HostWaitProbe& hostWaitProbe,
                                      bool failOnHostError) const;
+    void consumeAutoResetEvent(uint32_t guestHandle);
     std::vector<WaitRefreshEvent> refreshSignaledWaits(
         uint64_t nowMs,
         int resultRegister,

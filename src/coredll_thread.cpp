@@ -54,7 +54,10 @@ bool SyntheticDllRuntime::handleCreateEventW(SyntheticExportCode code, const Gue
     HANDLE host = CreateEventW(nullptr, args.a1 != 0, args.a2 != 0, nullptr);
     const std::string name = args.a3 ? readUtf16(args.a3, 256) : std::string{};
     if (host) {
-        ret = makeGuestHandle({GuestHandle::Kind::HostEvent, reinterpret_cast<uintptr_t>(host), 0});
+        GuestHandle eventHandle{GuestHandle::Kind::HostEvent, reinterpret_cast<uintptr_t>(host), 0};
+        eventHandle.eventManualReset = args.a1 != 0;
+        eventHandle.eventSignaled = args.a2 != 0;
+        ret = makeGuestHandle(eventHandle);
         lastError_ = 0;
     } else {
         ret = 0;
@@ -78,15 +81,23 @@ bool SyntheticDllRuntime::handleEventModify(SyntheticExportCode code, const Gues
     BOOL ok = FALSE;
     const bool pulse = args.a1 == 1;
     if (host) {
-        if (pulse) ok = SetEvent(host);
-        else if (args.a1 == 2) ok = ResetEvent(host);
-        else if (args.a1 == 3) ok = SetEvent(host);
+        if (pulse) {
+            ok = SetEvent(host);
+            if (ok) handle->eventSignaled = true;
+        } else if (args.a1 == 2) {
+            ok = ResetEvent(host);
+            if (ok) handle->eventSignaled = false;
+        } else if (args.a1 == 3) {
+            ok = SetEvent(host);
+            if (ok) handle->eventSignaled = true;
+        }
     }
     ret = ok ? 1 : 0;
     if (!ret) lastError_ = GetLastError();
     else lastError_ = 0;
     if (ret && pulse) {
         refreshSignaledGuestWaits();
+        handle->eventSignaled = false;
         ResetEvent(host);
     }
     static std::map<uint64_t, uint32_t> eventModifyLogCounts;

@@ -161,6 +161,47 @@ Current emulator difference:
   2026-05-31 Release and Debug builds passed after this change, and a fresh
   Debug remote run `captures/inavi_autodrive_20260531_131703` launched on
   `192.168.0.39:8765` for live route/UI validation.
+- The same Debug remote run then showed audio could arrive before the
+  corresponding fullscreen route/search UI transition. The high-signal window
+  was `13:28:14` through `13:28:22`: a route-guide `waveOutWrite` started at
+  `13:28:14.245`, while main-owner UI work was logged as pending at
+  `13:28:15.759` and `13:28:19.473`, but the fullscreen `SendMessageW`/
+  `ShowWindow` sequence did not run until `13:28:22.050`. Root cause in the
+  scheduler: when the oldest pending GWE owner was the main pseudo-thread and
+  no worker was currently active, owner-priority logging could fall through to
+  round-robin runnable workers instead of restoring the parked main message
+  pump. `switchToRunnableGuestThread` now restores the main owner even when no
+  active guest worker has to be saved first, while still refusing to wake the
+  main context through an unrelated parked blocking wait. Current source
+  anchor:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_thread_runtime.cpp:619`. The
+  2026-05-31 Release build passed with zero warnings after this change.
+- The same host/remote validation also exposed a host-only presenter freeze:
+  the remote API and framebuffer continued updating while the local host window
+  stayed stale. Root cause was the emulator's host-presentation batching, not
+  guest-visible CE behavior: batching began while GWE messages existed, but a
+  long `pendingMessageTransfers_` lane could repeatedly `continue` before the
+  normal batch-release path. The host presenter now heartbeat-flushes batched
+  local presents during sent-message transfers, keeping CE/MFC synchronous
+  WndProc ordering intact while preventing the Windows presenter from being
+  deferred indefinitely. Current source anchors:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp:1048` and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp:2370`. The
+  2026-05-31 Release build passed with the existing Boost Beast warning after
+  this change.
+- A follow-up live report showed the startup safety/fullscreen surface could
+  visually overlap with the bottom strip again: stale fullscreen-popup pixels
+  remained while exposed owner/child UI repainted. Log evidence from Debug run
+  `captures/inavi_autodrive_20260531_134222` showed the fullscreen popup
+  `0x0001004c` captured a full backing at `13:42:27`, while bottom strip
+  child `0x00010144` became visible before that popup was destroyed. The
+  previous owner-stack policy discarded backing for all owned popups, including
+  full-screen popups, so destroyed fullscreen pixels could remain until owner
+  repaint caught up. Full-screen owned popups now restore valid backing on
+  teardown unless a newer fullscreen popup covers them; smaller owner-stack
+  popups still defer to owner repaint. Current source anchor:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp:1572`. The
+  2026-05-31 Release build passed with zero warnings after this change.
 - Remote-server audio is enabled by default for `tools/autodrive_inavi.ps1`
   remote runs unless `-NoRemoteAudio` is passed. Remote PCM is now queued only
   while at least one audio websocket client is connected; the queue is cleared
@@ -1325,3 +1366,26 @@ Confirmed behavior difference:
   `captures/inavi_autodrive_20260531_123932` confirms
   `guest slice watchdog stop reason=message-transfer` now appears during long
   startup/message work.
+- Search-freeze debugging on 2026-05-31 found two scheduler/thread correctness
+  bugs and one remaining performance/semantics bottleneck. Debug run
+  `captures/inavi_autodrive_20260531_141726` no longer hit the original
+  parked-main audio wait, but a virtual serial no-data wake resumed a worker
+  that later fell through to `PC == 0`. The serial parking path now avoids
+  restoring the parked main context while a main wait is pending, and active
+  guest workers that return through a null PC are completed as a CE thread
+  return only when the active thread is still running and `t9` matches its
+  recorded `CreateThread` start address; all other `PC == 0` paths remain
+  fatal. Debug run `captures/inavi_autodrive_20260531_143011` confirmed that
+  `0x124d9` now completes as a CE-style thread exit instead of crashing.
+  The same run still shows route/search blocked with main waiting on event
+  `0x10021` while worker `0x124d6` consumes long guest CPU slices and a sent
+  message remains queued to the main owner. Blocked-main worker slices now use
+  larger CPU budgets when there is no real input pressure, which reduces
+  emulator overhead but does not yet solve the underlying long guest route
+  calculation / sent-message wait interaction. Current source references:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_fs.cpp:241`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp:2140`,
+  and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp:2165`.
+  The 2026-05-31 Debug and Release builds passed with the known vcpkg duplicate
+  import warning.

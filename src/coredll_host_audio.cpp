@@ -248,6 +248,7 @@ void SyntheticDllRuntime::refreshCompletedHostWaveBuffers() {
         if (completion.completionEvent) {
             auto* event = lookupGuestHandle(completion.completionEvent);
             if (event && event->kind == GuestHandle::Kind::HostEvent && event->hostValue) {
+                event->eventSignaled = true;
                 SetEvent(reinterpret_cast<HANDLE>(event->hostValue));
             }
             for (auto& [threadHandle, thread] : ceKernel_.threads()) {
@@ -580,6 +581,7 @@ bool SyntheticDllRuntime::handleWaveOutClose(SyntheticExportCode code, const Gue
             if (completion.completionEvent) {
                 auto* event = lookupGuestHandle(completion.completionEvent);
                 if (event && event->kind == GuestHandle::Kind::HostEvent && event->hostValue) {
+                    event->eventSignaled = true;
                     SetEvent(reinterpret_cast<HANDLE>(event->hostValue));
                 }
             }
@@ -650,6 +652,7 @@ bool SyntheticDllRuntime::handleWaveOutReset(SyntheticExportCode code, const Gue
         if (completion.completionEvent) {
             auto* event = lookupGuestHandle(completion.completionEvent);
             if (event && event->kind == GuestHandle::Kind::HostEvent && event->hostValue) {
+                event->eventSignaled = true;
                 SetEvent(reinterpret_cast<HANDLE>(event->hostValue));
             }
         }
@@ -759,11 +762,13 @@ bool SyntheticDllRuntime::handleWaveOutWrite(SyntheticExportCode code, const Gue
     if (state != waveOutStates_.end() && (state->second.flags & CALLBACK_TYPEMASK) == CALLBACK_EVENT) {
         auto* event = lookupGuestHandle(state->second.callback);
         if (event && event->kind == GuestHandle::Kind::HostEvent && event->hostValue) {
+            event->eventSignaled = false;
             ResetEvent(reinterpret_cast<HANDLE>(event->hostValue));
         }
     } else if (state != waveOutStates_.end() && (state->second.flags & CALLBACK_TYPEMASK) == CALLBACK_FUNCTION) {
         auto* event = lookupGuestHandle(guestUser);
         if (event && event->kind == GuestHandle::Kind::HostEvent && event->hostValue) {
+            event->eventSignaled = false;
             ResetEvent(reinterpret_cast<HANDLE>(event->hostValue));
         }
     }

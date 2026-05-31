@@ -478,6 +478,9 @@ bool SyntheticDllRuntime::completeReadyPendingBlockingMainContinuation(const cha
             ceKernel_.queryWaitObject(pending.args.a0, hostWaitProbe, true);
         ret = wait.result;
         error = wait.error;
+        if (ret == CeKernel::kWaitObject0) {
+            ceKernel_.consumeAutoResetEvent(pending.args.a0);
+        }
         const bool finiteExpired =
             pending.deadlineMs && hostTickMilliseconds() >= pending.deadlineMs;
         if (ret == CeKernel::kWaitTimeout &&
@@ -519,6 +522,7 @@ bool SyntheticDllRuntime::hasSchedulableGweMessageOwner() const {
     const uint32_t activeThread = ceKernel_.activeGuestThread();
     if (*owner == activeThread) return false;
     if (*owner == ceKernel_.mainThreadPseudoHandle()) {
+        if (!pendingBlockingApis_.empty()) return false;
         if (!activeThread) return true;
         if (!ceKernel_.mainThreadContext().valid) return false;
         const uint32_t pc = guestContextReg(ceKernel_.mainThreadContext(), UC_MIPS_REG_PC);
@@ -618,20 +622,32 @@ bool SyntheticDllRuntime::switchToRunnableGuestThread(const char* reason,
 
     if (const std::optional<uint32_t> owner = ceGwe_.oldestPendingOwner()) {
         if (*owner == ceKernel_.mainThreadPseudoHandle()) {
-            const uint32_t activeThread = ceKernel_.activeGuestThread();
-            if (activeThread) {
-                auto active = ceKernel_.threads().find(activeThread);
-                if (active != ceKernel_.threads().end()) {
-                    active->second.context = captureGuestCpuContext();
-                    if (returnAddress) active->second.context.registers[UC_MIPS_REG_PC] = returnAddress;
-                    if (active->second.state == GuestThreadRunState::Running) {
-                        active->second.state = GuestThreadRunState::Runnable;
+            if (pendingBlockingApis_.empty()) {
+                const uint32_t activeThread = ceKernel_.activeGuestThread();
+                if (activeThread) {
+                    const uint32_t mainPc = guestContextReg(ceKernel_.mainThreadContext(), UC_MIPS_REG_PC);
+                    if (mainPc && isGuestRangeReadable(mainPc, 4)) {
+                        auto active = ceKernel_.threads().find(activeThread);
+                        if (active != ceKernel_.threads().end()) {
+                            active->second.context = captureGuestCpuContext();
+                            if (returnAddress) active->second.context.registers[UC_MIPS_REG_PC] = returnAddress;
+                            if (active->second.state == GuestThreadRunState::Running) {
+                                active->second.state = GuestThreadRunState::Runnable;
+                            }
+                        }
+                        ceKernel_.activeGuestThread() = 0;
+                        restoreMainThreadContextIfRunnable(reason);
+                        logOwnerPriority(*owner, "main");
+                        return true;
                     }
-                }
-                ceKernel_.activeGuestThread() = 0;
-                if (restoreMainThreadContextIfRunnable(reason)) {
-                    logOwnerPriority(*owner, "main");
-                    return true;
+                } else {
+                    uint32_t currentPc = 0;
+                    uc_reg_read(uc_, UC_MIPS_REG_PC, &currentPc);
+                    if ((!currentPc || !isGuestRangeReadable(currentPc, 4)) &&
+                        restoreMainThreadContextIfRunnable(reason)) {
+                        logOwnerPriority(*owner, "main");
+                        return true;
+                    }
                 }
             }
         } else {
@@ -696,7 +712,10 @@ bool SyntheticDllRuntime::finishActiveGuestThread(uint32_t exitCode) {
     }
     if (ceKernel_.lastScheduledGuestThread() == ceKernel_.activeGuestThread()) ceKernel_.lastScheduledGuestThread() = 0;
     ceKernel_.activeGuestThread() = 0;
-    if (restoreMainThreadContextIfRunnable("thread exit")) return true;
+    if (pendingBlockingApis_.empty() &&
+        restoreMainThreadContextIfRunnable("thread exit")) {
+        return true;
+    }
     return switchToRunnableGuestThread("thread exit");
 }
 

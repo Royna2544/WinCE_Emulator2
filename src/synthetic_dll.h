@@ -1386,6 +1386,7 @@ private:
     void invalidateHostWindows();
     void beginHostUiBatchPresentDeferral();
     void releaseHostUiBatchPresentDeferral();
+    void flushHostUiBatchPresentDeferral(uint64_t maxDeferredMs);
     bool beginHostErasePresentDeferral(uint32_t hwnd);
     bool hasHostErasePresentDeferral(uint32_t hwnd) const;
     void releaseHostErasePresentDeferral(uint32_t hwnd);

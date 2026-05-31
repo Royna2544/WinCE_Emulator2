@@ -1045,6 +1045,16 @@ void SyntheticDllRuntime::releaseHostUiBatchPresentDeferral() {
     presentHostWindows(true);
 }
 
+void SyntheticDllRuntime::flushHostUiBatchPresentDeferral(uint64_t maxDeferredMs) {
+    if (!hostPresentUiBatchActive_) return;
+    const uint64_t now = hostTickMilliseconds();
+    if (hostPresentUiBatchStartMs_ && now - hostPresentUiBatchStartMs_ < maxDeferredMs) return;
+    releaseHostUiBatchPresentDeferral();
+    if (ceGwe_.hasMessages() || !pendingMessageTransfers_.empty()) {
+        beginHostUiBatchPresentDeferral();
+    }
+}
+
 bool SyntheticDllRuntime::beginHostErasePresentDeferral(uint32_t hwnd) {
     if (!hwnd) return false;
     const auto [_, inserted] = hostPresentDeferredEraseHwnds_.insert(hwnd);
@@ -1560,6 +1570,10 @@ void SyntheticDllRuntime::eraseGuestWindowArea(uint32_t hwnd, const GuestWindow&
         mutableWindow->second.backingPixels.clear();
     }
     if (mutableWindow != windows_.end() && ownerStackPopup) {
+        if (guestWindowCoversFramebuffer(hwnd) &&
+            restoreGuestWindowBacking(hwnd, mutableWindow->second)) {
+            return;
+        }
         mutableWindow->second.backingValid = false;
         mutableWindow->second.backingPixels.clear();
         spdlog::debug("discarded owner-stack popup backing hwnd=0x{:08x}; owner repaint is authoritative",
@@ -2087,12 +2101,16 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
         // when a worker performs a long pure-guest loop between API calls.
         const bool servicingQueuedMessages = std::strcmp(reason, "queued-message") == 0;
         const bool servicingMessageTransfer = std::strcmp(reason, "message-transfer") == 0;
+        const bool servicingBlockedMainWork = std::strncmp(reason, "blocked-main-", 13) == 0;
         const bool synchronousQueuedMessage = servicingQueuedMessages && hasPendingSynchronousMessage();
         const bool pendingUserInput = hasPendingUserInput();
         const bool recentUserInput = recentlyQueuedUserInput();
+        const bool hostInputPressure = pendingUserInput || recentUserInput;
         const bool hostUiPressure = pendingUserInput || recentUserInput || hostPresentDirty_;
         const bool backloggedQueuedWork = servicingQueuedMessages && ceGwe_.messageCount() >= 3;
-        if (servicingMessageTransfer) {
+        if (servicingBlockedMainWork && !hostInputPressure) {
+            instructionBudget = std::max<uint64_t>(instructionBudget, 25000000u);
+        } else if (servicingMessageTransfer) {
             if (hostUiPressure) {
                 instructionBudget = std::min<uint64_t>(instructionBudget, pendingUserInput ? 25000u : 100000u);
             } else if (!ceGwe_.hasMessages()) {
@@ -2115,7 +2133,9 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
         } else if (servicingQueuedMessages) {
             instructionBudget = std::min<uint64_t>(instructionBudget, 250000u);
         }
-        const auto wallBudget = servicingMessageTransfer
+        const auto wallBudget = servicingBlockedMainWork
+            ? (hostInputPressure ? std::chrono::milliseconds(20) : std::chrono::milliseconds(250))
+            : (servicingMessageTransfer
             ? (hostUiPressure ? std::chrono::milliseconds(12) : std::chrono::milliseconds(180))
             : (synchronousQueuedMessage
                    ? (backloggedQueuedWork ? std::chrono::milliseconds(60) : std::chrono::milliseconds(12))
@@ -2125,7 +2145,7 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
                                  ? std::chrono::milliseconds(12)
                           : (servicingQueuedMessages ? std::chrono::milliseconds(60)
                                                      : (ceKernel_.activeGuestThread() ? std::chrono::milliseconds(60)
-                                                                          : std::chrono::milliseconds(120))))));
+                                                                          : std::chrono::milliseconds(120)))))));
         beginInteractiveSlice(wallBudget, reason, instructionBudget);
         const uc_err err = uc_emu_start(uc_, pc, 0, 0, instructionBudget);
         const bool stoppedByWatchdog = interactiveSliceStopRequested_;
@@ -2142,6 +2162,24 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
         uc_reg_read(uc_, UC_MIPS_REG_PC, &pc);
         uc_reg_read(uc_, UC_MIPS_REG_RA, &ra);
         if (err != UC_ERR_OK) {
+            const uint32_t activeThread = ceKernel_.activeGuestThread();
+            const uint32_t v0 = reg(UC_MIPS_REG_V0);
+            const uint32_t t9 = reg(UC_MIPS_REG_T9);
+            if (pc == 0 && activeThread) {
+                auto active = ceKernel_.threads().find(activeThread);
+                if (active != ceKernel_.threads().end() &&
+                    active->second.state == GuestThreadRunState::Running &&
+                    active->second.startAddress == t9) {
+                    spdlog::info("guest thread returned through null pc; completing as CE thread exit "
+                                 "handle=0x{:08x} start=0x{:08x} exitCode=0x{:08x} reason={}",
+                                 activeThread, active->second.startAddress, v0,
+                                 reason ? reason : "guest-slice");
+                    finishActiveGuestThread(v0);
+                    pumpHostMessages();
+                    presentHostWindows(false);
+                    return true;
+                }
+            }
             if (pc == 0) {
                 spdlog::error("interactive emulation stopped hard error reason={} err={} ({}) pc=0x{:08x} ra=0x{:08x} activeThread=0x{:08x}",
                               reason, int(err), uc_strerror(err), pc, ra, ceKernel_.activeGuestThread());
@@ -2164,12 +2202,10 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
             };
             const uint32_t sp = reg(UC_MIPS_REG_SP);
             const uint32_t gp = reg(UC_MIPS_REG_GP);
-            const uint32_t v0 = reg(UC_MIPS_REG_V0);
             const uint32_t a0 = reg(UC_MIPS_REG_A0);
             const uint32_t a1 = reg(UC_MIPS_REG_A1);
             const uint32_t a2 = reg(UC_MIPS_REG_A2);
             const uint32_t a3 = reg(UC_MIPS_REG_A3);
-            const uint32_t t9 = reg(UC_MIPS_REG_T9);
             spdlog::warn("interactive crash context activeThread=0x{:08x} pc={} ra={} sp=0x{:08x} gp=0x{:08x} "
                          "v0=0x{:08x} a0=0x{:08x} a1=0x{:08x} a2=0x{:08x} a3=0x{:08x} t9=0x{:08x} queued={}",
                          ceKernel_.activeGuestThread(), describeAddress(pc), describeAddress(ra), sp, gp,
@@ -2204,7 +2240,23 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
                          ceGwe_.messageCount(), owner, ownerQueue.posted, ownerQueue.sent,
                          ownerQueue.input, ownerQueue.timers);
         }
-        if (stoppedByWatchdog && ceKernel_.activeGuestThread()) {
+        const bool mainOwnedMessageTransfer =
+            servicingMessageTransfer &&
+            !pendingMessageTransfers_.empty() &&
+            pendingMessageTransfers_.back().ownerThread == ceKernel_.mainThreadPseudoHandle();
+        if (stoppedByWatchdog && mainOwnedMessageTransfer && ceKernel_.activeGuestThread()) {
+            const uint32_t displacedThread = ceKernel_.activeGuestThread();
+            ceKernel_.mainThreadContext() = captureGuestCpuContext();
+            updateCurrentThreadKData(ceKernel_.mainThreadPseudoHandle(), ceKernel_.mainThreadTls());
+            spdlog::debug("saved main-owned message transfer context activeThread=0x{:08x} pc=0x{:08x} queued={}",
+                          displacedThread, pc, ceGwe_.messageCount());
+            auto displaced = ceKernel_.threads().find(displacedThread);
+            if (displaced != ceKernel_.threads().end() &&
+                displaced->second.state == GuestThreadRunState::Running) {
+                displaced->second.state = GuestThreadRunState::Runnable;
+            }
+            ceKernel_.activeGuestThread() = 0;
+        } else if (stoppedByWatchdog && ceKernel_.activeGuestThread()) {
             spdlog::info("guest thread timeslice yield handle=0x{:08x} reason={} pc=0x{:08x} queued={}",
                          ceKernel_.activeGuestThread(), reason, pc, ceGwe_.messageCount());
             yieldActiveGuestThread("timeslice");
@@ -2229,6 +2281,7 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
         case GuestThreadRunState::Waiting: return "waiting";
         case GuestThreadRunState::WaitingForMessage: return "waiting-message";
         case GuestThreadRunState::WaitingForSendMessage: return "waiting-send";
+        case GuestThreadRunState::WaitingForSerialRead: return "waiting-serial";
         case GuestThreadRunState::Terminated: return "terminated";
         }
         return "unknown";
@@ -2329,6 +2382,23 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
         }
         return true;
     };
+    auto runWorkerWhileMainBlocked = [&](const char* reason, uint64_t instructionBudget) -> bool {
+        if (!ceKernel_.activeGuestThread()) {
+            if (!hasRunnableGuestThread()) {
+                logGuestSchedulerDiag(reason ? reason : "blocked-main-no-runnable");
+                pumpHostMessages();
+                presentHostWindows(false);
+                return true;
+            }
+            switchToRunnableGuestThread(reason ? reason : "blocked-main-worker");
+        }
+        if (!ceKernel_.activeGuestThread()) {
+            pumpHostMessages();
+            presentHostWindows(false);
+            return true;
+        }
+        return resumeGuestSlice(instructionBudget, reason ? reason : "blocked-main-worker");
+    };
     while (hasHostWindows()) {
         drainRemoteInputEvents();
         if (resumeReadyBlockingMain()) {
@@ -2354,16 +2424,59 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
             beginHostUiBatchPresentDeferral();
         }
         if (!pendingMessageTransfers_.empty()) {
+            const uint32_t transferOwner = pendingMessageTransfers_.back().ownerThread;
+            if (transferOwner == ceKernel_.mainThreadPseudoHandle() &&
+                !pendingBlockingApis_.empty()) {
+                spdlog::debug("deferring main-owned message transfer while main wait is parked queued={} transfers={}",
+                              ceGwe_.messageCount(), pendingMessageTransfers_.size());
+                if (!runWorkerWhileMainBlocked("blocked-main-message-transfer", 5000000)) {
+                    return;
+                }
+                flushHostUiBatchPresentDeferral(50);
+                continue;
+            }
+            if (transferOwner == ceKernel_.mainThreadPseudoHandle() &&
+                ceKernel_.activeGuestThread()) {
+                const uint32_t mainPc = guestContextReg(ceKernel_.mainThreadContext(), UC_MIPS_REG_PC);
+                if (mainPc && isGuestRangeReadable(mainPc, 4)) {
+                    const uint32_t activeThread = ceKernel_.activeGuestThread();
+                    auto active = ceKernel_.threads().find(activeThread);
+                    if (active != ceKernel_.threads().end()) {
+                        active->second.context = captureGuestCpuContext();
+                        if (active->second.state == GuestThreadRunState::Running) {
+                            active->second.state = GuestThreadRunState::Runnable;
+                        }
+                    }
+                    ceKernel_.activeGuestThread() = 0;
+                    restoreMainThreadContextIfRunnable("message-transfer-owner");
+                    spdlog::debug("restored main owner for pending message transfer owner=0x{:08x} queued={}",
+                                  transferOwner, ceGwe_.messageCount());
+                }
+            } else if (transferOwner != CeGwe::kNoOwnerThread &&
+                       transferOwner != ceKernel_.mainThreadPseudoHandle() &&
+                       transferOwner != ceKernel_.activeGuestThread()) {
+                switchToRunnableGuestThread("message-transfer-owner", 0, transferOwner);
+            }
             if (!resumeGuestSlice(1000000, "message-transfer")) {
                 return;
             }
+            flushHostUiBatchPresentDeferral(50);
             continue;
         }
         if (!resumeQueuedWorkerBurst()) return;
         if (ceGwe_.hasMessages() && hasHostWindows()) {
+            const std::optional<uint32_t> oldestOwner = ceGwe_.oldestPendingOwner();
+            if (!pendingBlockingApis_.empty() &&
+                oldestOwner &&
+                *oldestOwner == ceKernel_.mainThreadPseudoHandle()) {
+                if (!runWorkerWhileMainBlocked("blocked-main-queued-message", 5000000)) {
+                    return;
+                }
+                flushHostUiBatchPresentDeferral(100);
+                continue;
+            }
             if (ceKernel_.activeGuestThread()) {
-                const std::optional<uint32_t> owner = ceGwe_.oldestPendingOwner();
-                if ((!owner || *owner != ceKernel_.activeGuestThread()) &&
+                if ((!oldestOwner || *oldestOwner != ceKernel_.activeGuestThread()) &&
                     hasSchedulableGweMessageOwner()) {
                     yieldActiveGuestThread("queued-message-preempt");
                 }
@@ -2398,8 +2511,7 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
                 releaseHostUiBatchPresentDeferral();
             } else if (hostPresentUiBatchActive_ &&
                        hostTickMilliseconds() - hostPresentUiBatchStartMs_ >= 100) {
-                releaseHostUiBatchPresentDeferral();
-                beginHostUiBatchPresentDeferral();
+                flushHostUiBatchPresentDeferral(100);
             }
         }
         const DWORD waitMs = std::max<DWORD>(1, std::min<DWORD>(50, timerWaitMilliseconds()));

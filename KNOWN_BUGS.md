@@ -134,6 +134,34 @@ Status:
   The bug remains open until the queue model, wake categories, and
   send-message edge cases are the behavioral truth.
 
+### Current Search Freeze Signature
+
+Symptom:
+
+- During route/search, the app can appear frozen with the main owner parked in
+  `WaitForSingleObject(0x10021, INFINITE)`.
+- A sent message remains queued to the main owner while worker `0x124d6`
+  continues long guest CPU slices.
+
+Evidence:
+
+- Debug run:
+  `captures/inavi_autodrive_20260531_143011/emulator.stdout.log`.
+- The earlier hard crash at the same point is fixed: worker `0x124d9` now
+  returns through the CE thread-exit path instead of falling through to
+  `PC == 0`.
+- CE GWE reference: `MsgQueue` has separate posted, received-send, sent-stack,
+  paint, and quit components, and `m_hNewEvents` signals new queue events:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/cmsgque.h:533`
+  and
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/cmsgque.h:590`.
+
+Status:
+
+- Open. The emulator now gives the worker larger CE-neutral CPU slices while
+  main is legally parked, but it still needs a source-aligned decision for
+  received sent-message dispatch versus pure guest route CPU dominance.
+
 ## UI Can Stall During Host Waits Or Shared Mapping Storms
 
 Symptom:
@@ -214,7 +242,33 @@ Status:
   reentrant paint pump is now disabled. Current source:
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp:1345`. The bug
   remains open until fresh remote route validation confirms the host window and
-  remote endpoint survive the same path.
+  remote endpoint survive the same path. The same fresh run then showed route
+  guide audio beating the corresponding fullscreen route/search UI transition
+  by several seconds. Evidence:
+  `captures/inavi_autodrive_20260531_131703/emulator.stdout.log:13959` starts
+  a 2865 ms `waveOutWrite`; owner-priority logs show pending main-owner work
+  at `:14026` and `:14170`; the fullscreen `SendMessageW`/`ShowWindow`
+  transition starts only at `:14194`. Root cause: the scheduler's main-owner
+  priority path only restored the parked main context while saving an active
+  worker first, so an already-idle scheduler could fall through to generic
+  worker round-robin. Fixed in source at
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_thread_runtime.cpp:619` by
+  restoring the main owner when no worker is active too, while not waking it
+  through a plain blocking wait. The same validation then showed a host-only
+  freeze where the remote API/framebuffer path kept running while the local
+  Windows presenter stayed stale. Root cause was local host-presentation
+  batching: during long `pendingMessageTransfers_` spans, the loop could
+  continue before the normal batch-release path. Source now heartbeat-flushes
+  host batches during sent-message transfers at
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp:1048` and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp:2370`.
+  A follow-up live report showed a startup safety/fullscreen popup overlap
+  returned: stale fullscreen pixels could remain while the bottom strip
+  repainted. The owner-stack hide policy was too broad because it discarded
+  backing for all owned popups. Full-screen owned popup teardown now restores
+  valid captured backing first, while smaller owner-stack popups still defer
+  to owner repaint. Current source:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp:1572`.
 
 ## Partially Resolved: Remote Audio WebSocket And Host Audio Timing
 
