@@ -612,6 +612,8 @@ private:
     std::string interactiveSliceReason_;
     std::chrono::steady_clock::time_point interactiveSliceDeadline_{};
     std::chrono::steady_clock::time_point lastHostInputQueuedAt_{};
+    std::atomic<bool> remoteInputPending_{false};
+    std::atomic<uintptr_t> remoteInputWakeHostHwnd_{0};
     std::vector<uintptr_t> retainedHostWindows_;
     uint32_t hostPresenterGuestHwnd_{};
     uint64_t lastHostPresentMs_{};
@@ -1024,6 +1026,7 @@ private:
     void updateCurrentThreadKData(uint32_t currentThreadValue, uint32_t tlsBase);
     void startRemoteServer();
     void stopRemoteServer();
+    void notifyRemoteInputQueued();
     void startHostAudioBackend();
     void stopHostAudioBackend();
     void queueHostAudioBackend(uint32_t guestHandle,

@@ -919,6 +919,7 @@ void SyntheticDllRuntime::ensureHostWindow(uint32_t guestHwnd, GuestWindow& wind
         applyHostPresenterIcons(hwnd);
         hostPresenterGuestHwnd_ = guestHwnd;
         window.hostHwnd = reinterpret_cast<uintptr_t>(hwnd);
+        remoteInputWakeHostHwnd_.store(window.hostHwnd, std::memory_order_release);
         spdlog::info("created host presenter HWND={} for guest HWND=0x{:08x} guest={}x{} framebuffer={}x{}",
                      static_cast<void*>(hwnd), guestHwnd, window.width, window.height,
                      presenter->width, presenter->height);
@@ -959,6 +960,7 @@ void SyntheticDllRuntime::destroyHostWindow(GuestWindow& window) {
                 replacementWindow->hostHwnd = window.hostHwnd;
                 window.hostHwnd = 0;
                 hostPresenterGuestHwnd_ = replacementHwnd;
+                remoteInputWakeHostHwnd_.store(replacementWindow->hostHwnd, std::memory_order_release);
                 SetWindowTextW(hwnd, hostPresenterWindowTitle());
                 spdlog::info("transferred host presenter HWND={} from destroyed guest HWND=0x{:08x} to live guest HWND=0x{:08x}",
                              static_cast<void*>(hwnd), window.hwnd, replacementHwnd);
@@ -969,7 +971,10 @@ void SyntheticDllRuntime::destroyHostWindow(GuestWindow& window) {
             ShowWindow(hwnd, SW_SHOWNORMAL);
             presentHostWindows(true);
             retainedHostWindows_.push_back(window.hostHwnd);
-            if (hostPresenterGuestHwnd_ == window.hwnd) hostPresenterGuestHwnd_ = 0;
+            if (hostPresenterGuestHwnd_ == window.hwnd) {
+                hostPresenterGuestHwnd_ = 0;
+                remoteInputWakeHostHwnd_.store(0, std::memory_order_release);
+            }
         }
         window.hostHwnd = 0;
     }
@@ -2327,23 +2332,7 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
                          ceGwe_.messageCount(), owner, ownerQueue.posted, ownerQueue.sent,
                          ownerQueue.input, ownerQueue.timers);
         }
-        const bool mainOwnedMessageTransfer =
-            servicingMessageTransfer &&
-            !ceGwe_.pendingMessageTransfers().empty() &&
-            ceGwe_.pendingMessageTransfers().back().ownerThread == ceKernel_.mainThreadPseudoHandle();
-        if (stoppedByWatchdog && mainOwnedMessageTransfer && ceKernel_.activeGuestThread()) {
-            const uint32_t displacedThread = ceKernel_.activeGuestThread();
-            ceKernel_.mainThreadContext() = captureGuestCpuContext();
-            updateCurrentThreadKData(ceKernel_.mainThreadPseudoHandle(), ceKernel_.mainThreadTls());
-            spdlog::debug("saved main-owned message transfer context activeThread=0x{:08x} pc=0x{:08x} queued={}",
-                          displacedThread, pc, ceGwe_.messageCount());
-            auto displaced = ceKernel_.threads().find(displacedThread);
-            if (displaced != ceKernel_.threads().end() &&
-                displaced->second.state == GuestThreadRunState::Running) {
-                displaced->second.state = GuestThreadRunState::Runnable;
-            }
-            ceKernel_.activeGuestThread() = 0;
-        } else if (stoppedByWatchdog && ceKernel_.activeGuestThread()) {
+        if (stoppedByWatchdog && ceKernel_.activeGuestThread()) {
             spdlog::info("guest thread timeslice yield handle=0x{:08x} reason={} pc=0x{:08x} queued={}",
                          ceKernel_.activeGuestThread(), reason, pc, ceGwe_.messageCount());
             yieldActiveGuestThread("timeslice");

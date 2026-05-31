@@ -587,22 +587,25 @@ void SyntheticDllRuntime::hookBasicBlock(uc_engine* uc, uint64_t address, uint32
     auto* runtime = static_cast<SyntheticDllRuntime*>(user);
     if (!runtime || !runtime->interactiveSliceActive_) return;
     const uint32_t blockCount = ++runtime->interactiveSliceBlockCounter_;
-    if ((blockCount & 0x000fu) != 0) return;
+    const bool remoteInputPending = runtime->remoteInputPending_.load(std::memory_order_acquire);
+    if (!remoteInputPending && (blockCount & 0x000fu) != 0) return;
 
     bool hostQueuePending = false;
 #if defined(_WIN32)
     hostQueuePending = HIWORD(GetQueueStatus(QS_ALLINPUT)) != 0;
 #endif
-    if (!hostQueuePending && std::chrono::steady_clock::now() < runtime->interactiveSliceDeadline_) return;
+    if (!hostQueuePending && !remoteInputPending &&
+        std::chrono::steady_clock::now() < runtime->interactiveSliceDeadline_) return;
 
     if (!runtime->interactiveSliceStopRequested_) {
         uint32_t pc = 0;
         uint32_t ra = 0;
         uc_reg_read(uc, UC_MIPS_REG_PC, &pc);
         uc_reg_read(uc, UC_MIPS_REG_RA, &ra);
-        if (hostQueuePending) {
-            spdlog::debug("guest slice watchdog stop reason={} stopCause=host-queue activeThread=0x{:08x} budget={} block=0x{:08x} pc=0x{:08x} ra=0x{:08x} queued={}",
-                          runtime->interactiveSliceReason_, runtime->ceKernel_.activeGuestThread(),
+        if (hostQueuePending || remoteInputPending) {
+            spdlog::debug("guest slice watchdog stop reason={} stopCause={} activeThread=0x{:08x} budget={} block=0x{:08x} pc=0x{:08x} ra=0x{:08x} queued={}",
+                          runtime->interactiveSliceReason_, remoteInputPending ? "remote-input" : "host-queue",
+                          runtime->ceKernel_.activeGuestThread(),
                           runtime->interactiveSliceInstructionBudget_, uint32_t(address), pc, ra,
                           runtime->ceGwe_.messageCount());
         } else {

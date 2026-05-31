@@ -201,6 +201,22 @@ Active refactor checklist: `PLAN.md`.
      appears undelivered, inspect the current plain-wait/sent-message route
      worker state before forcing input delivery; CE does not pump ordinary
      input from `WaitForSingleObject`.
+     Follow-up validation found that the plain-wait state itself was an
+     emulator bookkeeping bug: a main-owned `message-transfer` watchdog slice
+     could clear the active worker and save the WndProc context as parked main
+     context. That made later worker waits look like main `WaitForSingleObject`
+     calls and starved posted paint/input. Source now timeslices the active
+     guest thread normally, and run
+     `captures/inavi_autodrive_20260531_165013` shows the stuck queue draining
+     to zero instead of repeating the fake main-wait loop. Next validation is
+     user interaction through the same route/search path to confirm bottom bar
+     visibility and remote touch delivery visually.
+     Remote/API input latency then showed a host/remote asymmetry: local
+     presenter clicks stopped the active Unicorn slice immediately, but remote
+     touches only waited in `CeRemote` until the scheduler loop returned.
+     Source now marks remote input pending and wakes the presenter queue so the
+     watchdog can stop with `stopCause=remote-input`; Debug interactive run
+     `captures/inavi_autodrive_20260531_165924` is live for validation.
 
 2. Introduce a CE-shaped internal `MsgQueue` model.
    - CE reference:

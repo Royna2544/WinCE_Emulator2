@@ -131,6 +131,14 @@ Status:
   `captures/inavi_autodrive_20260531_111213` found no fatal/unsupported/PC-zero
   signatures. The remote route/dialog button-stuck path still needs live
   validation.
+  Later testing separated another latency source from CE-visible queue order:
+  remote/API touches were only queued into `CeRemote`, so they did not interrupt
+  a long active Unicorn slice the way presenter-window mouse input did. Remote
+  touch/key enqueue now sets an atomic wake flag and posts a no-op presenter
+  wake; the interactive watchdog can stop with `stopCause=remote-input` and
+  let the normal scheduler drain the input promptly. Current source:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/remote_server.cpp:1007` and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp:586`.
   The bug remains open until the queue model, wake categories, and
   send-message edge cases are the behavioral truth.
 
@@ -166,7 +174,10 @@ Status:
   should not be required to undo owner/root pixels. Current source:
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp:1727` and
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_bitmap.cpp:474`. Release and
-  Debug builds passed. Needs live validation in the next interactive run
+  Debug builds passed. Follow-up run
+  `captures/inavi_autodrive_20260531_165013` shows exposed paint/input queues
+  draining after the fullscreen popup is destroyed, rather than remaining
+  blocked behind the fake main wait. Needs visual confirmation from the user
   before this entry can be marked resolved.
 
 ### Current Search Freeze Signature
@@ -209,6 +220,16 @@ Status:
   risk is posted-message backlog and/or genuine route CPU dominance, not the
   original dead received-send lane observed in
   `captures/inavi_autodrive_20260531_154920`.
+- A separate 2026-05-31 regression was fixed after run
+  `captures/inavi_autodrive_20260531_164043`: watchdog timeslicing of a
+  main-owned message transfer could save the executing WndProc as parked main
+  context and clear the active worker. That made a later worker
+  `WaitForSingleObject(0x124f3, INFINITE)` look like a main wait and starved
+  posted paint/input. The watchdog path now timeslices the active guest thread
+  normally. Current source:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp:2327`.
+  Debug run `captures/inavi_autodrive_20260531_165013` no longer repeats the
+  fake main-wait queue-stall signature.
 
 ## UI Can Stall During Host Waits Or Shared Mapping Storms
 

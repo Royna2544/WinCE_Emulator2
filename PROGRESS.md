@@ -1612,3 +1612,35 @@ Confirmed behavior difference:
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp:1727` and
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_bitmap.cpp:474`. Release and
   Debug builds passed after this clipping guard.
+- Debug interactive run `captures/inavi_autodrive_20260531_164043` found the
+  input starvation cause after the bottom-bar clipping fix: a watchdog
+  timeslice during a main-owned `message-transfer` saved the currently
+  executing WndProc as parked main context and cleared the active worker
+  thread. The next worker-side `WaitForSingleObject(0x124f3, INFINITE)` was
+  then misclassified as a parked main wait, leaving posted paint/timer/input
+  messages stuck behind a fake plain wait. CE GWE keeps cross-thread sends on
+  the received-message/sent-message lanes (`cmsgque.h`), but it does not
+  rewrite a worker's CPU context into the main thread during a watchdog slice.
+  The watchdog path now timeslices the active guest thread normally instead of
+  transmuting it into main context. Current source reference:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp:2327`.
+  Release and Debug builds passed with the known vcpkg warning. Debug run
+  `captures/inavi_autodrive_20260531_165013` no longer shows the repeated
+  `WaitForSingleObject parked main wait ... queued=8/11` loop; the exposed
+  messages drain to `queued=0`, and worker waits remain associated with their
+  guest thread handles.
+- Follow-up input-latency review of `captures/inavi_autodrive_20260531_165013`
+  showed the hard swallow was gone, but remote/API touches could still wait
+  behind long guest slices because host-window clicks stopped Unicorn from the
+  presenter WndProc while remote touches only queued into `CeRemote` for the
+  outer scheduler loop to drain later. Remote touch/key enqueue now sets an
+  atomic pending-input flag and posts a no-op wake to the presenter HWND; the
+  interactive basic-block watchdog treats that flag as a slice stop reason
+  (`remote-input`) without changing CE-visible message ordering. Current source
+  references:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/remote_server.cpp:1007`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp:586`, and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp:920`.
+  Release and Debug builds passed with the known vcpkg/Boost warnings. Debug
+  interactive run `captures/inavi_autodrive_20260531_165924` is live for
+  remote input validation.

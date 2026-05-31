@@ -1004,6 +1004,16 @@ void SyntheticDllRuntime::stopRemoteServer() {
     remoteServer_.reset();
 }
 
+void SyntheticDllRuntime::notifyRemoteInputQueued() {
+    remoteInputPending_.store(true, std::memory_order_release);
+#if defined(_WIN32)
+    const uintptr_t wakeHwnd = remoteInputWakeHostHwnd_.load(std::memory_order_acquire);
+    if (wakeHwnd) {
+        PostMessageW(reinterpret_cast<HWND>(wakeHwnd), WM_NULL, 0, 0);
+    }
+#endif
+}
+
 void SyntheticDllRuntime::drainRemoteInputEvents() {
     std::deque<RemoteTouchEvent> events;
     std::deque<RemoteKeyEvent> keyEvents;
@@ -1011,6 +1021,8 @@ void SyntheticDllRuntime::drainRemoteInputEvents() {
         std::lock_guard<std::mutex> lock(ceRemote_.mutex());
         events.swap(ceRemote_.touchEvents());
         keyEvents.swap(ceRemote_.keyEvents());
+        remoteInputPending_.store(!ceRemote_.touchEvents().empty() || !ceRemote_.keyEvents().empty(),
+                                  std::memory_order_release);
     }
     for (const auto& event : events) {
         queueHostMouseMessage(hostPresenterGuestHwnd_, event.message, event.x, event.y);
@@ -1056,6 +1068,7 @@ bool SyntheticDllRuntime::enqueueRemoteTouch(const std::string& phase, int32_t x
         std::lock_guard<std::mutex> lock(ceRemote_.mutex());
         ceRemote_.touchEvents().push_back({message, x, y});
     }
+    notifyRemoteInputQueued();
     return true;
 }
 
@@ -1077,6 +1090,7 @@ bool SyntheticDllRuntime::enqueueRemoteKey(const std::string& phase, uint32_t vk
         std::lock_guard<std::mutex> lock(ceRemote_.mutex());
         ceRemote_.keyEvents().push_back({message, vk});
     }
+    notifyRemoteInputQueued();
     return true;
 }
 
