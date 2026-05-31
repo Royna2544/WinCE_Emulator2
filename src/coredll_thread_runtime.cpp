@@ -541,11 +541,7 @@ bool SyntheticDllRuntime::switchToRunnableGuestThread(const char* reason,
     auto logOwnerPriority = [&](uint32_t ownerThread, const char* target) {
         constexpr uint64_t kOwnerPriorityLogIntervalMs = 1000;
         const uint64_t nowMs = hostTickMilliseconds();
-        if (lastGweOwnerPriorityLogMs_ &&
-            nowMs - lastGweOwnerPriorityLogMs_ < kOwnerPriorityLogIntervalMs) {
-            return;
-        }
-        lastGweOwnerPriorityLogMs_ = nowMs;
+        if (!diagnostics_.shouldLog("gwe-owner-priority", nowMs, kOwnerPriorityLogIntervalMs)) return;
         spdlog::info("guest scheduler owner-priority reason={} target={} owner=0x{:08x} ownerQueued={} totalQueued={} preferred=0x{:08x}",
                      reason ? reason : "cooperate",
                      target,

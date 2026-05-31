@@ -357,9 +357,9 @@ bool envFlagEnabled(const char* name) {
 SyntheticDllRuntime::SyntheticDllRuntime(uc_engine* uc) : uc_(uc) {
     if (!uc_) throw std::runtime_error("SyntheticDllRuntime requires a Unicorn engine");
 #if defined(NDEBUG)
-    diagnosticDumpsEnabled_ = false;
+    diagnostics_.setDumpsEnabled(false);
 #else
-    diagnosticDumpsEnabled_ = envFlagEnabled("INAVI_EMU_DUMPS");
+    diagnostics_.setDumpsEnabled(envFlagEnabled("INAVI_EMU_DUMPS"));
 #endif
     uc_mem_map(uc_, heapBase_, heapLimit_ - heapBase_, UC_PROT_ALL);
     uc_mem_map(uc_, 0x00005000, 0x00001000, UC_PROT_ALL);
@@ -609,19 +609,17 @@ void SyntheticDllRuntime::hookBasicBlock(uc_engine* uc, uint64_t address, uint32
             const bool messageTransfer =
                 runtime->interactiveSliceReason_ == "message-transfer" ||
                 runtime->interactiveSliceReason_ == "blocked-main-message-transfer";
-            if (messageTransfer) ++runtime->messageTransferWatchdogStops_;
+            if (messageTransfer) runtime->diagnostics_.incrementMessageTransferWatchdogStops();
             const uint64_t nowMs = hostTickMilliseconds();
             const bool rateLimitedMessageTransfer =
                 messageTransfer &&
-                runtime->lastMessageLatencyDiagMs_ &&
-                nowMs - runtime->lastMessageLatencyDiagMs_ < 1000;
+                !runtime->diagnostics_.shouldLog("message-transfer-latency", nowMs, 1000);
             if (rateLimitedMessageTransfer) {
                 spdlog::debug("guest slice watchdog stop reason={} stopCause=deadline activeThread=0x{:08x} budget={} block=0x{:08x} pc=0x{:08x} ra=0x{:08x} queued={}",
                               runtime->interactiveSliceReason_, runtime->ceKernel_.activeGuestThread(),
                               runtime->interactiveSliceInstructionBudget_, uint32_t(address), pc, ra,
                               runtime->ceGwe_.messageCount());
             } else {
-                runtime->lastMessageLatencyDiagMs_ = nowMs;
                 const uint32_t owner = !runtime->pendingMessageTransfers_.empty()
                     ? runtime->pendingMessageTransfers_.back().ownerThread
                     : runtime->ceGwe_.oldestPendingOwner().value_or(0);
@@ -630,7 +628,8 @@ void SyntheticDllRuntime::hookBasicBlock(uc_engine* uc, uint64_t address, uint32
                              runtime->interactiveSliceReason_, runtime->ceKernel_.activeGuestThread(),
                              runtime->interactiveSliceInstructionBudget_, uint32_t(address), pc, ra,
                              runtime->ceGwe_.messageCount(), owner, ownerQueue.posted, ownerQueue.sent,
-                             ownerQueue.input, ownerQueue.timers, runtime->messageTransferWatchdogStops_);
+                             ownerQueue.input, ownerQueue.timers,
+                             runtime->diagnostics_.messageTransferWatchdogStops());
             }
         }
         runtime->interactiveSliceStopRequested_ = true;

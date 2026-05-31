@@ -8,6 +8,7 @@
 #include "ce_kernel.h"
 #include "ce_mgdi.h"
 #include "ordinal_dispatch_table.h"
+#include "runtime_diagnostics.h"
 
 #include <nlohmann/json.hpp>
 
@@ -763,6 +764,7 @@ private:
     CeAudio ceAudio_;
     CeGwe ceGwe_;
     CeMgdi ceMgdi_;
+    RuntimeDiagnostics diagnostics_;
     uint32_t processHeapHandle_ = 0;
     uint64_t tick_ = 0;
     uint64_t windowZOrder_ = 0;
@@ -901,10 +903,6 @@ private:
     std::map<std::string, SerialDeviceConfig> serialDevicesByGuest_;
     uint32_t defaultSerialBaud_{9600};
     std::string defaultSerialMode_{"8N1"};
-    bool diagnosticDumpsEnabled_{};
-    uint64_t lastGweOwnerPriorityLogMs_{};
-    uint64_t lastMessageLatencyDiagMs_{};
-    uint64_t messageTransferWatchdogStops_{};
 
     std::optional<SyntheticModule> createCoredll();
     std::optional<SyntheticModule> createCommctrl();

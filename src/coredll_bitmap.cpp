@@ -1305,7 +1305,7 @@ SyntheticDllRuntime::bitmapProbeStats(const GuestBitmap& bitmap,
 void SyntheticDllRuntime::dumpGuestBitmapPpm(uint32_t bitmapHandle,
                                              const GuestBitmap& bitmap,
                                              const std::string& tag) {
-    if (!diagnosticDumpsEnabled_) return;
+    if (!diagnostics_.dumpsEnabled()) return;
     const int32_t height = std::abs(bitmap.heightRaw);
     if (bitmap.width <= 0 || height <= 0 || !bitmap.bits || !bitmap.stride) return;
     const uint64_t byteCount = uint64_t(bitmap.stride) * uint64_t(height);
@@ -1337,7 +1337,7 @@ void SyntheticDllRuntime::dumpGuestBitmapPpm(uint32_t bitmapHandle,
 }
 
 void SyntheticDllRuntime::dumpFramebufferPpm(const std::string& tag) {
-    if (!diagnosticDumpsEnabled_) return;
+    if (!diagnostics_.dumpsEnabled()) return;
     if (!framebuffer_ || framebufferWidth_ <= 0 || framebufferHeight_ <= 0) return;
     char path[160]{};
     std::snprintf(path, sizeof(path), "frame_probe_splash_%02u_%s_frame.ppm",

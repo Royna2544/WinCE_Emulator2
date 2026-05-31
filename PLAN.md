@@ -498,6 +498,9 @@ results, or timing thresholds.
   and host-present/mapping-sync counters.
   Current source anchors: `src/runtime_diagnostics.h` and
   `src/runtime_diagnostics.cpp`.
+  - [x] Move dump enablement, GWE owner-priority rate limiting, message
+    latency rate limiting, and message-transfer watchdog counters out of the
+    runtime header into `RuntimeDiagnostics`.
 - [ ] Fold the current search-freeze investigation into the new ownership
   shape: track received sent-message depth separately from posted/input/paint
   queues, keep plain waits from pumping posted/paint, and diagnose the known

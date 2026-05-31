@@ -219,6 +219,14 @@ Current emulator difference:
   Release startup smoke `captures/inavi_autodrive_20260531_145009` captured
   the initial window with no fatal, unsupported-ordinal, `UC_ERR`, or
   false-`PC == 0` log signatures.
+- Runtime diagnostic state started moving out of `SyntheticDllRuntime`: dump
+  enablement, GWE owner-priority rate limiting, message latency rate limiting,
+  and message-transfer watchdog counters now live behind `RuntimeDiagnostics`.
+  Current source anchors:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/runtime_diagnostics.h`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp`, and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_thread_runtime.cpp`. The
+  2026-05-31 Release build passed with the existing vcpkg/Boost warnings.
 - A follow-up live report showed the startup safety/fullscreen surface could
   visually overlap with the bottom strip again: stale fullscreen-popup pixels
   remained while exposed owner/child UI repainted. Log evidence from Debug run
