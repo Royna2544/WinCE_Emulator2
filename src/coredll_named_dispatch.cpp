@@ -167,6 +167,7 @@ enum class CoredllOrdinal : uint16_t {
     SetTextColor = 0x039C,
     CreatePatternBrush = 0x039D,
     CreatePen = 0x039E,
+    FillRgn = 0x039F,
     CreatePenIndirect = 0x03A2,
     CreateSolidBrush = 0x03A3,
     Ellipse = 0x03A6,
@@ -175,11 +176,16 @@ enum class CoredllOrdinal : uint16_t {
     Polygon = 0x03AB,
     Polyline = 0x03AC,
     Rectangle = 0x03AD,
+    RoundRect = 0x03AE,
     SetBrushOrgEx = 0x03AF,
     DrawTextW = 0x03B1,
     CombineRgn = 0x03C8,
     GetClipBox = 0x03CB,
+    PtInRegion = 0x03D1,
+    RectInRegion = 0x03D2,
+    SelectClipRgn = 0x03D3,
     CreateRectRgn = 0x03D4,
+    SetRectRgn = 0x03D6,
     GetModuleHandleW = 0x0499,
     GetProcAddressA = 0x04CE,
     KernelLibIoControl = 0x05D1,
@@ -1501,6 +1507,11 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
         {ord(CoredllOrdinal::CreateSolidBrush)},
         {ord(CoredllOrdinal::CreateRectRgn)},
         {ord(CoredllOrdinal::CombineRgn)},
+        {ord(CoredllOrdinal::SetRectRgn)},
+        {ord(CoredllOrdinal::FillRgn)},
+        {ord(CoredllOrdinal::PtInRegion)},
+        {ord(CoredllOrdinal::RectInRegion)},
+        {ord(CoredllOrdinal::SelectClipRgn)},
         {ord(CoredllOrdinal::GetClipBox)},
         {ord(CoredllOrdinal::CreateFontIndirectW)},
         {ord(CoredllOrdinal::GetStockObject)},
@@ -1514,6 +1525,7 @@ bool SyntheticDllRuntime::dispatchHostWin32(uint16_t ordinal,
         {ord(CoredllOrdinal::PatBlt)},
         {ord(CoredllOrdinal::Ellipse)},
         {ord(CoredllOrdinal::Rectangle)},
+        {ord(CoredllOrdinal::RoundRect)},
         {ord(CoredllOrdinal::MoveToEx)},
         {ord(CoredllOrdinal::LineTo)},
         {ord(CoredllOrdinal::ExtTextOutW)},
@@ -2546,6 +2558,114 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
 #endif
         break;
     }
+    case ord(CoredllOrdinal::SetRectRgn):
+    {
+        auto region = ceKernel_.handles().find(a0);
+        if (region == ceKernel_.handles().end() ||
+            region->second.kind != GuestHandle::Kind::HostRegion) {
+            lastError_ = 6;
+            ret = 0;
+        } else {
+#if defined(_WIN32)
+            if (region->second.hostValue &&
+                !::SetRectRgn(reinterpret_cast<HRGN>(region->second.hostValue),
+                              int(a1), int(a2), int(a3), int(stackArg(4)))) {
+                lastError_ = GetLastError();
+                ret = 0;
+                break;
+            }
+#endif
+            ceMgdi_.trackRegion(CeMgdi::RegionState{
+                a0,
+                true,
+                CeMgdi::Rect{int32_t(a1), int32_t(a2), int32_t(a3), int32_t(stackArg(4))}
+            });
+            lastError_ = 0;
+            ret = 1;
+        }
+        break;
+    }
+    case ord(CoredllOrdinal::FillRgn):
+    {
+        GuestDc* dc = lookupGuestDc(a0);
+        const CeMgdi::RegionState* region = ceMgdi_.regionState(a1);
+        const CeMgdi::BrushState* brush = ceMgdi_.brushState(a2);
+        if (!dc || !region || !region->hasBounds || !brush) {
+            lastError_ = dc ? 87 : 6;
+            ret = 0;
+        } else {
+            if (brush->colorRef != 0xffffffffu) {
+                fillDcRect(*dc,
+                           region->bounds.left,
+                           region->bounds.top,
+                           region->bounds.right,
+                           region->bounds.bottom,
+                           colorRefToPixel(brush->colorRef));
+            }
+            lastError_ = 0;
+            ret = 1;
+        }
+        break;
+    }
+    case ord(CoredllOrdinal::PtInRegion):
+    {
+        const CeMgdi::RegionState* region = ceMgdi_.regionState(a0);
+        if (!region || !region->hasBounds) {
+            lastError_ = 6;
+            ret = 0;
+        } else {
+            ret = CeMgdi::rectContainsPoint(region->bounds, int32_t(a1), int32_t(a2)) ? 1 : 0;
+            lastError_ = 0;
+        }
+        break;
+    }
+    case ord(CoredllOrdinal::RectInRegion):
+    {
+        const CeMgdi::RegionState* region = ceMgdi_.regionState(a0);
+        int32_t left = 0, top = 0, right = 0, bottom = 0;
+        if (!region || !region->hasBounds || !readGuestRect(a1, left, top, right, bottom)) {
+            lastError_ = region ? 87 : 6;
+            ret = 0;
+        } else {
+            ret = (left < region->bounds.right && right > region->bounds.left &&
+                   top < region->bounds.bottom && bottom > region->bounds.top) ? 1 : 0;
+            lastError_ = 0;
+        }
+        break;
+    }
+    case ord(CoredllOrdinal::SelectClipRgn):
+    {
+        GuestDc* dc = lookupGuestDc(a0);
+        constexpr uint32_t kErrorRegion = 0;
+        constexpr uint32_t kNullRegion = 1;
+        constexpr uint32_t kSimpleRegion = 2;
+        if (!dc) {
+            lastError_ = 6;
+            ret = kErrorRegion;
+        } else if (!a1) {
+            ceMgdi_.clearAppClip(a0);
+            lastError_ = 0;
+            ret = kSimpleRegion;
+        } else if (const CeMgdi::RegionState* region = ceMgdi_.regionState(a1);
+                   region && region->hasBounds) {
+            CeMgdi::Rect clip = region->bounds;
+            const uint32_t selectedBitmap = ceMgdi_.selectedBitmapForDc(a0, dc->selectedBitmap);
+            if (bitmaps_.find(selectedBitmap) == bitmaps_.end() && dc->hwnd) {
+                const auto [originX, originY] = guestWindowOrigin(dc->hwnd);
+                clip.left += originX;
+                clip.right += originX;
+                clip.top += originY;
+                clip.bottom += originY;
+            }
+            ceMgdi_.setAppClip(a0, clip);
+            lastError_ = 0;
+            ret = clip.left >= clip.right || clip.top >= clip.bottom ? kNullRegion : kSimpleRegion;
+        } else {
+            lastError_ = 6;
+            ret = kErrorRegion;
+        }
+        break;
+    }
     case ord(CoredllOrdinal::GetClipBox):
     {
         GuestDc* dc = lookupGuestDc(a0);
@@ -2872,6 +2992,87 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                 drawDcLine(*dc, left, bottom - 1, right - 1, bottom - 1, pixel, penWidth);
                 drawDcLine(*dc, left, top, left, bottom - 1, pixel, penWidth);
                 drawDcLine(*dc, right - 1, top, right - 1, bottom - 1, pixel, penWidth);
+            }
+            lastError_ = 0;
+            ret = 1;
+        }
+        break;
+    }
+    case ord(CoredllOrdinal::RoundRect):
+    {
+        GuestDc* dc = lookupGuestDc(a0);
+        const uint32_t selectedBrush = dc ? ceMgdi_.selectedBrushForDc(dc->hdc, dc->selectedBrush) : 0;
+        const uint32_t selectedPen = dc ? ceMgdi_.selectedPenForDc(dc->hdc, dc->selectedPen) : 0;
+        const CeMgdi::BrushState* brush = dc ? ceMgdi_.brushState(selectedBrush) : nullptr;
+        const CeMgdi::PenState* pen = dc ? ceMgdi_.penState(selectedPen) : nullptr;
+        if (!dc || (!brush && !pen)) {
+            lastError_ = dc ? 87 : 6;
+            ret = 0;
+        } else {
+            int32_t left = int32_t(a1);
+            int32_t top = int32_t(a2);
+            int32_t right = int32_t(a3);
+            int32_t bottom = int32_t(stackArg(4));
+            if (left > right) std::swap(left, right);
+            if (top > bottom) std::swap(top, bottom);
+            const int32_t width = right - left;
+            const int32_t height = bottom - top;
+            if (width <= 0 || height <= 0) {
+                lastError_ = 0;
+                ret = 1;
+                break;
+            }
+
+            const int32_t radiusX = std::min<int32_t>(std::abs(int32_t(stackArg(5))) / 2, width / 2);
+            const int32_t radiusY = std::min<int32_t>(std::abs(int32_t(stackArg(6))) / 2, height / 2);
+            if (radiusX <= 0 || radiusY <= 0) {
+                if (brush && brush->colorRef != 0xffffffffu) {
+                    fillDcRect(*dc, left, top, right, bottom, colorRefToPixel(brush->colorRef));
+                }
+                if (pen && pen->style != 5 && pen->colorRef != 0xffffffffu) {
+                    const uint32_t pixel = colorRefToPixel(pen->colorRef);
+                    const uint32_t penWidth = pen->width;
+                    drawDcLine(*dc, left, top, right - 1, top, pixel, penWidth);
+                    drawDcLine(*dc, left, bottom - 1, right - 1, bottom - 1, pixel, penWidth);
+                    drawDcLine(*dc, left, top, left, bottom - 1, pixel, penWidth);
+                    drawDcLine(*dc, right - 1, top, right - 1, bottom - 1, pixel, penWidth);
+                }
+                lastError_ = 0;
+                ret = 1;
+                break;
+            }
+
+            constexpr int32_t kCornerSegments = 12;
+            constexpr double kPi = 3.14159265358979323846;
+            std::vector<std::pair<int32_t, int32_t>> points;
+            points.reserve(size_t(kCornerSegments + 1) * 4u);
+            auto addArc = [&](double centerX, double centerY, double startAngle, double endAngle) {
+                for (int32_t i = 0; i <= kCornerSegments; ++i) {
+                    const double t = double(i) / double(kCornerSegments);
+                    const double angle = startAngle + (endAngle - startAngle) * t;
+                    const auto x = int32_t(std::lround(centerX + std::cos(angle) * double(radiusX)));
+                    const auto y = int32_t(std::lround(centerY + std::sin(angle) * double(radiusY)));
+                    if (points.empty() || points.back().first != x || points.back().second != y) {
+                        points.emplace_back(x, y);
+                    }
+                }
+            };
+            addArc(double(right - 1 - radiusX), double(top + radiusY), -0.5 * kPi, 0.0);
+            addArc(double(right - 1 - radiusX), double(bottom - 1 - radiusY), 0.0, 0.5 * kPi);
+            addArc(double(left + radiusX), double(bottom - 1 - radiusY), 0.5 * kPi, kPi);
+            addArc(double(left + radiusX), double(top + radiusY), kPi, 1.5 * kPi);
+
+            if (brush && brush->colorRef != 0xffffffffu) {
+                fillDcPolygon(*dc, points, colorRefToPixel(brush->colorRef));
+            }
+            if (pen && pen->style != 5 && pen->colorRef != 0xffffffffu) {
+                const uint32_t pixel = colorRefToPixel(pen->colorRef);
+                const uint32_t penWidth = pen->width;
+                for (size_t index = 0; index < points.size(); ++index) {
+                    const auto& from = points[index];
+                    const auto& to = points[(index + 1) % points.size()];
+                    drawDcLine(*dc, from.first, from.second, to.first, to.second, pixel, penWidth);
+                }
             }
             lastError_ = 0;
             ret = 1;

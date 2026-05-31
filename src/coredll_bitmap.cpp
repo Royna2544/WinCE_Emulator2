@@ -18,6 +18,7 @@
 #include <fstream>
 #include <iomanip>
 #include <memory>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <string>
@@ -877,6 +878,7 @@ bool SyntheticDllRuntime::fillDcPolygon(const GuestDc& dc,
     }
 
     std::vector<uint8_t> raw;
+    std::optional<CeMgdi::Rect> framebufferClip;
     int32_t bitmapHeight = 0;
     if (bitmapIt != bitmaps_.end()) {
         const GuestBitmap& bitmap = bitmapIt->second;
@@ -890,6 +892,7 @@ bool SyntheticDllRuntime::fillDcPolygon(const GuestDc& dc,
         maxY = std::clamp<int32_t>(maxY, 0, bitmapHeight - 1);
     } else {
         if (!framebuffer_) return false;
+        framebufferClip = framebufferClipForDc(dc);
         noteGuestWindowPaint(dc.hwnd,
                              std::clamp<int32_t>(minX, 0, framebufferWidth_),
                              std::clamp<int32_t>(minY, 0, framebufferHeight_),
@@ -928,7 +931,9 @@ bool SyntheticDllRuntime::fillDcPolygon(const GuestDc& dc,
                 left = std::clamp<int32_t>(left, 0, framebufferWidth_ - 1);
                 right = std::clamp<int32_t>(right, 0, framebufferWidth_ - 1);
                 for (int32_t x = left; x <= right; ++x) {
-                    writeFramebufferTargetPixel(dc.hwnd, x, y, pixel);
+                    if (!framebufferClip || CeMgdi::rectContainsPoint(*framebufferClip, x, y)) {
+                        writeFramebufferTargetPixel(dc.hwnd, x, y, pixel);
+                    }
                 }
             }
         }

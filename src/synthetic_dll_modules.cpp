@@ -148,6 +148,7 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x039C, "SetTextColor");
     registerExport(module, 0x039D, "CreatePatternBrush");
     registerExport(module, 0x039E, "CreatePen");
+    registerExport(module, 0x039F, "FillRgn");
     registerExport(module, 0x03A2, "CreatePenIndirect");
     registerExport(module, 0x03A3, "CreateSolidBrush");
     registerExport(module, 0x03A6, "Ellipse");
@@ -156,11 +157,16 @@ std::optional<SyntheticModule> SyntheticDllRuntime::createCoredll() {
     registerExport(module, 0x03AB, "Polygon");
     registerExport(module, 0x03AC, "Polyline");
     registerExport(module, 0x03AD, "Rectangle");
+    registerExport(module, 0x03AE, "RoundRect");
     registerExport(module, 0x03AF, "SetBrushOrgEx");
     registerExport(module, 0x03B1, "DrawTextW");
-    registerExport(module, 0x03D4, "CreateRectRgn");
     registerExport(module, 0x03C8, "CombineRgn");
     registerExport(module, 0x03CB, "GetClipBox");
+    registerExport(module, 0x03D1, "PtInRegion");
+    registerExport(module, 0x03D2, "RectInRegion");
+    registerExport(module, 0x03D3, "SelectClipRgn");
+    registerExport(module, 0x03D4, "CreateRectRgn");
+    registerExport(module, 0x03D6, "SetRectRgn");
     registerExport(module, 0x037C, "RegisterTaskBar");
     registerCoredllMathExports(module);
     registerCoredllCrtExports(module);
