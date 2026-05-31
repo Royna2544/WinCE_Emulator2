@@ -30,7 +30,10 @@ Active refactor checklist: `PLAN.md`.
      opened with `CALLBACK_NULL`, and local WinMM playback is fed from a small
      backend chunk queue instead of one whole guest buffer. Next step is Debug
      interactive validation with a mid-startup websocket connect and short
-     button-click sounds.
+     button-click sounds. Also verify the old route-guide signature no longer
+     appears: `WaitForSingleObject(..., INFINITE)` must not resume with
+     `WAIT_TIMEOUT`, and `waveOutUnprepareHeader` must not run while
+     `WHDR_INQUEUE` is still set just because cooperative paint drained.
 
 1. Finish virtual serial wait semantics and scheduler responsiveness.
    - CE reference:

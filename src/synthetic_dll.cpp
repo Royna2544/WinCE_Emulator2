@@ -1511,14 +1511,55 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
             return;
         }
         PendingBlockingApi pendingCall = pendingBlockingApis_.back();
-        pendingBlockingApis_.pop_back();
         uint32_t ret = 0;
+        bool waitStillBlocked = false;
         if (pendingCall.ordinal == 0x01F0) {
+            pendingBlockingApis_.pop_back();
             handleSleep(SyntheticExportCode::CoreDllSleep, pendingCall.args, ret);
+        } else if (pendingCall.ordinal == 0x01F1) {
+            constexpr uint32_t kWaitTimeout = CeKernel::kWaitTimeout;
+            constexpr uint32_t kInfiniteTimeout = 0xffffffffu;
+#if defined(_WIN32)
+            auto hostWaitProbe = [](const GuestHandle& handle) {
+                const DWORD wait = ::WaitForSingleObject(reinterpret_cast<HANDLE>(handle.hostValue), 0);
+                if (wait == WAIT_OBJECT_0) return CeKernel::HostWaitResult{true, false, 0};
+                if (wait == WAIT_TIMEOUT) return CeKernel::HostWaitResult{false, false, 0};
+                return CeKernel::HostWaitResult{false, true, GetLastError()};
+            };
+#else
+            CeKernel::HostWaitProbe hostWaitProbe;
+#endif
+            refreshCompletedHostWaveBuffers();
+            const CeKernel::WaitQueryResult wait =
+                ceKernel_.queryWaitObject(pendingCall.args.a0, hostWaitProbe, true);
+            ret = wait.result;
+            lastError_ = wait.error;
+            const bool finiteExpired =
+                pendingCall.deadlineMs && hostTickMilliseconds() >= pendingCall.deadlineMs;
+            waitStillBlocked = ret == kWaitTimeout &&
+                               pendingCall.args.a1 != 0 &&
+                               pendingCall.args.a1 != kInfiniteTimeout &&
+                               !finiteExpired;
+            if (ret == kWaitTimeout &&
+                pendingCall.args.a1 == kInfiniteTimeout) {
+                waitStillBlocked = true;
+            }
+            if (waitStillBlocked) {
+                setReg(UC_MIPS_REG_PC, blockingApiContinuationStub_);
+                pumpHostMessages();
+                if (!switchToRunnableGuestThread(pendingCall.name.c_str())) {
+                    uc_emu_stop(uc_);
+                }
+                return;
+            }
+            pendingBlockingApis_.pop_back();
         } else if (!dispatchHostWin32(pendingCall.ordinal, pendingCall.args, ret)) {
+            pendingBlockingApis_.pop_back();
             spdlog::warn("blocking API continuation could not resume {}", pendingCall.name);
             lastError_ = 120;
             ret = 0;
+        } else {
+            pendingBlockingApis_.pop_back();
         }
         setReg(UC_MIPS_REG_V0, ret);
         setReg(UC_MIPS_REG_RA, pendingCall.args.ra);
@@ -1895,7 +1936,12 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
 
             }
             if (blockingApiContinuationStub_) {
-                pendingBlockingApis_.push_back(PendingBlockingApi{name, ordinal, args});
+                constexpr uint32_t kInfiniteTimeout = 0xffffffffu;
+                PendingBlockingApi pending{name, ordinal, args};
+                if (a0 != kInfiniteTimeout) {
+                    pending.deadlineMs = hostTickMilliseconds() + uint64_t(a0);
+                }
+                pendingBlockingApis_.push_back(std::move(pending));
                 if (dispatchQueuedPaintForBlockingApi(pendingBlockingApis_.back(), "before block")) {
                     return;
                 }
@@ -2055,7 +2101,11 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
             }
 
             if (blockingApiContinuationStub_) {
-                pendingBlockingApis_.push_back(PendingBlockingApi{name, ordinal, args});
+                PendingBlockingApi pending{name, ordinal, args};
+                if (a1 != kInfiniteTimeout) {
+                    pending.deadlineMs = hostTickMilliseconds() + uint64_t(a1);
+                }
+                pendingBlockingApis_.push_back(std::move(pending));
                 if (dispatchQueuedPaintForBlockingApi(pendingBlockingApis_.back(), "before block")) {
                     return;
                 }

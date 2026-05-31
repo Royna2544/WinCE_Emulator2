@@ -162,6 +162,20 @@ Current emulator difference:
   The 2026-05-31 Release build passed with the existing Boost Beast warning
   from `remote_server.cpp`; a later Debug build compiled but could not link
   because the old Debug emulator process was still running.
+- A route-guide run from the old Debug process showed a source-alignment bug
+  in the cooperative blocking-wait continuation: while pumping paint around
+  `WaitForSingleObject(..., INFINITE)`, the continuation re-dispatched the
+  host coredll wait shim and returned `WAIT_TIMEOUT` even though CE would keep
+  the wait blocked until the object signaled. The same log immediately showed
+  `waveOutUnprepareHeader` failing while `WHDR_INQUEUE` was still set, and
+  dialog/window transitions later desynced between the host presenter and the
+  remote framebuffer. The continuation now records finite deadlines, only
+  returns `WAIT_TIMEOUT` for zero/expired finite waits, and keeps infinite
+  waits parked while host messages/other runnable guest threads continue.
+  Current source anchors:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp:1510` and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.h:718`. The 2026-05-31
+  Release build passed with zero warnings after this fix.
 - Remote input press/release now wakes a window-owner thread parked in a
   non-`waitAll` multi-object wait when that owner has pending GWE messages.
   This models CE `MsgQueue::m_hNewEvents` enough to avoid button-up messages

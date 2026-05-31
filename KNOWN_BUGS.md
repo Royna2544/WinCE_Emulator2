@@ -208,8 +208,14 @@ Status:
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/remote_server.cpp:1022`.
 - Local WinMM playback is now a backend and no longer the guest-visible
   clock; it is fed through a small backend chunk queue instead of a single
-  whole-buffer host submission. Remaining open piece: validate a real
-  interactive run with mid-startup websocket connect and short click sounds.
+  whole-buffer host submission.
+- A later route-guide run found that cooperative paint around a blocking
+  `WaitForSingleObject(..., INFINITE)` could still return `WAIT_TIMEOUT` from
+  the named wait shim. That caused audio buffers to be unprepared while still
+  queued and also correlated with modal/draw desync. This wait-continuation
+  bug is fixed in source and Release-build verified; remaining open piece:
+  validate a real interactive run with mid-startup websocket connect, route
+  guide audio, and short click sounds.
 
 ## Resolved: Missing Host Serial Port Added Startup Delay
 

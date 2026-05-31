@@ -719,6 +719,7 @@ private:
         std::string name;
         uint16_t ordinal{};
         GuestCallArgs args;
+        uint64_t deadlineMs{};
         uint32_t paintDispatches{};
         uint32_t releaseHostPresentAfterPaintHwnd{};
     };
