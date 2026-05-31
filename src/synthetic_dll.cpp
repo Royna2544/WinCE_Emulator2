@@ -683,11 +683,11 @@ uint32_t SyntheticDllRuntime::closeGuestHandle(uint32_t guestHandle) {
         ceAudio_.waveOutStates().erase(guestHandle);
         ceAudio_.hostWaveBuffers().clear();
     } else if (it->second.kind == GuestHandle::Kind::GuestFileMapping) {
-        const bool hasMappedView = std::any_of(mappedViews_.begin(), mappedViews_.end(),
+        const bool hasMappedView = std::any_of(ceIpc_.mappedViews().begin(), ceIpc_.mappedViews().end(),
                                                [&](const auto& entry) {
                                                    return entry.second.mappingHandle == guestHandle;
                                                });
-        if (!hasMappedView) fileMappings_.erase(guestHandle);
+        if (!hasMappedView) ceIpc_.fileMappings().erase(guestHandle);
     } else if (it->second.kind == GuestHandle::Kind::HostBitmap) {
         ceMgdi_.bitmaps().erase(guestHandle);
         if (it->second.filePointer) releaseAllocation(it->second.filePointer);

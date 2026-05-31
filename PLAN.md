@@ -527,6 +527,10 @@ results, or timing thresholds.
     HWND table, cross-process message stat cache, poll timestamp, and shared
     mapping directory state behind `CrossProcessBroker` without changing the
     JSON transport format.
+- [x] Add a `CeIpc` owner for guest-visible file mapping and mapped-view
+  state, keeping host shared-mapping backing files in `CrossProcessBroker`.
+  Current source anchors: `src/ce_ipc.h`, `src/coredll_mapping.cpp`, and
+  `src/synthetic_dll.cpp`.
 - [x] Add a `RuntimeDiagnostics` owner for rate-limited logs, dump flags,
   message latency watchdogs, route/search timing, GWE owner queue summaries,
   and host-present/mapping-sync counters.

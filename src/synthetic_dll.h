@@ -5,6 +5,7 @@
 #include "ce_device.h"
 #include "ce_audio.h"
 #include "ce_gwe.h"
+#include "ce_ipc.h"
 #include "ce_kernel.h"
 #include "ce_mgdi.h"
 #include "ce_remote.h"
@@ -549,22 +550,8 @@ private:
         std::map<std::string, uint32_t> exportsByName;
         std::map<uint16_t, uint32_t> exportsByOrdinal;
     };
-    struct GuestFileMapping {
-        uint32_t fileHandle{};
-        uint64_t size{};
-        uint32_t protect{};
-        std::string name;
-        std::filesystem::path backingPath;
-        bool namedShared{};
-    };
-    struct GuestMappedView {
-        uint32_t mappingHandle{};
-        uint64_t offset{};
-        uint32_t size{};
-        std::vector<uint8_t> shadow;
-        uint64_t backingVersion{};
-        uint32_t refCount{1};
-    };
+    using GuestFileMapping = CeIpc::GuestFileMapping;
+    using GuestMappedView = CeIpc::GuestMappedView;
     using GuestTimer = CeGwe::GuestTimer;
     using PendingDestroyWindow = CeGwe::PendingDestroyWindow;
     using PendingCreateWindow = CeGwe::PendingCreateWindow;
@@ -592,6 +579,7 @@ private:
     CeDevice ceDevice_;
     CeAudio ceAudio_;
     CeGwe ceGwe_;
+    CeIpc ceIpc_;
     CeMgdi ceMgdi_;
     CeRemote ceRemote_;
     CrossProcessBroker crossProcessBroker_;
@@ -645,8 +633,6 @@ private:
     std::map<std::wstring, CachedFileAttributes> fileAttributeCache_;
     std::unordered_map<uint32_t, uint32_t> fileReadCounts_;
     std::unordered_map<uint32_t, uint32_t> fileSeekCounts_;
-    std::map<uint32_t, GuestFileMapping> fileMappings_;
-    std::map<uint32_t, GuestMappedView> mappedViews_;
     std::vector<PendingBlockingApi> pendingBlockingApis_;
     std::map<uint32_t, uint32_t> retrievedSyncSendersByMsgPtr_;
     bool interactiveSliceActive_{};

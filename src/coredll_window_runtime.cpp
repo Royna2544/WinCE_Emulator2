@@ -2152,7 +2152,7 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
         endInteractiveSlice();
         constexpr uint64_t kSchedulerMappingSyncIntervalMs = 50;
         const uint64_t afterSliceMs = hostTickMilliseconds();
-        if (!mappedViews_.empty() &&
+        if (!ceIpc_.mappedViews().empty() &&
             (!lastSchedulerMappingSyncMs_ ||
              afterSliceMs - lastSchedulerMappingSyncMs_ >= kSchedulerMappingSyncIntervalMs ||
              hostUiPressure)) {

@@ -181,8 +181,8 @@ bool SyntheticDllRuntime::writeSharedMappingBytes(const std::filesystem::path& b
 }
 
 bool SyntheticDllRuntime::syncNamedMappedView(uint32_t baseAddress, GuestMappedView& view, bool forceWrite) {
-    auto mapping = fileMappings_.find(view.mappingHandle);
-    if (mapping == fileMappings_.end() || !mapping->second.namedShared || mapping->second.backingPath.empty()) {
+    auto mapping = ceIpc_.fileMappings().find(view.mappingHandle);
+    if (mapping == ceIpc_.fileMappings().end() || !mapping->second.namedShared || mapping->second.backingPath.empty()) {
         return false;
     }
     const std::string& name = mapping->second.name;
@@ -222,7 +222,7 @@ bool SyntheticDllRuntime::syncNamedMappedView(uint32_t baseAddress, GuestMappedV
 }
 
 void SyntheticDllRuntime::syncNamedMappedViews(bool forceWrite) {
-    for (auto& [base, view] : mappedViews_) {
+    for (auto& [base, view] : ceIpc_.mappedViews()) {
         syncNamedMappedView(base, view, forceWrite);
     }
 }
@@ -274,7 +274,7 @@ uint32_t SyntheticDllRuntime::handleCreateFileMappingW(uint32_t fileHandle, uint
         namedShared = true;
     }
     const uint32_t handle = makeGuestHandle({GuestHandle::Kind::GuestFileMapping, 0, 0});
-    fileMappings_[handle] = GuestFileMapping{fileHandle, mappingSize, protect, name, backingPath, namedShared};
+    ceIpc_.fileMappings()[handle] = GuestFileMapping{fileHandle, mappingSize, protect, name, backingPath, namedShared};
     fileHandleDebugNames_[handle] = "mapping name=\"" + name + "\" file=\"" + debugPath + "\" backing=\"" +
                                     pathToUtf8(backingPath) + "\"";
     lastError_ = alreadyExists ? 183 : 0;
@@ -293,8 +293,8 @@ uint32_t SyntheticDllRuntime::handleCreateFileMappingW(uint32_t fileHandle, uint
 uint32_t SyntheticDllRuntime::handleMapViewOfFile(uint32_t mappingHandle, uint32_t desiredAccess, uint32_t offsetHigh,
                                                   uint32_t offsetLow) {
     const uint32_t bytesToMap = stackArg(4);
-    auto mapping = fileMappings_.find(mappingHandle);
-    if (mapping == fileMappings_.end()) {
+    auto mapping = ceIpc_.fileMappings().find(mappingHandle);
+    if (mapping == ceIpc_.fileMappings().end()) {
         lastError_ = 6;
         spdlog::info("MapViewOfFile failed unknown mapping=0x{:08x} offsetHigh=0x{:08x} offsetLow=0x{:08x} bytes={} lastError={}",
                      mappingHandle, offsetHigh, offsetLow, bytesToMap, lastError_);
@@ -317,15 +317,15 @@ uint32_t SyntheticDllRuntime::handleMapViewOfFile(uint32_t mappingHandle, uint32
     const uint32_t viewSize = uint32_t(viewSize64);
     auto sameMappingObject = [&](uint32_t existingHandle) {
         if (existingHandle == mappingHandle) return true;
-        auto existing = fileMappings_.find(existingHandle);
-        if (existing == fileMappings_.end()) return false;
+        auto existing = ceIpc_.fileMappings().find(existingHandle);
+        if (existing == ceIpc_.fileMappings().end()) return false;
         const GuestFileMapping& lhs = existing->second;
         const GuestFileMapping& rhs = mapping->second;
         return lhs.namedShared && rhs.namedShared &&
                !lhs.name.empty() && lhs.name == rhs.name &&
                lhs.backingPath == rhs.backingPath;
     };
-    for (auto& [base, view] : mappedViews_) {
+    for (auto& [base, view] : ceIpc_.mappedViews()) {
         if (view.offset == offset && view.size == viewSize && sameMappingObject(view.mappingHandle)) {
             view.refCount = std::max<uint32_t>(view.refCount, 1) + 1;
             syncNamedMappedView(base, view, false);
@@ -373,7 +373,7 @@ uint32_t SyntheticDllRuntime::handleMapViewOfFile(uint32_t mappingHandle, uint32
         mappedView.shadow.resize(viewSize);
         if (viewSize) uc_mem_read(uc_, base, mappedView.shadow.data(), mappedView.shadow.size());
     }
-    mappedViews_[base] = std::move(mappedView);
+    ceIpc_.mappedViews()[base] = std::move(mappedView);
     lastError_ = 0;
     if (mapping->second.namedShared) {
         spdlog::debug("MapViewOfFile mapping=0x{:08x} name=\"{}\" access=0x{:08x} offset={} bytes={} shared={} backing=\"{}\" -> base=0x{:08x} viewSize={}",
@@ -388,15 +388,15 @@ uint32_t SyntheticDllRuntime::handleMapViewOfFile(uint32_t mappingHandle, uint32
 }
 
 uint32_t SyntheticDllRuntime::handleUnmapViewOfFile(uint32_t baseAddress) {
-    auto view = mappedViews_.find(baseAddress);
-    if (view == mappedViews_.end()) {
+    auto view = ceIpc_.mappedViews().find(baseAddress);
+    if (view == ceIpc_.mappedViews().end()) {
         lastError_ = 487;
         spdlog::info("UnmapViewOfFile failed base=0x{:08x} lastError={}", baseAddress, lastError_);
         return 0;
     }
-    const auto mapping = fileMappings_.find(view->second.mappingHandle);
-    const std::string name = mapping == fileMappings_.end() ? std::string{} : mapping->second.name;
-    const bool namedShared = mapping != fileMappings_.end() && mapping->second.namedShared;
+    const auto mapping = ceIpc_.fileMappings().find(view->second.mappingHandle);
+    const std::string name = mapping == ceIpc_.fileMappings().end() ? std::string{} : mapping->second.name;
+    const bool namedShared = mapping != ceIpc_.fileMappings().end() && mapping->second.namedShared;
     const uint32_t mappingHandle = view->second.mappingHandle;
     const bool synced = syncNamedMappedView(baseAddress, view->second, false);
     if (view->second.refCount > 1) {
@@ -419,31 +419,31 @@ uint32_t SyntheticDllRuntime::handleUnmapViewOfFile(uint32_t baseAddress) {
                      baseAddress, mappingHandle, name, view->second.size, synced);
     }
     releaseAllocation(baseAddress);
-    mappedViews_.erase(view);
+    ceIpc_.mappedViews().erase(view);
     const bool mappingHandleOpen = ceKernel_.handles().find(mappingHandle) != ceKernel_.handles().end();
-    const bool hasMappedView = std::any_of(mappedViews_.begin(), mappedViews_.end(),
+    const bool hasMappedView = std::any_of(ceIpc_.mappedViews().begin(), ceIpc_.mappedViews().end(),
                                            [&](const auto& entry) {
                                                return entry.second.mappingHandle == mappingHandle;
                                            });
-    if (!mappingHandleOpen && !hasMappedView) fileMappings_.erase(mappingHandle);
+    if (!mappingHandleOpen && !hasMappedView) ceIpc_.fileMappings().erase(mappingHandle);
     lastError_ = 0;
     return 1;
 }
 
 uint32_t SyntheticDllRuntime::handleFlushViewOfFile(uint32_t baseAddress, uint32_t bytesToFlush) {
-    auto view = mappedViews_.find(baseAddress);
-    if (view == mappedViews_.end()) {
+    auto view = ceIpc_.mappedViews().find(baseAddress);
+    if (view == ceIpc_.mappedViews().end()) {
         lastError_ = 487;
         spdlog::info("FlushViewOfFile failed base=0x{:08x} bytes={} lastError={}",
                      baseAddress, bytesToFlush, lastError_);
         return 0;
     }
-    const auto mapping = fileMappings_.find(view->second.mappingHandle);
+    const auto mapping = ceIpc_.fileMappings().find(view->second.mappingHandle);
     const uint32_t bytes = bytesToFlush ? std::min(bytesToFlush, view->second.size) : view->second.size;
-    if (mapping == fileMappings_.end() || !bytes) {
+    if (mapping == ceIpc_.fileMappings().end() || !bytes) {
         lastError_ = 0;
         spdlog::info("FlushViewOfFile ignored base=0x{:08x} bytes={} mappingKnown={} effectiveBytes={}",
-                     baseAddress, bytesToFlush, mapping != fileMappings_.end(), bytes);
+                     baseAddress, bytesToFlush, mapping != ceIpc_.fileMappings().end(), bytes);
         return 1;
     }
     if (mapping->second.namedShared) {

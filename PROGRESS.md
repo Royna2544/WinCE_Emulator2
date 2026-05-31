@@ -237,6 +237,15 @@ Current emulator difference:
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_named_dispatch.cpp`, and
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_mapping.cpp`. The 2026-05-31
   Release build passed with the existing vcpkg/Boost warnings.
+- `CeIpc` now owns guest-visible file mapping and mapped-view records, while
+  `CrossProcessBroker` continues to own the host shared-mapping backing
+  directory. `CreateFileMappingW`, `MapViewOfFile`, `UnmapViewOfFile`, and
+  `FlushViewOfFile` behavior is unchanged; the runtime delegates mapfile
+  storage through `CeIpc`. Current source anchors:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_ipc.h`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_mapping.cpp`, and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp`. The 2026-05-31
+  Release build passed with the existing vcpkg/Boost warnings.
 - Legacy runtime type definitions for windows, timers, pending GWE
   continuations, DCs, bitmaps, brushes, pens, fonts, and bitmap probe stats now
   live in `CeGwe`/`CeMgdi` with `SyntheticDllRuntime` keeping aliases and the
