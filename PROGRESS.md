@@ -1696,3 +1696,28 @@ Confirmed behavior difference:
   passed with the known vcpkg duplicate import warning, and bounded Release
   smoke `captures/inavi_autodrive_20260531_173922` captured startup without a
   new main-emulator fatal signature.
+- Follow-up Debug runs `captures/inavi_autodrive_20260531_180753`,
+  `captures/inavi_autodrive_20260531_181328`, and
+  `captures/inavi_autodrive_20260531_182203` found the remaining ANR/crash was
+  another CE ownership mismatch, not a missing app shortcut. CE `schedule.c`
+  parks the real `pCurThread` in `DoWaitForObjects`, and CE GWE
+  `cmsgque.h` stores received sent messages separately from posted messages and
+  in-progress dispatches. Our scheduler could still complete a parked main
+  wait from a generic runnable-thread switch, and it could run a main-owned
+  received-send or `UpdateWindow` WndProc while `activeGuestThread` still
+  named a worker. That let watchdog slices save main WndProc registers into
+  worker records and produced `UC_ERR_MAP` / host ANR signatures. The generic
+  blocking-main completion in `switchToRunnableGuestThread` is now removed,
+  main-owned received-send transfers force main KData before dispatch, and
+  cross-owner `UpdateWindow` paint now records caller/owner state so the worker
+  waits while the main owner paints and then resumes at the original return.
+  Current source references:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_thread_runtime.cpp:612`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp:1369`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp:1932`, and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp:2712`. Debug and
+  Release builds passed with the known vcpkg/Boost warnings. In the latest
+  Debug run, the prior bad worker-owned transfer signature is gone; remaining
+  slow UI is logged as main-owned synchronous work with queued input behind it,
+  which should be treated as throughput/guest-handler latency rather than
+  worker-context corruption.

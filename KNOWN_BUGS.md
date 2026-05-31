@@ -266,6 +266,27 @@ Status:
   captured startup. The bug remains open until an interactive route-search
   run confirms the `completed parked main wait reason=Sleep` to `PC=0`
   message-transfer signature is gone.
+- Follow-up Debug runs `captures/inavi_autodrive_20260531_180753`,
+  `captures/inavi_autodrive_20260531_181328`, and
+  `captures/inavi_autodrive_20260531_182203` confirmed that signature is gone
+  after removing generic blocked-main completion from the runnable-thread
+  switcher. They exposed a related CE ownership bug: main-owned received-send
+  and `UpdateWindow` WndProc dispatch could still execute while
+  `activeGuestThread` named a worker, so a watchdog slice saved main WndProc
+  registers into worker state and led to `UC_ERR_MAP` or host ANR. CE
+  reference:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/cmsgque.h:437`
+  and
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/NK/KERNEL/schedule.c:500`.
+  Current source:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp:1369`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp:1932`, and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_thread_runtime.cpp:612`.
+  Debug and Release builds pass, and the latest run no longer shows
+  worker-owned `message-transfer` watchdog lines in the previously bad paths.
+  The entry remains open for route/search throughput validation: remaining
+  stalls appear as main-owned synchronous WndProc/paint work with queued input
+  behind it, not the worker-context corruption fixed here.
 
 ## UI Can Stall During Host Waits Or Shared Mapping Storms
 

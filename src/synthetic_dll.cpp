@@ -1366,6 +1366,8 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
 
         const uint32_t wndProc = translatedWndProc(window->second.wndProc, pending.name.c_str());
         const uint32_t returnPc = blockingApiContinuationStub_;
+        ceKernel_.activeGuestThread() = 0;
+        updateCurrentThreadKData(ceKernel_.mainThreadPseudoHandle(), ceKernel_.mainThreadTls());
         ceGwe_.pendingMessageTransfers().push_back(PendingMessageTransfer{
             sent->hwnd,
             sent->message,
@@ -1623,7 +1625,21 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
             const uint32_t originalRa = pending.originalRa;
             const uint32_t originalGp = pending.originalGp;
             const uint32_t hwnd = pending.hwnd;
+            const uint32_t callerThread = pending.callerThread;
             ceGwe_.pendingUpdateWindows().pop_back();
+            if (callerThread) {
+                auto caller = ceKernel_.threads().find(callerThread);
+                if (caller != ceKernel_.threads().end() &&
+                    caller->second.state == GuestThreadRunState::WaitingForSendMessage) {
+                    caller->second.state = GuestThreadRunState::Running;
+                    ceKernel_.activeGuestThread() = callerThread;
+                    ceKernel_.lastScheduledGuestThread() = callerThread;
+                    updateCurrentThreadKData(caller->second.threadId, caller->second.tlsBase);
+                }
+            } else if (pending.ownerThread == ceKernel_.mainThreadPseudoHandle()) {
+                ceKernel_.activeGuestThread() = 0;
+                updateCurrentThreadKData(ceKernel_.mainThreadPseudoHandle(), ceKernel_.mainThreadTls());
+            }
             lastError_ = 0;
             setReg(UC_MIPS_REG_V0, 1);
             setReg(UC_MIPS_REG_RA, originalRa);
@@ -1637,6 +1653,10 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
         wndProc = translatedWndProc(wndProc, sourceName.c_str());
         if (pending.stage == 0) {
             pending.stage = 1;
+            if (pending.ownerThread == ceKernel_.mainThreadPseudoHandle()) {
+                ceKernel_.activeGuestThread() = 0;
+                updateCurrentThreadKData(ceKernel_.mainThreadPseudoHandle(), ceKernel_.mainThreadTls());
+            }
             spdlog::info("{} synchronous WM_PAINT hwnd=0x{:08x} wndproc=0x{:08x}",
                          sourceName, pending.hwnd, wndProc);
             setReg(UC_MIPS_REG_A0, pending.hwnd);
@@ -1656,7 +1676,21 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
             releaseHostErasePresentDeferral(hwnd);
             pending.deferredHostPresent = false;
         }
+        const uint32_t callerThread = pending.callerThread;
         ceGwe_.pendingUpdateWindows().pop_back();
+        if (callerThread) {
+            auto caller = ceKernel_.threads().find(callerThread);
+            if (caller != ceKernel_.threads().end() &&
+                caller->second.state == GuestThreadRunState::WaitingForSendMessage) {
+                caller->second.state = GuestThreadRunState::Running;
+                ceKernel_.activeGuestThread() = callerThread;
+                ceKernel_.lastScheduledGuestThread() = callerThread;
+                updateCurrentThreadKData(caller->second.threadId, caller->second.tlsBase);
+            }
+        } else if (pending.ownerThread == ceKernel_.mainThreadPseudoHandle()) {
+            ceKernel_.activeGuestThread() = 0;
+            updateCurrentThreadKData(ceKernel_.mainThreadPseudoHandle(), ceKernel_.mainThreadTls());
+        }
         lastError_ = 0;
         setReg(UC_MIPS_REG_V0, 1);
         setReg(UC_MIPS_REG_RA, originalRa);
@@ -1809,6 +1843,10 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                 return;
             }
         }
+        if (pending.ownerThread == ceKernel_.mainThreadPseudoHandle()) {
+            ceKernel_.activeGuestThread() = 0;
+            updateCurrentThreadKData(ceKernel_.mainThreadPseudoHandle(), ceKernel_.mainThreadTls());
+        }
         setReg(UC_MIPS_REG_RA, returnRa);
         setReg(UC_MIPS_REG_GP, pending.originalGp);
         setReg(UC_MIPS_REG_PC, normalizeGuestCodeAddress(returnRa, pending.sourceName.c_str()));
@@ -1891,8 +1929,21 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
             const uint32_t eraseDc = makeGuestDc(a0);
             applyPaintUpdateClip(a0, eraseDc);
             const bool deferredHostPresent = beginHostErasePresentDeferral(a0);
+            const uint32_t callerThread = ceKernel_.activeGuestThread();
+            const uint32_t ownerThread = it->second.ownerThread;
+            if (callerThread && ownerThread == ceKernel_.mainThreadPseudoHandle()) {
+                auto caller = ceKernel_.threads().find(callerThread);
+                if (caller != ceKernel_.threads().end() &&
+                    caller->second.state == GuestThreadRunState::Running) {
+                    caller->second.context = captureGuestCpuContext();
+                    caller->second.context.registers[UC_MIPS_REG_PC] = ra;
+                    caller->second.state = GuestThreadRunState::WaitingForSendMessage;
+                }
+                ceKernel_.activeGuestThread() = 0;
+                updateCurrentThreadKData(ceKernel_.mainThreadPseudoHandle(), ceKernel_.mainThreadTls());
+            }
             ceGwe_.pendingUpdateWindows().push_back(PendingUpdateWindow{
-                a0, wndProc, ra, reg(UC_MIPS_REG_GP), eraseDc, 0, deferredHostPresent, "UpdateWindow"});
+                a0, wndProc, ra, reg(UC_MIPS_REG_GP), eraseDc, ownerThread, callerThread, 0, deferredHostPresent, "UpdateWindow"});
             spdlog::info("UpdateWindow synchronous WM_ERASEBKGND hwnd=0x{:08x} wndproc=0x{:08x}",
                          a0, wndProc);
             setReg(UC_MIPS_REG_A0, a0);
@@ -2661,6 +2712,15 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                                  "ra=0x{:08x} outer=0x{:08x} parkedMain=0x{:08x} pendingTransfers={}",
                                  name, hwnd, msg, ra, outerReturnRa, parkedMainPc, ceGwe_.pendingMessageTransfers().size());
                 }
+                const uint32_t ownerThread = ceGwe_.ownerForWindow(hwnd);
+                if (ownerThread == ceKernel_.mainThreadPseudoHandle()) {
+                    ceKernel_.activeGuestThread() = 0;
+                    updateCurrentThreadKData(ceKernel_.mainThreadPseudoHandle(), ceKernel_.mainThreadTls());
+                } else if (ownerThread != CeGwe::kNoOwnerThread &&
+                           ownerThread != ceKernel_.activeGuestThread()) {
+                    spdlog::warn("{} transfer owner mismatch hwnd=0x{:08x} msg=0x{:08x} owner=0x{:08x} activeThread=0x{:08x}",
+                                 name, hwnd, msg, ownerThread, ceKernel_.activeGuestThread());
+                }
                 ceGwe_.pendingMessageTransfers().push_back(PendingMessageTransfer{
                     hwnd,
                     msg,
@@ -2668,7 +2728,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                     reg(UC_MIPS_REG_GP),
                     outerReturnRa,
                     synchronousSender,
-                    ceGwe_.ownerForWindow(hwnd),
+                    ownerThread,
                     wndProc,
                     hostTickMilliseconds(),
                     ceGwe_.messageCount(),

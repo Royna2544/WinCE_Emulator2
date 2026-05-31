@@ -395,6 +395,23 @@ Active refactor checklist: `PLAN.md`.
      `GuestBitmap`, runtime GDI-object maps, and saved backing layers as
      runtime-owned truth.
 
+### Current ANR Follow-Up
+
+- Re-test route/search and remote input after the CE-owned WndProc dispatch
+  fix. The old corruption signatures to watch are now:
+  `completed parked main wait reason=Sleep`, `UC_ERR_MAP` near
+  `pc=0x00280c40`, and `message-transfer activeThread=0x000124..` while
+  `owner=0xfffffffe`. Current source anchors:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_thread_runtime.cpp:612`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp:1369`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp:1932`, and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp:2712`.
+- If input is still delayed after those signatures stay absent, treat it as
+  main-owner synchronous WndProc/paint throughput work. Do not pump posted
+  input from plain waits or synthesize route UI; compare against CE GWE
+  `cmsgque.h` sent/received/in-progress queues and MFC message-pump behavior
+  first.
+
 ## Next
 
 7. Preserve the coredll/GWE API-set separation internally.

@@ -609,13 +609,6 @@ bool SyntheticDllRuntime::switchToRunnableGuestThread(const char* reason,
         return true;
     };
 
-    if (!ceKernel_.activeGuestThread() && !pendingBlockingApis_.empty() &&
-        completeReadyPendingBlockingMainContinuation(reason)) {
-        spdlog::info("guest scheduler blocking-main-ready reason={}",
-                     reason ? reason : "cooperate");
-        return true;
-    }
-
     if (const std::optional<uint32_t> owner = ceGwe_.oldestPendingOwner()) {
         if (*owner == ceKernel_.mainThreadPseudoHandle()) {
             if (pendingBlockingApis_.empty()) {

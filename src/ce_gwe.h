@@ -118,6 +118,8 @@ public:
         uint32_t originalRa{};
         uint32_t originalGp{};
         uint32_t eraseDc{};
+        uint32_t ownerThread{};
+        uint32_t callerThread{};
         uint32_t stage{};
         bool deferredHostPresent{};
         std::string sourceName;
