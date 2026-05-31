@@ -6,9 +6,11 @@
 #include <iterator>
 #include <map>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <vector>
 #include <algorithm>
+#include <array>
 
 class CeGwe {
 public:
@@ -35,6 +37,105 @@ public:
         bool crossProcess{};
         uint64_t queueId{};
         MessageQueueKind queueKind{MessageQueueKind::Posted};
+    };
+
+    struct GuestWindowClass {
+        std::array<uint8_t, 40> bytes{};
+        std::string name;
+        uint16_t atom{};
+    };
+
+    struct GuestWindow {
+        uint32_t hwnd{};
+        std::string className;
+        std::string title;
+        uint32_t style{};
+        uint32_t exStyle{};
+        uint32_t parent{};
+        uint32_t menu{};
+        uint32_t instance{};
+        uint32_t param{};
+        uint32_t wndProc{};
+        uint32_t userData{};
+        uint32_t createStruct{};
+        uint32_t ownerThread{};
+        uint64_t zOrder{};
+        int32_t x{};
+        int32_t y{};
+        int32_t width{800};
+        int32_t height{480};
+        uintptr_t hostHwnd{};
+        bool visible{};
+        bool enabled{true};
+        bool destroyed{};
+        bool externalProcess{};
+        uint32_t externalProcessId{};
+        uint32_t externalHwnd{};
+        bool paintBoundsValid{};
+        int32_t paintLeft{};
+        int32_t paintTop{};
+        int32_t paintRight{};
+        int32_t paintBottom{};
+        bool backingValid{};
+        int32_t backingX{};
+        int32_t backingY{};
+        int32_t backingWidth{};
+        int32_t backingHeight{};
+        std::vector<uint32_t> backingPixels;
+        std::map<int32_t, uint32_t> extraLongs;
+    };
+
+    struct GuestTimer {
+        uint32_t hwnd{};
+        uint32_t id{};
+        uint32_t intervalMs{};
+        uint32_t callback{};
+        uint64_t nextDueMs{};
+    };
+
+    struct PendingDestroyWindow {
+        uint32_t hwnd{};
+        uint32_t wndProc{};
+        uint32_t originalRa{};
+        uint32_t originalGp{};
+        uint32_t stage{};
+        uint32_t parent{};
+        bool wasVisible{};
+    };
+
+    struct PendingCreateWindow {
+        uint32_t hwnd{};
+        uint32_t wndProc{};
+        uint32_t originalRa{};
+        uint32_t originalGp{};
+        uint32_t createStruct{};
+        uint32_t stage{};
+    };
+
+    struct PendingUpdateWindow {
+        uint32_t hwnd{};
+        uint32_t wndProc{};
+        uint32_t originalRa{};
+        uint32_t originalGp{};
+        uint32_t eraseDc{};
+        uint32_t stage{};
+        bool deferredHostPresent{};
+        std::string sourceName;
+    };
+
+    struct PendingMessageTransfer {
+        uint32_t hwnd{};
+        uint32_t message{};
+        uint32_t originalRa{};
+        uint32_t originalGp{};
+        uint32_t outerReturnRa{};
+        uint32_t synchronousSender{};
+        uint32_t ownerThread{};
+        uint32_t startPc{};
+        uint64_t startedMs{};
+        size_t queuedAtStart{};
+        bool releaseHostPresentAfterPaint{};
+        std::string sourceName;
     };
 
     struct ThreadQueue {

@@ -482,8 +482,14 @@ results, or timing thresholds.
 - [ ] Move window classes, `GuestWindow`, focus/capture/pointer state, timers,
   z-order, and pending window lifecycle state behind `CeGwe`. CE source
   anchors: `gweapiset1.hpp`, `cmsgque.h`, and `window.hpp`.
+  - [x] Move legacy runtime window class/window/timer and pending
+    create/destroy/update/message-transfer type definitions into `CeGwe`,
+    keeping runtime aliases and storage unchanged for this buildable step.
 - [ ] Move `GuestDc`, `GuestBitmap`, GDI objects, stock objects, palettes,
   clip state, and window bitmap state behind `CeMgdi`.
+  - [x] Move legacy runtime DC, bitmap, brush, pen, font, and bitmap-probe type
+    definitions into `CeMgdi`, keeping runtime aliases and storage unchanged
+    for this buildable step.
 - [ ] Move wave-output state, host backend queue state, and live websocket tap
   cursor behind `CeAudio`; host WinMM and websocket remain backing services.
 - [ ] Move remote touch/key/audio/serial queues into a remote endpoint state

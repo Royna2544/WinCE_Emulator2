@@ -513,98 +513,14 @@ private:
         std::string mode{"8N1"};
         std::string note;
     };
-    struct GuestWindowClass {
-        std::array<uint8_t, 40> bytes{};
-        std::string name;
-        uint16_t atom{};
-    };
-    struct GuestWindow {
-        uint32_t hwnd{};
-        std::string className;
-        std::string title;
-        uint32_t style{};
-        uint32_t exStyle{};
-        uint32_t parent{};
-        uint32_t menu{};
-        uint32_t instance{};
-        uint32_t param{};
-        uint32_t wndProc{};
-        uint32_t userData{};
-        uint32_t createStruct{};
-        uint32_t ownerThread{};
-        uint64_t zOrder{};
-        int32_t x{};
-        int32_t y{};
-        int32_t width{800};
-        int32_t height{480};
-        uintptr_t hostHwnd{};
-        bool visible{};
-        bool enabled{true};
-        bool destroyed{};
-        bool externalProcess{};
-        uint32_t externalProcessId{};
-        uint32_t externalHwnd{};
-        bool paintBoundsValid{};
-        int32_t paintLeft{};
-        int32_t paintTop{};
-        int32_t paintRight{};
-        int32_t paintBottom{};
-        bool backingValid{};
-        int32_t backingX{};
-        int32_t backingY{};
-        int32_t backingWidth{};
-        int32_t backingHeight{};
-        std::vector<uint32_t> backingPixels;
-        std::map<int32_t, uint32_t> extraLongs;
-    };
-    struct GuestDc {
-        uint32_t hdc{};
-        uint32_t hwnd{};
-        uint32_t selectedBrush{};
-        uint32_t selectedPen{};
-        uint32_t selectedFont{};
-        uint32_t selectedBitmap{};
-        uint32_t textColor{0x00000000};
-        uint32_t bkColor{0x00ffffff};
-        uint32_t bkMode{1};
-        uint32_t textAlign{};
-        int32_t x{};
-        int32_t y{};
-    };
-    struct GuestBrush {
-        uint32_t colorRef{};
-        uint32_t patternBitmap{};
-        bool stock{};
-    };
-    struct GuestPen {
-        uint32_t style{};
-        uint32_t width{};
-        uint32_t colorRef{};
-        bool stock{};
-    };
-    struct GuestFont {
-        std::array<uint8_t, 92> logFont{};
-        bool stock{};
-    };
-    struct GuestBitmap {
-        int32_t width{};
-        int32_t heightRaw{};
-        uint16_t bpp{};
-        uint32_t stride{};
-        uint32_t bits{};
-        uint32_t redMask{};
-        uint32_t greenMask{};
-        uint32_t blueMask{};
-        std::vector<uint32_t> palette;
-        bool stock{};
-    };
-    struct BitmapProbeStats {
-        uint32_t sampled{};
-        uint32_t nonBlack{};
-        uint32_t uniqueApprox{};
-        uint32_t firstPixel{};
-        uint32_t lastPixel{};
-    };
+    using GuestWindowClass = CeGwe::GuestWindowClass;
+    using GuestWindow = CeGwe::GuestWindow;
+    using GuestDc = CeMgdi::GuestDc;
+    using GuestBrush = CeMgdi::GuestBrush;
+    using GuestPen = CeMgdi::GuestPen;
+    using GuestFont = CeMgdi::GuestFont;
+    using GuestBitmap = CeMgdi::GuestBitmap;
+    using BitmapProbeStats = CeMgdi::BitmapProbeStats;
     struct HostWaveBuffer {
         std::vector<uint8_t> data;
         std::array<uint8_t, 64> header{};
@@ -694,30 +610,9 @@ private:
         uint64_t backingVersion{};
         uint32_t refCount{1};
     };
-    struct GuestTimer {
-        uint32_t hwnd{};
-        uint32_t id{};
-        uint32_t intervalMs{};
-        uint32_t callback{};
-        uint64_t nextDueMs{};
-    };
-    struct PendingDestroyWindow {
-        uint32_t hwnd{};
-        uint32_t wndProc{};
-        uint32_t originalRa{};
-        uint32_t originalGp{};
-        uint32_t stage{};
-        uint32_t parent{};
-        bool wasVisible{};
-    };
-    struct PendingCreateWindow {
-        uint32_t hwnd{};
-        uint32_t wndProc{};
-        uint32_t originalRa{};
-        uint32_t originalGp{};
-        uint32_t createStruct{};
-        uint32_t stage{};
-    };
+    using GuestTimer = CeGwe::GuestTimer;
+    using PendingDestroyWindow = CeGwe::PendingDestroyWindow;
+    using PendingCreateWindow = CeGwe::PendingCreateWindow;
     struct PendingBlockingApi {
         std::string name;
         uint16_t ordinal{};
@@ -726,30 +621,8 @@ private:
         uint32_t paintDispatches{};
         uint32_t releaseHostPresentAfterPaintHwnd{};
     };
-    struct PendingUpdateWindow {
-        uint32_t hwnd{};
-        uint32_t wndProc{};
-        uint32_t originalRa{};
-        uint32_t originalGp{};
-        uint32_t eraseDc{};
-        uint32_t stage{};
-        bool deferredHostPresent{};
-        std::string sourceName;
-    };
-    struct PendingMessageTransfer {
-        uint32_t hwnd{};
-        uint32_t message{};
-        uint32_t originalRa{};
-        uint32_t originalGp{};
-        uint32_t outerReturnRa{};
-        uint32_t synchronousSender{};
-        uint32_t ownerThread{};
-        uint32_t startPc{};
-        uint64_t startedMs{};
-        size_t queuedAtStart{};
-        bool releaseHostPresentAfterPaint{};
-        std::string sourceName;
-    };
+    using PendingUpdateWindow = CeGwe::PendingUpdateWindow;
+    using PendingMessageTransfer = CeGwe::PendingMessageTransfer;
     using GuestCpuContext = CeKernel::GuestCpuContext;
     using GuestThreadRunState = CeKernel::GuestThreadRunState;
     using GuestThreadState = CeKernel::GuestThreadState;

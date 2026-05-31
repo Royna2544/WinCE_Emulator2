@@ -18,6 +18,60 @@ public:
         int32_t bottom{};
     };
 
+    struct GuestDc {
+        uint32_t hdc{};
+        uint32_t hwnd{};
+        uint32_t selectedBrush{};
+        uint32_t selectedPen{};
+        uint32_t selectedFont{};
+        uint32_t selectedBitmap{};
+        uint32_t textColor{0x00000000};
+        uint32_t bkColor{0x00ffffff};
+        uint32_t bkMode{1};
+        uint32_t textAlign{};
+        int32_t x{};
+        int32_t y{};
+    };
+
+    struct GuestBrush {
+        uint32_t colorRef{};
+        uint32_t patternBitmap{};
+        bool stock{};
+    };
+
+    struct GuestPen {
+        uint32_t style{};
+        uint32_t width{};
+        uint32_t colorRef{};
+        bool stock{};
+    };
+
+    struct GuestFont {
+        std::array<uint8_t, 92> logFont{};
+        bool stock{};
+    };
+
+    struct GuestBitmap {
+        int32_t width{};
+        int32_t heightRaw{};
+        uint16_t bpp{};
+        uint32_t stride{};
+        uint32_t bits{};
+        uint32_t redMask{};
+        uint32_t greenMask{};
+        uint32_t blueMask{};
+        std::vector<uint32_t> palette;
+        bool stock{};
+    };
+
+    struct BitmapProbeStats {
+        uint32_t sampled{};
+        uint32_t nonBlack{};
+        uint32_t uniqueApprox{};
+        uint32_t firstPixel{};
+        uint32_t lastPixel{};
+    };
+
     struct DcState {
         uint32_t hdc{};
         uint32_t hwnd{};
