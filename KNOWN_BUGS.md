@@ -106,6 +106,21 @@ Status:
   owner-thread queue shape instead of restoring a parked main context first.
   Current source:
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_thread_runtime.cpp:569`.
+  The 2026-05-31 remote run
+  `captures/inavi_autodrive_20260531_105702/emulator.stdout.log` showed a
+  remaining CE mismatch after route/dialog interaction: ordinary posted or
+  broadcast messages to a covered window can become undeliverable because
+  `GetMessageW`/`PeekMessageW` rejects non-synchronous candidates when
+  `coveringFullScreenOwnedPopup(candidate.hwnd)` is true. CE `MsgQueue`
+  describes posted messages as queue-owned by the target window's thread and
+  signals `m_hNewEvents`; MFC CE only drops mouse/syskey messages for disabled
+  windows while a modal dialog is not yet shown. Current source:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_named_dispatch.cpp:4146`.
+  Evidence in the run: `PostMessageW(HWND_BROADCAST, 0x6ee, ...)` and
+  owner-priority logs showed main owner queue growth, then repeated
+  `queued-message-preempt` worker rotation. Later input was rejected with
+  `discarded host mouse down while previous touch sequence is still queued`,
+  because the previous pointer sequence remained behind the stuck queue.
   The bug remains open until the queue model, wake categories, and
   send-message edge cases are the behavioral truth.
 
