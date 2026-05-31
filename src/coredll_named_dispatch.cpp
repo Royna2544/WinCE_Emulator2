@@ -3941,7 +3941,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
     }
     case ord(CoredllOrdinal::GetMessagePos):
     {
-        ret = lastMessagePos_;
+        ret = ceGwe_.lastMessagePos();
         break;
     }
     case ord(CoredllOrdinal::TranslateMessage):
@@ -4215,8 +4215,8 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             spdlog::info("{} retrieved input hwnd=0x{:08x} msg=0x{:08x} wparam=0x{:08x} lparam=0x{:08x} peek={} remove={} queued={}",
                          name, message.hwnd, message.message, message.wParam, message.lParam,
                          peek ? 1 : 0, (!peek || (removeFlags & kRemoveMessageFlag)) ? 1 : 0, ceGwe_.messageCount());
-            lastMessagePos_ = uint32_t(uint16_t(message.x) | (uint32_t(uint16_t(message.y)) << 16));
-            lastMessageTime_ = message.time;
+            ceGwe_.lastMessagePos() = uint32_t(uint16_t(message.x) | (uint32_t(uint16_t(message.y)) << 16));
+            ceGwe_.lastMessageTime() = message.time;
             writeGuestMessage(a0, message);
             if ((!peek || (removeFlags & kRemoveMessageFlag)) && a0) {
                 if (message.synchronousSender) {
@@ -4236,8 +4236,8 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                              name, message.hwnd, message.message, message.wParam, message.lParam,
                              peek ? 1 : 0, (!peek || (removeFlags & kRemoveMessageFlag)) ? 1 : 0, ceGwe_.messageCount());
             }
-            lastMessagePos_ = uint32_t(uint16_t(message.x) | (uint32_t(uint16_t(message.y)) << 16));
-            lastMessageTime_ = message.time;
+            ceGwe_.lastMessagePos() = uint32_t(uint16_t(message.x) | (uint32_t(uint16_t(message.y)) << 16));
+            ceGwe_.lastMessageTime() = message.time;
             writeGuestMessage(a0, message);
             if ((!peek || (removeFlags & kRemoveMessageFlag)) && a0) {
                 if (message.synchronousSender) {

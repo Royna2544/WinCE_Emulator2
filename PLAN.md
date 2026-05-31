@@ -502,6 +502,10 @@ results, or timing thresholds.
     as part of the sent-message owner lane/freeze investigation cleanup.
     Current source anchors: `src/ce_gwe.h`, `src/coredll_named_dispatch.cpp`,
     and `src/synthetic_dll.cpp`.
+  - [x] Move last retrieved message position/time behind `CeGwe` so
+    `GetMessagePos` state lives with the message queue owner.
+    Current source anchors: `src/ce_gwe.h` and
+    `src/coredll_named_dispatch.cpp`.
 - [ ] Move `GuestDc`, `GuestBitmap`, GDI objects, stock objects, palettes,
   clip state, and window bitmap state behind `CeMgdi`.
   - [x] Move legacy runtime DC, bitmap, brush, pen, font, and bitmap-probe type

@@ -225,6 +225,10 @@ public:
     const std::map<uint32_t, uint32_t>& retrievedSyncSendersByMsgPtr() const noexcept {
         return retrievedSyncSendersByMsgPtr_;
     }
+    uint32_t& lastMessagePos() noexcept { return lastMessagePos_; }
+    uint32_t lastMessagePos() const noexcept { return lastMessagePos_; }
+    uint32_t& lastMessageTime() noexcept { return lastMessageTime_; }
+    uint32_t lastMessageTime() const noexcept { return lastMessageTime_; }
     size_t messageCount() const noexcept { return messages_.size(); }
     bool hasMessages() const noexcept { return !messages_.empty(); }
     void ensureThreadQueue(uint32_t ownerThread) {
@@ -704,6 +708,8 @@ private:
     std::vector<PendingUpdateWindow> pendingUpdateWindows_;
     std::vector<PendingMessageTransfer> pendingMessageTransfers_;
     std::map<uint32_t, uint32_t> retrievedSyncSendersByMsgPtr_;
+    uint32_t lastMessagePos_{};
+    uint32_t lastMessageTime_{};
     std::map<uint32_t, ThreadQueue> threadQueues_;
     std::map<uint32_t, uint32_t> windowOwners_;
     std::map<uint32_t, WindowRegionState> windowRegions_;

@@ -612,8 +612,6 @@ private:
     std::string interactiveSliceReason_;
     std::chrono::steady_clock::time_point interactiveSliceDeadline_{};
     std::chrono::steady_clock::time_point lastHostInputQueuedAt_{};
-    uint32_t lastMessagePos_{};
-    uint32_t lastMessageTime_{};
     std::vector<uintptr_t> retainedHostWindows_;
     uint32_t hostPresenterGuestHwnd_{};
     uint64_t lastHostPresentMs_{};
