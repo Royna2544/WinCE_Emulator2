@@ -121,6 +121,16 @@ Status:
   `queued-message-preempt` worker rotation. Later input was rejected with
   `discarded host mouse down while previous touch sequence is still queued`,
   because the previous pointer sequence remained behind the stuck queue.
+  Fix in progress: `GetMessageW`/`PeekMessageW` now keeps ordinary
+  posted/broadcast/custom messages deliverable through the owner queue, and
+  only discards modal-covered mouse/syskey input on removing reads. This
+  follows the CE/MFC distinction without allowing click-through to disabled or
+  covered windows. Current source:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_named_dispatch.cpp:4125`.
+  Release build passed with zero warnings and bounded smoke
+  `captures/inavi_autodrive_20260531_111213` found no fatal/unsupported/PC-zero
+  signatures. The remote route/dialog button-stuck path still needs live
+  validation.
   The bug remains open until the queue model, wake categories, and
   send-message edge cases are the behavioral truth.
 

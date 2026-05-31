@@ -99,7 +99,16 @@ Active refactor checklist: `PLAN.md`.
      the previous preempt bounce is gone in the remote button-stuck path.
      Host-backed mapped serial open now does only one immediate host COM probe before
      falling back to the virtual serial device, so missing host COM devices no
-     longer add multi-retry startup delay.
+     longer add multi-retry startup delay. The 2026-05-31 route/dialog run
+     exposed a remaining CE mismatch: `GetMessageW`/`PeekMessageW` was using
+     fullscreen popup coverage as a blanket filter for posted messages. That
+     is now narrowed to modal-covered mouse/syskey input only, while normal
+     posted/broadcast/custom messages stay deliverable through the owner
+     queue. Next validation should verify the old symptoms are gone:
+     `ownerQueued` must drain instead of sticking at `7`, the repeated
+     `queued-message-preempt` worker rotation should stop, and new remote
+     pointer downs should no longer be rejected because an older touch
+     sequence is trapped in the queue.
 
 2. Introduce a CE-shaped internal `MsgQueue` model.
    - CE reference:
@@ -126,6 +135,10 @@ Active refactor checklist: `PLAN.md`.
      The synthetic child-button bridge now also mirrors a child `WM_LBUTTONUP`
      before an already queued ancestor/root release when the child down is
      observed late from synchronous MFC message dispatch.
+     `GetMessageW`/`PeekMessageW` now also follows the CE/MFC split for modal
+     coverage: it discards stale modal-covered mouse/syskey input on removing
+     reads, but does not block ordinary posted/broadcast/custom messages to
+     covered windows.
      Next step is to continue Phase 4 window visible/update/client region
      migration.
 

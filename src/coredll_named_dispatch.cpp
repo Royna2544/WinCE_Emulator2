@@ -4125,7 +4125,32 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
         const uint32_t currentQueueOwner = ceKernel_.activeGuestThread()
             ? ceKernel_.activeGuestThread()
             : ceKernel_.mainThreadPseudoHandle();
+        const bool removeOnRead = !peek || (removeFlags & kRemoveMessageFlag);
+        auto isModalFilteredInput = [](uint32_t message) {
+            constexpr uint32_t kWmMouseFirst = 0x0200;
+            constexpr uint32_t kWmMouseLast = 0x020d;
+            constexpr uint32_t kWmSysKeyUp = 0x0105;
+            return (message >= kWmMouseFirst && message <= kWmMouseLast) ||
+                   message == kWmSysKeyUp;
+        };
+        auto isCoveredModalInput = [&](const GuestMessage& candidate) {
+            return !candidate.synchronousSender &&
+                   isModalFilteredInput(candidate.message) &&
+                   coveringFullScreenOwnedPopup(candidate.hwnd);
+        };
+        auto discardCoveredModalInput = [&]() {
+            if (!removeOnRead) return;
+            const size_t dropped = ceGwe_.eraseIf([&](const GuestMessage& candidate) {
+                return ceGwe_.ownerForMessage(candidate) == currentQueueOwner &&
+                       isCoveredModalInput(candidate);
+            });
+            if (dropped) {
+                spdlog::info("{} discarded modal-covered input messages owner=0x{:08x} count={} queued={}",
+                             name, currentQueueOwner, dropped, ceGwe_.messageCount());
+            }
+        };
         auto takeMessage = [&]() {
+            discardCoveredModalInput();
             auto matchesFilter = [&](const GuestMessage& candidate) {
                 if (a1 == kThreadMessageFilterHwnd) {
                     if (candidate.hwnd != 0) return false;
@@ -4143,7 +4168,7 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                 if (a2 || a3) {
                     if (candidate.message < a2 || candidate.message > a3) return false;
                 }
-                if (!candidate.synchronousSender && coveringFullScreenOwnedPopup(candidate.hwnd)) {
+                if (isCoveredModalInput(candidate)) {
                     return false;
                 }
                 return true;

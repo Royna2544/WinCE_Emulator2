@@ -227,6 +227,19 @@ Current emulator difference:
   Current source anchor:
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_thread_runtime.cpp:569`.
   The 2026-05-31 Release build passed with zero warnings.
+- A 2026-05-31 remote run then showed the queue could still jam after route
+  dialog interaction because `GetMessageW`/`PeekMessageW` treated visual
+  fullscreen-popup coverage as a blanket delivery filter. CE `MsgQueue`
+  queues posted messages by owner thread, while MFC CE only drops mouse/syskey
+  messages for disabled windows during modal startup. The dispatcher now
+  preserves normal posted/broadcast/custom message delivery across covered
+  windows and discards only modal-covered mouse/syskey input on removing
+  reads, allowing stale pointer backpressure to clear. Current source anchor:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_named_dispatch.cpp:4125`.
+  The 2026-05-31 Release build passed with zero warnings; bounded smoke
+  `captures/inavi_autodrive_20260531_111213` found no fatal, unsupported
+  ordinal, or false-PC-zero signatures. Interactive remote validation through
+  the route/dialog button-stuck path remains next.
 - Host-backed serial open no longer retries a missing/unavailable Win32 COM
   port inside the guest `CreateFileW` path. A mapped `win32_com` backend gets
   one immediate host-open probe; if unavailable, the guest still receives the
