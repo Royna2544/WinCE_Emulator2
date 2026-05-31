@@ -247,8 +247,25 @@ Status:
   received-send state and ordinary posted/paint queues while reducing emulator
   overhead. Current source:
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp:2507`.
-  Debug run `captures/inavi_autodrive_20260531_172037` is live for route-search
-  validation.
+- Debug run `captures/inavi_autodrive_20260531_172037` exposed a follow-up
+  hard crash in that path. The terminal sequence was a main-owned
+  `WM_LBUTTONUP` `DispatchMessageW` transfer that started short audio,
+  parked the main pseudo-thread in `WaitForSingleObject(0x10073, INFINITE)`,
+  then completed that parked wait through a worker-side `Sleep` scheduler
+  handoff. CE `DoWaitForObjects` resumes the real waiting thread through its
+  own kernel wait proxy, and CE GWE tracks sent/received/in-progress messages
+  separately in `cmsgque.h`; the emulator was instead restoring the main wait
+  continuation from inside a worker API hook while a synthetic
+  message-transfer stack was active. Active guest `Sleep`, wait, message-wait,
+  and virtual serial no-data parking now stop the current Unicorn slice when a
+  main blocking API is parked, leaving the outer scheduler to resume main or
+  choose another worker. Current source:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp:1978` and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_fs.cpp:241`. Release build
+  passed and bounded smoke `captures/inavi_autodrive_20260531_173922`
+  captured startup. The bug remains open until an interactive route-search
+  run confirms the `completed parked main wait reason=Sleep` to `PC=0`
+  message-transfer signature is gone.
 
 ## UI Can Stall During Host Waits Or Shared Mapping Storms
 

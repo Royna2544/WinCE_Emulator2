@@ -1812,13 +1812,17 @@ void SyntheticDllRuntime::enqueueDueTimers() {
 }
 
 uint32_t SyntheticDllRuntime::timerWaitMilliseconds() const {
-    if (ceGwe_.timers().empty()) return 50;
     const uint64_t now = hostTickMilliseconds();
     uint64_t best = 50;
     for (const auto& [key, timer] : ceGwe_.timers()) {
         (void)key;
         if (timer.nextDueMs <= now) return 1;
         best = std::min<uint64_t>(best, timer.nextDueMs - now);
+    }
+    for (const CeDevice::PendingSerialRead& read : ceDevice_.pendingSerialReads()) {
+        if (!read.deadlineMs) continue;
+        if (read.deadlineMs <= now) return 1;
+        best = std::min<uint64_t>(best, read.deadlineMs - now);
     }
     return uint32_t(std::max<uint64_t>(1, best));
 }
@@ -2160,6 +2164,20 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
             return message.synchronousSender != 0;
         });
     };
+    auto serialReadWaitRemainingMs = [&]() -> std::optional<uint64_t> {
+        const std::vector<CeDevice::PendingSerialRead> reads = ceDevice_.pendingSerialReads();
+        if (reads.empty()) return std::nullopt;
+        if (remoteSerialByteCount() != 0) return uint64_t(0);
+
+        const uint64_t now = hostTickMilliseconds();
+        std::optional<uint64_t> best;
+        for (const CeDevice::PendingSerialRead& read : reads) {
+            if (!read.deadlineMs) continue;
+            const uint64_t remaining = read.deadlineMs <= now ? 0 : read.deadlineMs - now;
+            best = best ? std::min(*best, remaining) : remaining;
+        }
+        return best;
+    };
     auto resumeGuestSlice = [&](uint64_t instructionBudget, const char* reason) -> bool {
         uint32_t pc = 0;
         uint32_t ra = 0;
@@ -2200,6 +2218,7 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
         const bool hostInputPressure = pendingUserInput || recentUserInput;
         const bool hostUiPressure = pendingUserInput || recentUserInput || hostPresentDirty_;
         const bool backloggedQueuedWork = servicingQueuedMessages && ceGwe_.messageCount() >= 3;
+        const std::optional<uint64_t> serialWaitMs = serialReadWaitRemainingMs();
         if (servicingBlockedMainWork && !hostInputPressure) {
             instructionBudget = std::max<uint64_t>(instructionBudget, 25000000u);
         } else if (servicingMessageTransfer) {
@@ -2225,7 +2244,10 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
         } else if (servicingQueuedMessages) {
             instructionBudget = std::min<uint64_t>(instructionBudget, 250000u);
         }
-        const auto wallBudget = servicingBlockedMainWork
+        if (serialWaitMs) {
+            instructionBudget = std::min<uint64_t>(instructionBudget, *serialWaitMs <= 20 ? 25000u : 250000u);
+        }
+        auto wallBudget = servicingBlockedMainWork
             ? (hostInputPressure ? std::chrono::milliseconds(20) : std::chrono::milliseconds(250))
             : (servicingMessageTransfer
             ? (hostUiPressure ? std::chrono::milliseconds(12) : std::chrono::milliseconds(180))
@@ -2238,6 +2260,11 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
                           : (servicingQueuedMessages ? std::chrono::milliseconds(60)
                                                      : (ceKernel_.activeGuestThread() ? std::chrono::milliseconds(60)
                                                                           : std::chrono::milliseconds(120)))))));
+        if (serialWaitMs) {
+            wallBudget = std::min(wallBudget, *serialWaitMs <= 20
+                ? std::chrono::milliseconds(5)
+                : std::chrono::milliseconds(20));
+        }
         beginInteractiveSlice(wallBudget, reason, instructionBudget);
         const uc_err err = uc_emu_start(uc_, pc, 0, 0, instructionBudget);
         const bool stoppedByWatchdog = interactiveSliceStopRequested_;
@@ -2251,6 +2278,7 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
             syncNamedMappedViews();
             lastSchedulerMappingSyncMs_ = afterSliceMs;
         }
+        refreshSignaledGuestWaits();
         uc_reg_read(uc_, UC_MIPS_REG_PC, &pc);
         uc_reg_read(uc_, UC_MIPS_REG_RA, &ra);
         if (err != UC_ERR_OK) {
@@ -2493,6 +2521,7 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
         }
         pollCrossProcessGuestMessages();
         enqueueDueTimers();
+        refreshSignaledGuestWaits();
         if (resumeReadyBlockingMain()) {
             continue;
         }

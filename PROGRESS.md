@@ -1673,3 +1673,26 @@ Confirmed behavior difference:
   Release and Debug builds passed with the known vcpkg duplicate import
   warning, and Debug run `captures/inavi_autodrive_20260531_172037` is live for
   interactive route-search validation.
+- Log review of `captures/inavi_autodrive_20260531_172037` narrowed the hard
+  crash further. The terminal sequence was a main-owned `WM_LBUTTONUP`
+  `DispatchMessageW` transfer that played a short audio buffer, parked the
+  main pseudo-thread in `WaitForSingleObject(0x10073, INFINITE)`, then resumed
+  that parked main wait from inside a worker-side `Sleep` scheduling path.
+  CE `DoWaitForObjects` parks and resumes the real `pCurThread` through proxy
+  wait objects, while GWE keeps sent/received/in-progress message state in the
+  message queue (`SendMsgEntry_t`, `m_pReceivedInProgressHead`). The emulator
+  was instead splicing a worker API hook into the main wait continuation while
+  a synthetic message-transfer stack was active, and the next slice started at
+  `PC=0`. Active guest `Sleep`, `WaitForSingleObject`,
+  `WaitForMultipleObjects`, `MsgWaitForMultipleObjectsEx`, and virtual serial
+  no-data waits now stop the current Unicorn slice when a parked main blocking
+  API exists, letting the outer scheduler resume the main wait or choose
+  another worker. Current source references:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp:1978`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp:2037`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp:2129`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp:2312`, and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_fs.cpp:241`. Release build
+  passed with the known vcpkg duplicate import warning, and bounded Release
+  smoke `captures/inavi_autodrive_20260531_173922` captured startup without a
+  new main-emulator fatal signature.

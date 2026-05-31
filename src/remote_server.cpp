@@ -1119,11 +1119,16 @@ void SyntheticDllRuntime::updateRemoteImuState(const nlohmann::json& state) {
 
 void SyntheticDllRuntime::injectRemoteSerialBytes(const std::string& bytes) {
     if (bytes.empty()) return;
-    std::lock_guard<std::mutex> lock(ceRemote_.mutex());
-    for (char ch : bytes) ceRemote_.serialBytes().push_back(static_cast<uint8_t>(ch));
-    constexpr size_t kMaxRemoteSerialBytes = 64 * 1024;
-    while (ceRemote_.serialBytes().size() > kMaxRemoteSerialBytes) ceRemote_.serialBytes().pop_front();
-    spdlog::info("remote injected serial bytes={} queued={}", bytes.size(), ceRemote_.serialBytes().size());
+    size_t queued = 0;
+    {
+        std::lock_guard<std::mutex> lock(ceRemote_.mutex());
+        for (char ch : bytes) ceRemote_.serialBytes().push_back(static_cast<uint8_t>(ch));
+        constexpr size_t kMaxRemoteSerialBytes = 64 * 1024;
+        while (ceRemote_.serialBytes().size() > kMaxRemoteSerialBytes) ceRemote_.serialBytes().pop_front();
+        queued = ceRemote_.serialBytes().size();
+    }
+    spdlog::info("remote injected serial bytes={} queued={}", bytes.size(), queued);
+    notifyRemoteInputQueued();
 }
 
 size_t SyntheticDllRuntime::readRemoteSerialBytes(uint8_t* dst, size_t maxBytes) {

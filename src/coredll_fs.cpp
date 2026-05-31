@@ -238,8 +238,9 @@ bool SyntheticDllRuntime::tryParkGuestSerialRead(const GuestCallArgs& args, uint
                  returnPc);
 
     ceKernel_.activeGuestThread() = 0;
-    if (!pendingBlockingApis_.empty() ||
-        !restoreMainThreadContextIfRunnable("ReadFile-serial-wait")) {
+    if (!pendingBlockingApis_.empty()) {
+        uc_emu_stop(uc_);
+    } else if (!restoreMainThreadContextIfRunnable("ReadFile-serial-wait")) {
         switchToRunnableGuestThread("ReadFile-serial-wait");
     }
     pumpHostMessages();

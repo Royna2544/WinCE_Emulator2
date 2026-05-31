@@ -1975,8 +1975,9 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                                   ceKernel_.activeGuestThread(), a0, ra, savedRa, savedSp);
 	                }
 	                ceKernel_.activeGuestThread() = 0;
-	                if (!pendingBlockingApis_.empty() ||
-	                    !restoreMainThreadContextIfRunnable(name.c_str())) {
+                    if (!pendingBlockingApis_.empty()) {
+                        uc_emu_stop(uc_);
+                    } else if (!restoreMainThreadContextIfRunnable(name.c_str())) {
 	                    switchToRunnableGuestThread(name.c_str());
 	                }
 	                pumpHostMessages();
@@ -2033,8 +2034,9 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                                      ceKernel_.activeGuestThread(), a0, a2 != 0, a3, ra);
 	                    }
 	                    ceKernel_.activeGuestThread() = 0;
-	                    if (!pendingBlockingApis_.empty() ||
-	                        !restoreMainThreadContextIfRunnable(name.c_str())) {
+                        if (!pendingBlockingApis_.empty()) {
+                            uc_emu_stop(uc_);
+                        } else if (!restoreMainThreadContextIfRunnable(name.c_str())) {
 	                        switchToRunnableGuestThread(name.c_str());
 	                    }
 	                    pumpHostMessages();
@@ -2124,8 +2126,9 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                                      ceKernel_.activeGuestThread(), a0, ra);
 	                    }
 	                    ceKernel_.activeGuestThread() = 0;
-	                    if (!pendingBlockingApis_.empty() ||
-	                        !restoreMainThreadContextIfRunnable(name.c_str())) {
+                        if (!pendingBlockingApis_.empty()) {
+                            uc_emu_stop(uc_);
+                        } else if (!restoreMainThreadContextIfRunnable(name.c_str())) {
 	                        switchToRunnableGuestThread(name.c_str());
 	                    }
 	                    pumpHostMessages();
@@ -2306,7 +2309,9 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                                  ceKernel_.activeGuestThread(), waitCount, timeoutMs, wakeMask, flags, ra);
                 }
                 ceKernel_.activeGuestThread() = 0;
-                if (!restoreMainThreadContextIfRunnable(name.c_str())) {
+                if (!pendingBlockingApis_.empty()) {
+                    uc_emu_stop(uc_);
+                } else if (!restoreMainThreadContextIfRunnable(name.c_str())) {
                     switchToRunnableGuestThread(name.c_str());
                 }
                 pumpHostMessages();

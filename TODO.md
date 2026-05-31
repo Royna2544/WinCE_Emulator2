@@ -231,10 +231,18 @@ Active refactor checklist: `PLAN.md`.
      letting the main owner queue grow. Source now schedules that case as
      `blocked-main-message-transfer`, preserving CE/MFC ordering while giving
      the worker a blocked-main CPU budget. Debug run
-     `captures/inavi_autodrive_20260531_172037` is live on
-     `192.168.0.39:8765`; next validation should drive the route-search path
-     and confirm the old `reason=message-transfer ... ownerSent`
-     queue-growth signature is gone.
+     `captures/inavi_autodrive_20260531_172037` then showed the hard failure
+     was more specific: a worker-side `Sleep` path resumed a parked main
+     `WaitForSingleObject(0x10073, INFINITE)` while a main-owned
+     `DispatchMessageW` transfer was still active, and the next
+     `message-transfer` slice started at `PC=0`. Active worker
+     `Sleep`/wait/serial parking now stops the current Unicorn slice when a
+     parked main blocking API exists, so the outer scheduler resumes the main
+     wait instead of splicing it through the worker API hook. Bounded Release
+     smoke `captures/inavi_autodrive_20260531_173922` captured startup; next
+     validation should drive the same route-search/audio-click path and
+     confirm no `completed parked main wait reason=Sleep` precedes a
+     `PC=0` message-transfer crash.
 
 2. Introduce a CE-shaped internal `MsgQueue` model.
    - CE reference:
