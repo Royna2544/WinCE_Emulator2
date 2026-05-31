@@ -179,6 +179,15 @@ Status:
   successful named-shared mapping hot-path logs are now debug-level so normal
   info logging no longer amplifies that churn; the remaining question is how
   much of the visible delay is guest work versus emulator scheduling/rendering.
+  The scheduler now treats `message-transfer` as CE/MFC-synchronous owner work:
+  CPU-only transfers get larger slices to reduce hook/pump overhead, but
+  input/presentation pressure still forces short responsive slices. Scheduler
+  named-mapping sync is heartbeat-gated instead of running after every slice,
+  and watchdog diagnostics report owner-lane counts and long transfer elapsed
+  time. Release build and bounded startup/route-preset smokes passed without
+  new main-emulator fatal/unsupported/false-PC-zero signatures; the live
+  remote route-calculation path still needs validation because the script did
+  not reproduce the long calculation span.
   Debug run `captures/inavi_autodrive_20260531_112632` also shows the host
   presenter lagging behind the remote framebuffer during long synchronous
   `UpdateWindow`/message-transfer spans; `hwnd=0x0001004c` paints take about

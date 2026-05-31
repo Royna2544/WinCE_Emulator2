@@ -740,6 +740,10 @@ private:
         uint32_t originalGp{};
         uint32_t outerReturnRa{};
         uint32_t synchronousSender{};
+        uint32_t ownerThread{};
+        uint32_t startPc{};
+        uint64_t startedMs{};
+        size_t queuedAtStart{};
         bool releaseHostPresentAfterPaint{};
         std::string sourceName;
     };
@@ -864,6 +868,7 @@ private:
     std::vector<uintptr_t> retainedHostWindows_;
     uint32_t hostPresenterGuestHwnd_{};
     uint64_t lastHostPresentMs_{};
+    uint64_t lastSchedulerMappingSyncMs_{};
     bool hostPresentDirty_{};
     uint32_t hostPresentDeferDepth_{};
     bool hostPresentUiBatchActive_{};
@@ -897,6 +902,8 @@ private:
     std::string defaultSerialMode_{"8N1"};
     bool diagnosticDumpsEnabled_{};
     uint64_t lastGweOwnerPriorityLogMs_{};
+    uint64_t lastMessageLatencyDiagMs_{};
+    uint64_t messageTransferWatchdogStops_{};
 
     std::optional<SyntheticModule> createCoredll();
     std::optional<SyntheticModule> createCommctrl();

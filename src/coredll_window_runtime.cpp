@@ -2086,11 +2086,21 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
         // their slices short so touch input and presenter paints stay live even
         // when a worker performs a long pure-guest loop between API calls.
         const bool servicingQueuedMessages = std::strcmp(reason, "queued-message") == 0;
+        const bool servicingMessageTransfer = std::strcmp(reason, "message-transfer") == 0;
         const bool synchronousQueuedMessage = servicingQueuedMessages && hasPendingSynchronousMessage();
         const bool pendingUserInput = hasPendingUserInput();
         const bool recentUserInput = recentlyQueuedUserInput();
+        const bool hostUiPressure = pendingUserInput || recentUserInput || hostPresentDirty_;
         const bool backloggedQueuedWork = servicingQueuedMessages && ceGwe_.messageCount() >= 3;
-        if (synchronousQueuedMessage && ceKernel_.activeGuestThread() && !pendingUserInput && !recentUserInput) {
+        if (servicingMessageTransfer) {
+            if (hostUiPressure) {
+                instructionBudget = std::min<uint64_t>(instructionBudget, pendingUserInput ? 25000u : 100000u);
+            } else if (!ceGwe_.hasMessages()) {
+                instructionBudget = std::max<uint64_t>(instructionBudget, 5000000u);
+            } else {
+                instructionBudget = std::max<uint64_t>(instructionBudget, 2000000u);
+            }
+        } else if (synchronousQueuedMessage && ceKernel_.activeGuestThread() && !pendingUserInput && !recentUserInput) {
             instructionBudget = std::min<uint64_t>(instructionBudget, backloggedQueuedWork ? 500000u : 250000u);
         } else if (synchronousQueuedMessage) {
             instructionBudget = std::min<uint64_t>(instructionBudget, backloggedQueuedWork ? 50000u : 25000u);
@@ -2105,20 +2115,30 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
         } else if (servicingQueuedMessages) {
             instructionBudget = std::min<uint64_t>(instructionBudget, 250000u);
         }
-        const auto wallBudget = synchronousQueuedMessage
-            ? (backloggedQueuedWork ? std::chrono::milliseconds(60) : std::chrono::milliseconds(12))
-            : (pendingUserInput
+        const auto wallBudget = servicingMessageTransfer
+            ? (hostUiPressure ? std::chrono::milliseconds(12) : std::chrono::milliseconds(180))
+            : (synchronousQueuedMessage
                    ? (backloggedQueuedWork ? std::chrono::milliseconds(60) : std::chrono::milliseconds(12))
-                   : (recentUserInput && !backloggedQueuedWork
-                          ? std::chrono::milliseconds(12)
-                   : (servicingQueuedMessages ? std::chrono::milliseconds(60)
-                                              : (ceKernel_.activeGuestThread() ? std::chrono::milliseconds(60)
-                                                                   : std::chrono::milliseconds(120)))));
+                   : (pendingUserInput
+                          ? (backloggedQueuedWork ? std::chrono::milliseconds(60) : std::chrono::milliseconds(12))
+                          : (recentUserInput && !backloggedQueuedWork
+                                 ? std::chrono::milliseconds(12)
+                          : (servicingQueuedMessages ? std::chrono::milliseconds(60)
+                                                     : (ceKernel_.activeGuestThread() ? std::chrono::milliseconds(60)
+                                                                          : std::chrono::milliseconds(120))))));
         beginInteractiveSlice(wallBudget, reason, instructionBudget);
         const uc_err err = uc_emu_start(uc_, pc, 0, 0, instructionBudget);
         const bool stoppedByWatchdog = interactiveSliceStopRequested_;
         endInteractiveSlice();
-        syncNamedMappedViews();
+        constexpr uint64_t kSchedulerMappingSyncIntervalMs = 50;
+        const uint64_t afterSliceMs = hostTickMilliseconds();
+        if (!mappedViews_.empty() &&
+            (!lastSchedulerMappingSyncMs_ ||
+             afterSliceMs - lastSchedulerMappingSyncMs_ >= kSchedulerMappingSyncIntervalMs ||
+             hostUiPressure)) {
+            syncNamedMappedViews();
+            lastSchedulerMappingSyncMs_ = afterSliceMs;
+        }
         uc_reg_read(uc_, UC_MIPS_REG_PC, &pc);
         uc_reg_read(uc_, UC_MIPS_REG_RA, &ra);
         if (err != UC_ERR_OK) {
@@ -2175,8 +2195,14 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
         const auto elapsedMs =
             std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - sliceStart).count();
         if (elapsedMs >= 250) {
-            spdlog::info("long guest slice reason={} activeThread=0x{:08x} budget={} startPc=0x{:08x} pc=0x{:08x} ra=0x{:08x} queued={}",
-                         reason, ceKernel_.activeGuestThread(), instructionBudget, startPc, pc, ra, ceGwe_.messageCount());
+            const uint32_t owner = servicingMessageTransfer && !pendingMessageTransfers_.empty()
+                ? pendingMessageTransfers_.back().ownerThread
+                : ceGwe_.oldestPendingOwner().value_or(0);
+            const auto ownerQueue = ceGwe_.ownerQueueSnapshot(owner);
+            spdlog::info("long guest slice reason={} activeThread=0x{:08x} budget={} startPc=0x{:08x} pc=0x{:08x} ra=0x{:08x} queued={} owner=0x{:08x} ownerPosted={} ownerSent={} ownerInput={} ownerTimer={}",
+                         reason, ceKernel_.activeGuestThread(), instructionBudget, startPc, pc, ra,
+                         ceGwe_.messageCount(), owner, ownerQueue.posted, ownerQueue.sent,
+                         ownerQueue.input, ownerQueue.timers);
         }
         if (stoppedByWatchdog && ceKernel_.activeGuestThread()) {
             spdlog::info("guest thread timeslice yield handle=0x{:08x} reason={} pc=0x{:08x} queued={}",

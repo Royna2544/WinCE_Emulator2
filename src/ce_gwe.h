@@ -46,6 +46,16 @@ public:
         std::deque<GuestMessage> thread;
     };
 
+    struct OwnerQueueSnapshot {
+        uint32_t ownerThread{};
+        size_t posted{};
+        size_t sent{};
+        size_t input{};
+        size_t timers{};
+        size_t thread{};
+        size_t total{};
+    };
+
     struct Rect {
         int32_t left{};
         int32_t top{};
@@ -325,6 +335,19 @@ public:
     }
     bool hasMessagesForOwner(uint32_t ownerThread) const noexcept {
         return messageCountForOwner(ownerThread) != 0;
+    }
+    OwnerQueueSnapshot ownerQueueSnapshot(uint32_t ownerThread) const noexcept {
+        OwnerQueueSnapshot snapshot{};
+        snapshot.ownerThread = ownerThread;
+        const auto queue = threadQueues_.find(ownerThread);
+        if (queue == threadQueues_.end()) return snapshot;
+        snapshot.posted = queue->second.posted.size();
+        snapshot.sent = queue->second.sent.size();
+        snapshot.input = queue->second.input.size();
+        snapshot.timers = queue->second.timers.size();
+        snapshot.thread = queue->second.thread.size();
+        snapshot.total = snapshot.posted + snapshot.sent + snapshot.input + snapshot.timers + snapshot.thread;
+        return snapshot;
     }
     std::optional<uint32_t> oldestPendingOwner() const {
         for (const GuestMessage& message : messages_) {

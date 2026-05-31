@@ -135,6 +135,16 @@ Active refactor checklist: `PLAN.md`.
      paints taking about 1.1-1.3 seconds. Compare this against CE visible/
      update-region presentation before changing batching; avoid forcing
      remote-only or host-only redraw behavior.
+     The latest scheduler pass now gives CPU-only `message-transfer` spans a
+     larger adaptive slice, keeps short slices while input/presentation is
+     pending, rate-limits watchdog diagnostics with owner-lane counts, and
+     avoids full named-mapping sync after every slice. Release build passed
+     and bounded smokes `captures/inavi_autodrive_20260531_130335` and
+     `captures/inavi_autodrive_20260531_130424` found no new main-emulator
+     fatal/unsupported/false-PC-zero signatures. Next validation should be the
+     live remote route-calculation path that previously showed 30s-scale
+     `message-transfer` spans, because the scripted route preset did not
+     reproduce that exact long calculation.
 
 2. Introduce a CE-shaped internal `MsgQueue` model.
    - CE reference:

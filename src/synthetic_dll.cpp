@@ -606,10 +606,30 @@ void SyntheticDllRuntime::hookBasicBlock(uc_engine* uc, uint64_t address, uint32
                           runtime->interactiveSliceInstructionBudget_, uint32_t(address), pc, ra,
                           runtime->ceGwe_.messageCount());
         } else {
-            spdlog::info("guest slice watchdog stop reason={} stopCause=deadline activeThread=0x{:08x} budget={} block=0x{:08x} pc=0x{:08x} ra=0x{:08x} queued={}",
-                         runtime->interactiveSliceReason_, runtime->ceKernel_.activeGuestThread(),
-                         runtime->interactiveSliceInstructionBudget_, uint32_t(address), pc, ra,
-                         runtime->ceGwe_.messageCount());
+            const bool messageTransfer = runtime->interactiveSliceReason_ == "message-transfer";
+            if (messageTransfer) ++runtime->messageTransferWatchdogStops_;
+            const uint64_t nowMs = hostTickMilliseconds();
+            const bool rateLimitedMessageTransfer =
+                messageTransfer &&
+                runtime->lastMessageLatencyDiagMs_ &&
+                nowMs - runtime->lastMessageLatencyDiagMs_ < 1000;
+            if (rateLimitedMessageTransfer) {
+                spdlog::debug("guest slice watchdog stop reason={} stopCause=deadline activeThread=0x{:08x} budget={} block=0x{:08x} pc=0x{:08x} ra=0x{:08x} queued={}",
+                              runtime->interactiveSliceReason_, runtime->ceKernel_.activeGuestThread(),
+                              runtime->interactiveSliceInstructionBudget_, uint32_t(address), pc, ra,
+                              runtime->ceGwe_.messageCount());
+            } else {
+                runtime->lastMessageLatencyDiagMs_ = nowMs;
+                const uint32_t owner = !runtime->pendingMessageTransfers_.empty()
+                    ? runtime->pendingMessageTransfers_.back().ownerThread
+                    : runtime->ceGwe_.oldestPendingOwner().value_or(0);
+                const auto ownerQueue = runtime->ceGwe_.ownerQueueSnapshot(owner);
+                spdlog::info("guest slice watchdog stop reason={} stopCause=deadline activeThread=0x{:08x} budget={} block=0x{:08x} pc=0x{:08x} ra=0x{:08x} queued={} owner=0x{:08x} ownerPosted={} ownerSent={} ownerInput={} ownerTimer={} transferStops={}",
+                             runtime->interactiveSliceReason_, runtime->ceKernel_.activeGuestThread(),
+                             runtime->interactiveSliceInstructionBudget_, uint32_t(address), pc, ra,
+                             runtime->ceGwe_.messageCount(), owner, ownerQueue.posted, ownerQueue.sent,
+                             ownerQueue.input, ownerQueue.timers, runtime->messageTransferWatchdogStops_);
+            }
         }
         runtime->interactiveSliceStopRequested_ = true;
     }
@@ -1653,6 +1673,9 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
         PendingMessageTransfer pending = pendingMessageTransfers_.back();
         pendingMessageTransfers_.pop_back();
         const uint32_t wndProcResult = reg(UC_MIPS_REG_V0);
+        const uint64_t completedMs = hostTickMilliseconds();
+        const uint64_t transferElapsedMs =
+            pending.startedMs && completedMs >= pending.startedMs ? completedMs - pending.startedMs : 0;
         if (pending.releaseHostPresentAfterPaint) {
             releaseHostErasePresentDeferral(pending.hwnd);
         }
@@ -1692,12 +1715,24 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
             }
         }
         if (!pending.synchronousSender && traceGuestWindowMessage(pending.message)) {
-            spdlog::info("{} message transfer complete hwnd=0x{:08x} msg=0x{:08x} result=0x{:08x} return=0x{:08x}",
+            spdlog::info("{} message transfer complete hwnd=0x{:08x} msg=0x{:08x} result=0x{:08x} return=0x{:08x} elapsedMs={} owner=0x{:08x}",
                          pending.sourceName,
                          pending.hwnd,
                          pending.message,
                          wndProcResult,
-                         pending.originalRa);
+                         pending.originalRa,
+                         transferElapsedMs,
+                         pending.ownerThread);
+        } else if (transferElapsedMs >= 250) {
+            spdlog::info("{} long message transfer complete hwnd=0x{:08x} msg=0x{:08x} elapsedMs={} owner=0x{:08x} startPc=0x{:08x} queuedStart={} queuedNow={}",
+                         pending.sourceName,
+                         pending.hwnd,
+                         pending.message,
+                         transferElapsedMs,
+                         pending.ownerThread,
+                         pending.startPc,
+                         pending.queuedAtStart,
+                         ceGwe_.messageCount());
         }
         if (pending.releaseHostPresentAfterPaint) {
             invalidateHostWindows();
@@ -2592,6 +2627,10 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                     reg(UC_MIPS_REG_GP),
                     outerReturnRa,
                     synchronousSender,
+                    ceGwe_.ownerForWindow(hwnd),
+                    wndProc,
+                    hostTickMilliseconds(),
+                    ceGwe_.messageCount(),
                     releaseHostPresentAfterPaint,
                     name,
                 });

@@ -123,6 +123,29 @@ Current emulator difference:
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_mapping.cpp:278`. The
   2026-05-31 Release and Debug builds passed with zero warnings after this
   logging-hygiene change.
+- Route/map latency scheduling now distinguishes CE/MFC-synchronous
+  `message-transfer` work from ordinary queued-message pumping. When no
+  CE-visible UI pressure exists, long sent-message/WndProc transfers get a
+  larger guest CPU slice to reduce host hook/pump overhead; pending input,
+  recent input, or dirty host presentation collapses the slice back to a short
+  responsive budget. The scheduler also no longer syncs all named mapped views
+  after every guest slice; interactive-loop sync is limited to a short
+  heartbeat or UI-pressure path, while API boundary and explicit map/flush
+  sync behavior remains unchanged. Rate-limited watchdog diagnostics now
+  include message-owner lane counts and long transfer elapsed time. CE/MFC
+  alignment: `SendMessage`/WndProc remains synchronous, and queued paint/input
+  is not invented while the owner thread is still inside a handler. Current
+  source anchors:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp:2088`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp:600`, and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_gwe.h:49`. The 2026-05-31 Release
+  build passed with the existing Boost Beast warning. Bounded Release smokes
+  `captures/inavi_autodrive_20260531_130335` and
+  `captures/inavi_autodrive_20260531_130424` captured startup/route-preset
+  windows without new main-emulator fatal, unsupported-ordinal, or false
+  `PC == 0` signatures; the scripted route-preset did not reproduce the long
+  live route-calculation span, so remote interactive route validation remains
+  next.
 - Remote-server audio is enabled by default for `tools/autodrive_inavi.ps1`
   remote runs unless `-NoRemoteAudio` is passed. Remote PCM is now queued only
   while at least one audio websocket client is connected; the queue is cleared
