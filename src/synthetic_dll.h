@@ -601,9 +601,6 @@ private:
     uint16_t nextAtom_ = 0xc000;
     std::unordered_map<uint32_t, ExportEntry> exportsByAddress_;
     std::map<std::string, RegisteredSyntheticDll> registeredDllsByName_;
-    std::unordered_map<uint32_t, uint32_t> tlsValues_;
-    std::unordered_map<uint32_t, uint32_t> criticalSectionDepth_;
-    std::unordered_map<uint32_t, uint32_t> syntheticHandleValues_;
     GuestProcessLauncher guestProcessLauncher_;
     RemoteServerConfig remoteConfig_;
     std::unique_ptr<RemoteServerHandle, RemoteServerHandleDeleter> remoteServer_;

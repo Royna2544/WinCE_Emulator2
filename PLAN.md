@@ -484,6 +484,9 @@ results, or timing thresholds.
   behavior.
   Current source anchors: `src/ce_memory.h` and
   `src/coredll_memory_runtime.cpp`.
+- [x] Move TLS value and critical-section depth bookkeeping behind
+  `CeKernel`, and remove an unused runtime-only synthetic-handle value map.
+  Current source anchors: `src/ce_kernel.h` and `src/coredll_sync.cpp`.
 - [ ] Move window classes, `GuestWindow`, focus/capture/pointer state, timers,
   z-order, and pending window lifecycle state behind `CeGwe`. CE source
   anchors: `gweapiset1.hpp`, `cmsgque.h`, and `window.hpp`.

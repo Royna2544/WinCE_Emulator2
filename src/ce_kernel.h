@@ -178,6 +178,10 @@ public:
     const std::map<uint32_t, GuestHandle>& handles() const noexcept { return guestHandles_; }
     std::map<uint32_t, GuestThreadState>& threads() noexcept { return guestThreads_; }
     const std::map<uint32_t, GuestThreadState>& threads() const noexcept { return guestThreads_; }
+    std::map<uint32_t, uint32_t>& tlsValues() noexcept { return tlsValues_; }
+    const std::map<uint32_t, uint32_t>& tlsValues() const noexcept { return tlsValues_; }
+    std::map<uint32_t, uint32_t>& criticalSectionDepths() noexcept { return criticalSectionDepths_; }
+    const std::map<uint32_t, uint32_t>& criticalSectionDepths() const noexcept { return criticalSectionDepths_; }
     GuestCpuContext& mainThreadContext() noexcept { return mainThreadContext_; }
     const GuestCpuContext& mainThreadContext() const noexcept { return mainThreadContext_; }
     uint32_t& activeGuestThread() noexcept { return activeGuestThread_; }
@@ -199,6 +203,8 @@ private:
     uint32_t nextHandle_{0x10000};
     std::map<uint32_t, GuestHandle> guestHandles_;
     std::map<uint32_t, GuestThreadState> guestThreads_;
+    std::map<uint32_t, uint32_t> tlsValues_;
+    std::map<uint32_t, uint32_t> criticalSectionDepths_;
     GuestCpuContext mainThreadContext_;
     uint32_t activeGuestThread_{};
     uint32_t lastScheduledGuestThread_{};

@@ -216,6 +216,13 @@ Current emulator difference:
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_memory_runtime.cpp`, and
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp`. The 2026-05-31
   Release build passed with the existing vcpkg/Boost warnings.
+- `CeKernel` now owns TLS value storage and critical-section recursion-depth
+  bookkeeping used by coredll sync exports. The runtime still implements the
+  ABI handlers, but the state no longer lives in `SyntheticDllRuntime`; an
+  unused runtime-only synthetic-handle value map was also removed. Current
+  source anchors: `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_kernel.h` and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_sync.cpp`. The 2026-05-31
+  Release build passed with the existing vcpkg/Boost warnings.
 - Lookup-only hot integer maps in `SyntheticDllRuntime` now use
   `std::unordered_map` instead of ordered maps where iteration order is not
   guest-visible: synthetic exports by address, allocation metadata, TLS and

@@ -32,29 +32,29 @@ void SyntheticDllRuntime::registerCoredllSyncExports(SyntheticModule& module) {
 
 bool SyntheticDllRuntime::handleInitializeCriticalSection(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
     (void)code;
-    criticalSectionDepth_[args.a0] = 0;
+    ceKernel_.criticalSectionDepths()[args.a0] = 0;
     ret = reg(UC_MIPS_REG_V0);
     return true;
 }
 
 bool SyntheticDllRuntime::handleDeleteCriticalSection(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
     (void)code;
-    criticalSectionDepth_.erase(args.a0);
+    ceKernel_.criticalSectionDepths().erase(args.a0);
     ret = reg(UC_MIPS_REG_V0);
     return true;
 }
 
 bool SyntheticDllRuntime::handleEnterCriticalSection(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
     (void)code;
-    ++criticalSectionDepth_[args.a0];
+    ++ceKernel_.criticalSectionDepths()[args.a0];
     ret = reg(UC_MIPS_REG_V0);
     return true;
 }
 
 bool SyntheticDllRuntime::handleLeaveCriticalSection(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
     (void)code;
-    auto it = criticalSectionDepth_.find(args.a0);
-    if (it != criticalSectionDepth_.end() && it->second) --it->second;
+    auto it = ceKernel_.criticalSectionDepths().find(args.a0);
+    if (it != ceKernel_.criticalSectionDepths().end() && it->second) --it->second;
     ret = reg(UC_MIPS_REG_V0);
     return true;
 }
@@ -65,21 +65,21 @@ bool SyntheticDllRuntime::handleTryEnterCriticalSection(SyntheticExportCode code
 
 bool SyntheticDllRuntime::handleTlsGetValue(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
     (void)code;
-    auto it = tlsValues_.find(args.a0);
-    ret = it == tlsValues_.end() ? 0 : it->second;
+    auto it = ceKernel_.tlsValues().find(args.a0);
+    ret = it == ceKernel_.tlsValues().end() ? 0 : it->second;
     return true;
 }
 
 bool SyntheticDllRuntime::handleTlsSetValue(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
     (void)code;
-    tlsValues_[args.a0] = args.a1;
+    ceKernel_.tlsValues()[args.a0] = args.a1;
     ret = 1;
     return true;
 }
 
 bool SyntheticDllRuntime::handleTlsCall(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
     (void)code;
-    ret = tlsValues_[args.a0];
+    ret = ceKernel_.tlsValues()[args.a0];
     return true;
 }
 
