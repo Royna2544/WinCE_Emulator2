@@ -1600,3 +1600,15 @@ Confirmed behavior difference:
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp:1229` and
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp:1337`. Release and
   Debug builds passed with the known vcpkg/Boost warnings.
+- Follow-up run `captures/inavi_autodrive_20260531_163253` confirmed the
+  bottom-bar and input messages were queued, but normal input could not be
+  delivered while the main owner stayed in a plain `WaitForSingleObject` and
+  route/search workers continued synchronous `SendMessageW`/message-transfer
+  work. The bottom bar also still depended on its delayed child `WM_PAINT` to
+  repair pixels after root/owner repaints. Parent/root framebuffer writes now
+  skip pixels covered by visible higher z-order child/overlay windows, matching
+  CE's visible/system clipping model more closely (`window.hpp`
+  `m_hrgnVisible`, MGDI `m_hrgnSysClip`). Current source references:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp:1727` and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_bitmap.cpp:474`. Release and
+  Debug builds passed after this clipping guard.

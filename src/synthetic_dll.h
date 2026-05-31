@@ -1157,6 +1157,12 @@ private:
     bool isOwnedPopupWindow(uint32_t hwnd) const;
     bool isTopLevelPopupWindow(uint32_t hwnd) const;
     bool hasCoveringRootPopup(uint32_t hwnd) const;
+    bool visibleWindowCoversTargetPixel(uint32_t targetHwnd, int32_t x, int32_t y) const;
+    bool visibleWindowCoversTargetRect(uint32_t targetHwnd,
+                                       int32_t left,
+                                       int32_t top,
+                                       int32_t right,
+                                       int32_t bottom) const;
     uint32_t readFramebufferTargetPixel(uint32_t targetHwnd, int32_t x, int32_t y) const;
     void writeFramebufferTargetPixel(uint32_t targetHwnd, int32_t x, int32_t y, uint32_t pixel);
     void pumpHostMessages();

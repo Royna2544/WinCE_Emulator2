@@ -468,7 +468,9 @@ void SyntheticDllRuntime::writeFramebufferTargetPixel(uint32_t targetHwnd,
             covered = true;
         }
     }
-    if (!covered && !coveringPopup) framebuffer_[size_t(y) * size_t(framebufferWidth_) + size_t(x)] = pixel;
+    if (!covered && !coveringPopup && !visibleWindowCoversTargetPixel(targetHwnd, x, y)) {
+        framebuffer_[size_t(y) * size_t(framebufferWidth_) + size_t(x)] = pixel;
+    }
 }
 
 uint32_t SyntheticDllRuntime::colorRefToPixel(uint32_t colorRef) const {
@@ -546,7 +548,8 @@ void SyntheticDllRuntime::fillFramebufferRect(const GuestDc& dc,
 
     const uint32_t coveringPopup = dc.hwnd ? coveringFullScreenOwnedPopup(dc.hwnd) : 0;
 
-    bool needsLayeredWrite = coveringPopup != 0;
+    bool needsLayeredWrite = coveringPopup != 0 ||
+        visibleWindowCoversTargetRect(dc.hwnd, left, top, right, bottom);
     const uint64_t targetZ = dc.hwnd ? windowZOrder(dc.hwnd) : 0;
     for (const auto& [hwnd, window] : ceGwe_.windows()) {
         if (!window.visible || !window.backingValid || window.backingPixels.empty() ||
@@ -1966,7 +1969,9 @@ bool SyntheticDllRuntime::bitBltToFramebuffer(const GuestDc& dstDc,
                 covered = true;
             }
         }
-        if (!covered && !coveringPopup) framebuffer_[size_t(y) * size_t(framebufferWidth_) + size_t(x)] = pixel;
+        if (!covered && !coveringPopup && !visibleWindowCoversTargetPixel(dstDc.hwnd, x, y)) {
+            framebuffer_[size_t(y) * size_t(framebufferWidth_) + size_t(x)] = pixel;
+        }
     };
 
     const bool sameScaleX = srcW == outW;
@@ -1980,7 +1985,9 @@ bool SyntheticDllRuntime::bitBltToFramebuffer(const GuestDc& dstDc,
              (bitmap.redMask == kRgb565RedMask &&
               bitmap.greenMask == kRgb565GreenMask &&
               bitmap.blueMask == kRgb565BlueMask));
-        if (!rgb565 || coveringPopup || !backingLayers.empty() || !ropSourceCopy ||
+        if (!rgb565 || coveringPopup || !backingLayers.empty() ||
+            visibleWindowCoversTargetRect(dstDc.hwnd, clipLeft, clipTop, clipRight, clipBottom) ||
+            !ropSourceCopy ||
             !sameScaleX || !sameScaleY ||
             srcW <= 0 || srcH <= 0 || dstW <= 0 || dstH <= 0) {
             return false;

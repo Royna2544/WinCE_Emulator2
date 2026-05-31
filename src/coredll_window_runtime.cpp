@@ -1726,6 +1726,51 @@ bool SyntheticDllRuntime::hasCoveringRootPopup(uint32_t hwnd) const {
     return false;
 }
 
+bool SyntheticDllRuntime::visibleWindowCoversTargetPixel(uint32_t targetHwnd,
+                                                        int32_t x,
+                                                        int32_t y) const {
+    if (!targetHwnd) return false;
+    const uint64_t targetZ = targetHwnd ? windowZOrder(targetHwnd) : 0;
+    for (const auto& [hwnd, window] : ceGwe_.windows()) {
+        if (hwnd == targetHwnd || window.destroyed || !window.visible ||
+            window.width <= 0 || window.height <= 0) {
+            continue;
+        }
+        if (targetHwnd && isWindowInGweStack(targetHwnd, hwnd)) continue;
+        if (targetHwnd && window.zOrder <= targetZ) continue;
+        const auto [originX, originY] = guestWindowOrigin(hwnd);
+        if (x >= originX && y >= originY &&
+            x < originX + window.width && y < originY + window.height) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool SyntheticDllRuntime::visibleWindowCoversTargetRect(uint32_t targetHwnd,
+                                                       int32_t left,
+                                                       int32_t top,
+                                                       int32_t right,
+                                                       int32_t bottom) const {
+    if (!targetHwnd) return false;
+    if (left >= right || top >= bottom) return false;
+    const uint64_t targetZ = targetHwnd ? windowZOrder(targetHwnd) : 0;
+    for (const auto& [hwnd, window] : ceGwe_.windows()) {
+        if (hwnd == targetHwnd || window.destroyed || !window.visible ||
+            window.width <= 0 || window.height <= 0) {
+            continue;
+        }
+        if (targetHwnd && isWindowInGweStack(targetHwnd, hwnd)) continue;
+        if (targetHwnd && window.zOrder <= targetZ) continue;
+        const auto [originX, originY] = guestWindowOrigin(hwnd);
+        if (left < originX + window.width && right > originX &&
+            top < originY + window.height && bottom > originY) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void SyntheticDllRuntime::pumpHostMessages() {
 #if defined(_WIN32)
     MSG message{};

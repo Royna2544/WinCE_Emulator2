@@ -195,6 +195,12 @@ Active refactor checklist: `PLAN.md`.
      overlays by stack depth/z-order. Next validation should confirm the
      startup safety screen no longer visually overlaps with the bottom bar and
      the bottom bar remains visible after the fullscreen popup is destroyed.
+     A second pass now clips parent/root framebuffer writes against visible
+     higher z-order child/overlay windows, so a delayed bottom-bar paint should
+     no longer be required merely to undo an owner/root repaint. If touch still
+     appears undelivered, inspect the current plain-wait/sent-message route
+     worker state before forcing input delivery; CE does not pump ordinary
+     input from `WaitForSingleObject`.
 
 2. Introduce a CE-shaped internal `MsgQueue` model.
    - CE reference:

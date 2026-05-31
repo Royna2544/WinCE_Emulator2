@@ -161,8 +161,13 @@ Status:
   visible-stack order: owner/root windows first, then visible children and
   overlays by stack depth and z-order. Current source:
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp:1229`.
-  Release and Debug builds passed. Needs live validation in the next
-  interactive run before this entry can be marked resolved.
+  Follow-up source now also clips parent/root framebuffer writes against
+  visible higher z-order child/overlay windows, so delayed child `WM_PAINT`
+  should not be required to undo owner/root pixels. Current source:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp:1727` and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_bitmap.cpp:474`. Release and
+  Debug builds passed. Needs live validation in the next interactive run
+  before this entry can be marked resolved.
 
 ### Current Search Freeze Signature
 
