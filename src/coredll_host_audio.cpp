@@ -203,27 +203,22 @@ void SyntheticDllRuntime::queueHostAudioBackend(uint32_t guestHandle,
                                                 uint32_t avgBytesPerSec,
                                                 uint16_t blockAlign) {
     if (!hostValue || pcm.empty()) return;
-    constexpr uint32_t kBackendChunkDurationMs = 100;
     const size_t align = std::max<size_t>(1, blockAlign);
-    const size_t rawChunkBytes = avgBytesPerSec
-        ? std::max<size_t>(align, (size_t(avgBytesPerSec) * kBackendChunkDurationMs) / 1000u)
-        : pcm.size();
-    const size_t chunkBytes = std::max<size_t>(align, rawChunkBytes - (rawChunkBytes % align));
+    size_t count = pcm.size();
+    if (count > align) count -= count % align;
+    if (!count) return;
 
     startHostAudioBackend();
     {
         std::lock_guard<std::mutex> lock(hostAudioBackendMutex_);
-        for (size_t offset = 0; offset < pcm.size(); offset += chunkBytes) {
-            const size_t count = std::min(chunkBytes, pcm.size() - offset);
-            HostAudioBackendChunk chunk;
-            chunk.guestHandle = guestHandle;
-            chunk.hostValue = hostValue;
-            chunk.avgBytesPerSec = avgBytesPerSec;
-            chunk.blockAlign = blockAlign;
-            chunk.pcm.assign(pcm.begin() + offset, pcm.begin() + offset + count);
-            hostAudioBackendChunks_.push_back(std::move(chunk));
-        }
-        constexpr size_t kMaxBackendChunks = 2048;
+        HostAudioBackendChunk chunk;
+        chunk.guestHandle = guestHandle;
+        chunk.hostValue = hostValue;
+        chunk.avgBytesPerSec = avgBytesPerSec;
+        chunk.blockAlign = blockAlign;
+        chunk.pcm.assign(pcm.begin(), pcm.begin() + count);
+        hostAudioBackendChunks_.push_back(std::move(chunk));
+        constexpr size_t kMaxBackendChunks = 16;
         while (hostAudioBackendChunks_.size() > kMaxBackendChunks) hostAudioBackendChunks_.pop_front();
     }
     hostAudioBackendCv_.notify_all();
