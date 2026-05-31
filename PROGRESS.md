@@ -169,10 +169,21 @@ Current emulator difference:
   stitching many small local WinMM chunks. Local host playback now submits one
   copied backend buffer per guest `waveOutWrite` while still waiting for
   `WHDR_DONE` before freeing it; websocket audio remains a live `CeAudio`
-  timeline tap. The 2026-05-31 Release and Debug builds passed with zero
-  warnings after this adjustment, and Debug interactive run
-  `captures/inavi_autodrive_20260531_105702` was relaunched on
-  `192.168.0.39:8765` for validation.
+  timeline tap. A later websocket-only buzz report found another source
+  difference: the remote tap resampled each 20 ms live slice with a fresh
+  miniaudio converter, while CE keeps queued wave stream position continuous.
+  The websocket path now keeps a continuous converter across adjacent live
+  slices, resets it only on format/cursor discontinuity or client reset, and
+  paces sends from actual output PCM duration. Current source anchors:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/remote_server.cpp:56`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/remote_server.cpp:440`, and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/remote_server.cpp:1232`.
+  The 2026-05-31 Release and Debug builds passed with the existing Boost Beast
+  warning after this adjustment. Bounded Release smoke
+  `captures/inavi_autodrive_20260531_112536` captured startup without
+  fatal/unsupported/PC-zero signatures, and Debug interactive run
+  `captures/inavi_autodrive_20260531_112632` is live on
+  `192.168.0.39:8765` for subjective websocket-audio validation.
 - CE GWE/MGDI source comparison for the route-guide visual artifacts found
   missing region/rounded drawing exports in the emulator boundary:
   `RoundRect`, `FillRgn`, `SetRectRgn`, `SelectClipRgn`, `PtInRegion`, and
@@ -309,6 +320,12 @@ Current emulator difference:
   fresh Debug interactive run was launched at
   `captures/inavi_autodrive_20260531_100056` with the remote server listening
   on `192.168.0.39:8765`.
+- Current Debug run `captures/inavi_autodrive_20260531_112632` still shows
+  host-window display lag during long synchronous paint/message-transfer
+  spans, for example `UpdateWindow` paint on `hwnd=0x0001004c` taking about
+  1.1-1.3 seconds while the remote framebuffer can advance earlier. This
+  looks like host-present synchronization/paint batching, not websocket video
+  transport.
 - `CeGwe` now owns the `GuestMessage` record type and backing message deque.
   `SyntheticDllRuntime::guestMessages_` remains a compatibility alias to that
   deque, so this Phase 3 scaffold step should preserve delivery behavior while

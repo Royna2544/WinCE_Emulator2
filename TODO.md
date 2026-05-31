@@ -31,11 +31,14 @@ Active refactor checklist: `PLAN.md`.
      backend buffer per guest `waveOutWrite` while waiting for `WHDR_DONE`
      before freeing it. The websocket tap now drops a chunk if conversion to
      the remote advertised format fails instead of sending mismatched raw
-     guest PCM.
-     Next step is Debug interactive validation after closing the old Debug
-     emulator process: confirm the latest no-stitching local backend removes
-     the pops, test a mid-startup websocket connect, and test short
-     button-click sounds. Also verify the old route-guide signature no longer
+     guest PCM. The websocket tap now also keeps miniaudio conversion
+     continuous across adjacent live slices and paces websocket sends from
+     actual output PCM duration, matching CE's continuous stream timeline more
+     closely than resetting the converter every 20 ms.
+     Debug interactive run `captures/inavi_autodrive_20260531_112632` is live
+     on `192.168.0.39:8765`; next step is subjective validation that the light
+     websocket buzz is gone, plus a mid-startup connect and short button-click
+     sound test. Also verify the old route-guide signature no longer
      appears: `WaitForSingleObject(..., INFINITE)` must not resume with
      `WAIT_TIMEOUT`, and
      `waveOutUnprepareHeader` must not run while `WHDR_INQUEUE` is still set
@@ -109,6 +112,12 @@ Active refactor checklist: `PLAN.md`.
      `queued-message-preempt` worker rotation should stop, and new remote
      pointer downs should no longer be rejected because an older touch
      sequence is trapped in the queue.
+     Current follow-up: host presenter can lag behind the remote framebuffer
+     during long synchronous `UpdateWindow`/message-transfer spans. Debug run
+     `captures/inavi_autodrive_20260531_112632` shows `hwnd=0x0001004c`
+     paints taking about 1.1-1.3 seconds. Compare this against CE visible/
+     update-region presentation before changing batching; avoid forcing
+     remote-only or host-only redraw behavior.
 
 2. Introduce a CE-shaped internal `MsgQueue` model.
    - CE reference:

@@ -36,6 +36,7 @@
 #include <cmath>
 #include <iomanip>
 #include <sstream>
+#include <unordered_map>
 #include <unordered_set>
 
 #pragma comment(lib, "gdiplus.lib")
@@ -51,6 +52,23 @@ using tcp = net::ip::tcp;
 constexpr const char* kRemoteBoundary = "frame";
 constexpr size_t kRemoteAudioChunkDurationMs = 20;
 constexpr size_t kMaxRemoteAudioQueuedChunks = 6;
+
+struct RemoteAudioConverterState {
+    ma_data_converter converter{};
+    bool initialized{};
+    uint16_t sourceFormatTag{};
+    uint32_t sourceSampleRate{};
+    uint16_t sourceChannels{};
+    uint16_t sourceBlockAlign{};
+    uint16_t sourceBitsPerSample{};
+    std::string targetFormatName;
+    uint32_t targetSampleRate{};
+    uint16_t targetChannels{};
+    uint64_t nextSourceStartMs{};
+};
+
+std::mutex g_remoteAudioConverterMutex;
+std::unordered_map<SyntheticDllRuntime*, RemoteAudioConverterState> g_remoteAudioConverters;
 
 class RemoteLogSink final : public spdlog::sinks::base_sink<std::mutex> {
 public:
@@ -399,6 +417,118 @@ std::vector<uint8_t> convertRemotePcm(const std::vector<uint8_t>& pcm,
     if (result != MA_SUCCESS && result != MA_AT_END) return {};
 
     converted.resize(static_cast<size_t>(framesOut) * targetFrameBytes);
+    return converted;
+}
+
+uint32_t pcmDurationMs(size_t bytes, uint32_t sampleRate, uint16_t channels, ma_format format) {
+    const size_t frameBytes = size_t(channels) * ma_get_bytes_per_sample(format);
+    if (!bytes || !frameBytes || !sampleRate) return 1;
+    const size_t frames = bytes / frameBytes;
+    return static_cast<uint32_t>(std::max<uint64_t>(1, (uint64_t(frames) * 1000ull) / sampleRate));
+}
+
+void resetRemoteAudioConverter(SyntheticDllRuntime* runtime) {
+    std::lock_guard<std::mutex> lock(g_remoteAudioConverterMutex);
+    auto it = g_remoteAudioConverters.find(runtime);
+    if (it == g_remoteAudioConverters.end()) return;
+    if (it->second.initialized) {
+        ma_data_converter_uninit(&it->second.converter, nullptr);
+    }
+    g_remoteAudioConverters.erase(it);
+}
+
+std::vector<uint8_t> convertRemotePcmContinuous(SyntheticDllRuntime* runtime,
+                                                const std::vector<uint8_t>& pcm,
+                                                uint16_t sourceFormatTag,
+                                                uint32_t sourceSampleRate,
+                                                uint16_t sourceChannels,
+                                                uint16_t sourceBlockAlign,
+                                                uint16_t sourceBitsPerSample,
+                                                std::string_view targetFormatName,
+                                                uint32_t targetSampleRate,
+                                                uint16_t targetChannels,
+                                                uint64_t sourceStartMs,
+                                                uint32_t sourceDurationMs) {
+    const ma_format sourceFormat = guestWaveFormat(sourceFormatTag, sourceBitsPerSample);
+    const ma_format targetFormat = remoteAudioFormat(targetFormatName);
+    if (sourceFormat == ma_format_unknown || targetFormat == ma_format_unknown ||
+        !sourceSampleRate || !targetSampleRate || !sourceChannels || !targetChannels) {
+        resetRemoteAudioConverter(runtime);
+        return {};
+    }
+
+    const size_t sourceFrameBytes = size_t(sourceChannels) * ma_get_bytes_per_sample(sourceFormat);
+    const size_t targetFrameBytes = size_t(targetChannels) * ma_get_bytes_per_sample(targetFormat);
+    if (!sourceFrameBytes || !targetFrameBytes || (sourceBlockAlign && sourceBlockAlign != sourceFrameBytes)) {
+        resetRemoteAudioConverter(runtime);
+        return {};
+    }
+    const ma_uint64 sourceFrames = pcm.size() / sourceFrameBytes;
+    if (!sourceFrames) return {};
+
+    std::lock_guard<std::mutex> lock(g_remoteAudioConverterMutex);
+    RemoteAudioConverterState& state = g_remoteAudioConverters[runtime];
+    const std::string targetFormatKey(targetFormatName);
+    const bool configChanged =
+        !state.initialized ||
+        state.sourceFormatTag != sourceFormatTag ||
+        state.sourceSampleRate != sourceSampleRate ||
+        state.sourceChannels != sourceChannels ||
+        state.sourceBlockAlign != sourceBlockAlign ||
+        state.sourceBitsPerSample != sourceBitsPerSample ||
+        state.targetFormatName != targetFormatKey ||
+        state.targetSampleRate != targetSampleRate ||
+        state.targetChannels != targetChannels;
+    const bool discontinuous =
+        state.initialized &&
+        (sourceStartMs > state.nextSourceStartMs + 2 ||
+         sourceStartMs + 2 < state.nextSourceStartMs);
+
+    if (configChanged || discontinuous) {
+        if (state.initialized) ma_data_converter_uninit(&state.converter, nullptr);
+        state = {};
+        ma_data_converter_config config = ma_data_converter_config_init(sourceFormat,
+                                                                        targetFormat,
+                                                                        sourceChannels,
+                                                                        targetChannels,
+                                                                        sourceSampleRate,
+                                                                        targetSampleRate);
+        if (ma_data_converter_init(&config, nullptr, &state.converter) != MA_SUCCESS) {
+            state = {};
+            g_remoteAudioConverters.erase(runtime);
+            return {};
+        }
+        state.initialized = true;
+        state.sourceFormatTag = sourceFormatTag;
+        state.sourceSampleRate = sourceSampleRate;
+        state.sourceChannels = sourceChannels;
+        state.sourceBlockAlign = sourceBlockAlign;
+        state.sourceBitsPerSample = sourceBitsPerSample;
+        state.targetFormatName = targetFormatKey;
+        state.targetSampleRate = targetSampleRate;
+        state.targetChannels = targetChannels;
+    }
+
+    ma_uint64 outputFrameCapacity =
+        ((sourceFrames * targetSampleRate) + sourceSampleRate - 1) / sourceSampleRate + 32;
+    outputFrameCapacity = std::max<ma_uint64>(outputFrameCapacity, 1);
+    std::vector<uint8_t> converted(static_cast<size_t>(outputFrameCapacity) * targetFrameBytes);
+
+    ma_uint64 framesIn = sourceFrames;
+    ma_uint64 framesOut = outputFrameCapacity;
+    const ma_result result = ma_data_converter_process_pcm_frames(&state.converter,
+                                                                  pcm.data(),
+                                                                  &framesIn,
+                                                                  converted.data(),
+                                                                  &framesOut);
+    if (result != MA_SUCCESS && result != MA_AT_END) {
+        ma_data_converter_uninit(&state.converter, nullptr);
+        g_remoteAudioConverters.erase(runtime);
+        return {};
+    }
+
+    converted.resize(static_cast<size_t>(framesOut) * targetFrameBytes);
+    state.nextSourceStartMs = sourceStartMs + std::max<uint32_t>(1, sourceDurationMs);
     return converted;
 }
 
@@ -800,7 +930,10 @@ struct RemoteServerHandle {
                 ws.write(net::buffer(chunk.payload), ec);
                 if (ec) return;
             }
-            if (!chunks.empty()) std::this_thread::sleep_for(std::chrono::milliseconds(chunkMs));
+            if (!chunks.empty()) {
+                const uint32_t paceMs = std::clamp<uint32_t>(chunks.back().durationMs, 1, 250);
+                std::this_thread::sleep_for(std::chrono::milliseconds(paceMs));
+            }
         }
         ws.close(websocket::close_code::normal, ec);
     }
@@ -1064,15 +1197,6 @@ bool SyntheticDllRuntime::materializeRemoteAudioChunkLocked(uint32_t durationMs)
     const size_t targetSampleBytes = ma_get_bytes_per_sample(targetFormat);
     if (targetFormat == ma_format_unknown || !targetSampleBytes) return false;
 
-    std::vector<uint8_t> converted = convertRemotePcm(slice->pcm,
-                                                      slice->format.formatTag,
-                                                      slice->format.samplesPerSec,
-                                                      slice->format.channels,
-                                                      slice->format.blockAlign,
-                                                      slice->format.bitsPerSample,
-                                                      targetFormatName,
-                                                      targetSampleRate,
-                                                      targetChannels);
     const bool exactRemoteFormat = remotePcmFormatsMatch(slice->format.formatTag,
                                                         slice->format.samplesPerSec,
                                                         slice->format.channels,
@@ -1081,6 +1205,23 @@ bool SyntheticDllRuntime::materializeRemoteAudioChunkLocked(uint32_t durationMs)
                                                         targetFormatName,
                                                         targetSampleRate,
                                                         targetChannels);
+    std::vector<uint8_t> converted;
+    if (exactRemoteFormat) {
+        resetRemoteAudioConverter(this);
+    } else {
+        converted = convertRemotePcmContinuous(this,
+                                               slice->pcm,
+                                               slice->format.formatTag,
+                                               slice->format.samplesPerSec,
+                                               slice->format.channels,
+                                               slice->format.blockAlign,
+                                               slice->format.bitsPerSample,
+                                               targetFormatName,
+                                               targetSampleRate,
+                                               targetChannels,
+                                               slice->startMs,
+                                               slice->durationMs);
+    }
     const std::vector<uint8_t>& payload = converted.empty() && exactRemoteFormat ? slice->pcm : converted;
     if (payload.empty()) return false;
 
@@ -1088,8 +1229,8 @@ bool SyntheticDllRuntime::materializeRemoteAudioChunkLocked(uint32_t durationMs)
     chunk.payload = payload;
     chunk.sequence = ++remoteAudioSequence_;
     chunk.ptsMs = remoteAudioNextPtsMs_;
-    chunk.durationMs = std::max<uint32_t>(1, slice->durationMs);
-    remoteAudioNextPtsMs_ = slice->startMs + chunk.durationMs;
+    chunk.durationMs = pcmDurationMs(chunk.payload.size(), targetSampleRate, targetChannels, targetFormat);
+    remoteAudioNextPtsMs_ = slice->startMs + std::max<uint32_t>(1, slice->durationMs);
     remoteAudioChunks_.push_back(std::move(chunk));
     while (remoteAudioChunks_.size() > kMaxRemoteAudioQueuedChunks) remoteAudioChunks_.pop_front();
     return true;
@@ -1100,6 +1241,7 @@ void SyntheticDllRuntime::registerRemoteAudioClient() {
     if (remoteAudioClientCount_ == 0) {
         remoteAudioChunks_.clear();
         remoteAudioNextPtsMs_ = GetTickCount64();
+        resetRemoteAudioConverter(this);
     }
     ++remoteAudioClientCount_;
     materializeRemoteAudioChunkLocked(kRemoteAudioChunkDurationMs);
@@ -1113,6 +1255,7 @@ void SyntheticDllRuntime::unregisterRemoteAudioClient() {
         if (remoteAudioClientCount_ == 0) {
             remoteAudioChunks_.clear();
             remoteAudioNextPtsMs_ = 0;
+            resetRemoteAudioConverter(this);
         }
     }
     remoteAudioCv_.notify_all();
@@ -1122,6 +1265,7 @@ void SyntheticDllRuntime::clearRemoteAudioChunks() {
     std::lock_guard<std::mutex> lock(remoteMutex_);
     remoteAudioChunks_.clear();
     remoteAudioNextPtsMs_ = GetTickCount64();
+    resetRemoteAudioConverter(this);
 }
 
 bool SyntheticDllRuntime::waitForRemoteAudioChunks(uint32_t timeoutMs) {

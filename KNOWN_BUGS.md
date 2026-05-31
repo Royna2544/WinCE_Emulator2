@@ -179,6 +179,11 @@ Status:
   successful named-shared mapping hot-path logs are now debug-level so normal
   info logging no longer amplifies that churn; the remaining question is how
   much of the visible delay is guest work versus emulator scheduling/rendering.
+  Debug run `captures/inavi_autodrive_20260531_112632` also shows the host
+  presenter lagging behind the remote framebuffer during long synchronous
+  `UpdateWindow`/message-transfer spans; `hwnd=0x0001004c` paints take about
+  1.1-1.3 seconds. Treat this as a host-present/paint-batching issue until CE
+  visible/update-region comparison says otherwise.
 
 ## Partially Resolved: Remote Audio WebSocket And Host Audio Timing
 
@@ -200,6 +205,9 @@ Symptom:
 - Host/local WinMM was still too close to the guest-visible timing model:
   callbacks/events from host playback could act like CE completion instead of
   a virtual wave stream returning queued buffers.
+- The remote websocket tap could add a light buzz because it resampled every
+  20 ms live slice with a fresh converter instead of preserving stream
+  continuity.
 
 Evidence:
 
@@ -242,6 +250,17 @@ Status:
   report showed the local backend should not stitch many tiny WinMM buffers
   together; it now submits one copied host buffer per guest `waveOutWrite`
   while keeping guest-visible completion on the virtual `CeAudio` timeline.
+- The websocket tap now keeps a continuous miniaudio converter across adjacent
+  live `CeAudio` slices and resets it only on format/cursor discontinuity or
+  client reset. Websocket send pacing now uses the actual output PCM duration
+  instead of the requested chunk duration. Current source:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/remote_server.cpp:56`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/remote_server.cpp:440`, and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/remote_server.cpp:1232`.
+  Bounded Release smoke `captures/inavi_autodrive_20260531_112536` found no
+  fatal/unsupported/PC-zero signatures, and Debug interactive run
+  `captures/inavi_autodrive_20260531_112632` is live for subjective buzz
+  validation.
 - A later route-guide run found that cooperative paint around a blocking
   `WaitForSingleObject(..., INFINITE)` could still return `WAIT_TIMEOUT` from
   the named wait shim. That caused audio buffers to be unprepared while still
