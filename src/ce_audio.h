@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <condition_variable>
 #include <cstdint>
 #include <deque>
 #include <map>
@@ -8,6 +9,7 @@
 #include <optional>
 #include <memory>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 class CeAudio {
@@ -110,6 +112,18 @@ public:
     std::optional<LiveSlice> liveSlice(uint64_t cursorMs, uint32_t durationMs) const;
     bool hasLiveAudioAtOrAfter(uint64_t cursorMs) const;
 
+    std::map<uint32_t, HostWaveBuffer>& hostWaveBuffers() noexcept { return hostWaveBuffers_; }
+    const std::map<uint32_t, HostWaveBuffer>& hostWaveBuffers() const noexcept { return hostWaveBuffers_; }
+    std::map<uint32_t, GuestWaveOutState>& waveOutStates() noexcept { return waveOutStates_; }
+    const std::map<uint32_t, GuestWaveOutState>& waveOutStates() const noexcept { return waveOutStates_; }
+    std::vector<CachedWaveOutDevice>& cachedWaveOutDevices() noexcept { return cachedWaveOutDevices_; }
+    const std::vector<CachedWaveOutDevice>& cachedWaveOutDevices() const noexcept { return cachedWaveOutDevices_; }
+    std::mutex& backendMutex() const noexcept { return backendMutex_; }
+    std::condition_variable& backendCv() const noexcept { return backendCv_; }
+    std::thread& backendThread() noexcept { return backendThread_; }
+    std::deque<HostAudioBackendChunk>& backendChunks() noexcept { return backendChunks_; }
+    bool& backendStop() noexcept { return backendStop_; }
+
 private:
     struct QueuedBuffer {
         uint32_t guestHeader{};
@@ -132,4 +146,12 @@ private:
 
     mutable std::mutex mutex_;
     std::map<uint32_t, StreamState> streams_;
+    std::map<uint32_t, HostWaveBuffer> hostWaveBuffers_;
+    std::map<uint32_t, GuestWaveOutState> waveOutStates_;
+    std::vector<CachedWaveOutDevice> cachedWaveOutDevices_;
+    mutable std::mutex backendMutex_;
+    mutable std::condition_variable backendCv_;
+    std::thread backendThread_;
+    std::deque<HostAudioBackendChunk> backendChunks_;
+    bool backendStop_{};
 };

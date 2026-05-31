@@ -252,6 +252,14 @@ Current emulator difference:
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_audio.h` and
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.h`. The 2026-05-31
   Release build passed with the existing vcpkg/Boost warnings.
+- Host wave-buffer storage, guest waveOut state, cached host waveOut devices,
+  and host WinMM backend queue/thread state now live behind `CeAudio`.
+  `SyntheticDllRuntime` still owns the ABI entrypoints and orchestration calls,
+  so guest-visible audio behavior is unchanged by this storage move. Current
+  source anchors: `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_audio.h`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_host_audio.cpp`, and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp`. The 2026-05-31
+  Release build passed with the existing vcpkg/Boost warnings.
 - `CeRemote` was added as the future owner for remote input/audio/serial/API
   status. Legacy remote touch, key, and audio chunk type definitions now live
   there with `SyntheticDllRuntime` keeping aliases and queue storage unchanged

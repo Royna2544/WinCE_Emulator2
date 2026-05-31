@@ -137,20 +137,20 @@ void SyntheticDllRuntime::closeHostWaveOutHandle(uintptr_t hostValue) {
 }
 
 void SyntheticDllRuntime::startHostAudioBackend() {
-    std::lock_guard<std::mutex> lock(hostAudioBackendMutex_);
-    if (hostAudioBackendThread_.joinable()) return;
-    hostAudioBackendStop_ = false;
-    hostAudioBackendThread_ = std::thread([this] {
+    std::lock_guard<std::mutex> lock(ceAudio_.backendMutex());
+    if (ceAudio_.backendThread().joinable()) return;
+    ceAudio_.backendStop() = false;
+    ceAudio_.backendThread() = std::thread([this] {
         for (;;) {
             HostAudioBackendChunk chunk;
             {
-                std::unique_lock<std::mutex> lock(hostAudioBackendMutex_);
-                hostAudioBackendCv_.wait(lock, [&] {
-                    return hostAudioBackendStop_ || !hostAudioBackendChunks_.empty();
+                std::unique_lock<std::mutex> lock(ceAudio_.backendMutex());
+                ceAudio_.backendCv().wait(lock, [&] {
+                    return ceAudio_.backendStop() || !ceAudio_.backendChunks().empty();
                 });
-                if (hostAudioBackendStop_ && hostAudioBackendChunks_.empty()) break;
-                chunk = std::move(hostAudioBackendChunks_.front());
-                hostAudioBackendChunks_.pop_front();
+                if (ceAudio_.backendStop() && ceAudio_.backendChunks().empty()) break;
+                chunk = std::move(ceAudio_.backendChunks().front());
+                ceAudio_.backendChunks().pop_front();
             }
 
             if (!chunk.hostValue || chunk.pcm.empty()) continue;
@@ -189,12 +189,12 @@ void SyntheticDllRuntime::startHostAudioBackend() {
 
 void SyntheticDllRuntime::stopHostAudioBackend() {
     {
-        std::lock_guard<std::mutex> lock(hostAudioBackendMutex_);
-        hostAudioBackendStop_ = true;
-        hostAudioBackendChunks_.clear();
+        std::lock_guard<std::mutex> lock(ceAudio_.backendMutex());
+        ceAudio_.backendStop() = true;
+        ceAudio_.backendChunks().clear();
     }
-    hostAudioBackendCv_.notify_all();
-    if (hostAudioBackendThread_.joinable()) hostAudioBackendThread_.join();
+    ceAudio_.backendCv().notify_all();
+    if (ceAudio_.backendThread().joinable()) ceAudio_.backendThread().join();
 }
 
 void SyntheticDllRuntime::queueHostAudioBackend(uint32_t guestHandle,
@@ -210,32 +210,32 @@ void SyntheticDllRuntime::queueHostAudioBackend(uint32_t guestHandle,
 
     startHostAudioBackend();
     {
-        std::lock_guard<std::mutex> lock(hostAudioBackendMutex_);
+        std::lock_guard<std::mutex> lock(ceAudio_.backendMutex());
         HostAudioBackendChunk chunk;
         chunk.guestHandle = guestHandle;
         chunk.hostValue = hostValue;
         chunk.avgBytesPerSec = avgBytesPerSec;
         chunk.blockAlign = blockAlign;
         chunk.pcm.assign(pcm.begin(), pcm.begin() + count);
-        hostAudioBackendChunks_.push_back(std::move(chunk));
+        ceAudio_.backendChunks().push_back(std::move(chunk));
         constexpr size_t kMaxBackendChunks = 16;
-        while (hostAudioBackendChunks_.size() > kMaxBackendChunks) hostAudioBackendChunks_.pop_front();
+        while (ceAudio_.backendChunks().size() > kMaxBackendChunks) ceAudio_.backendChunks().pop_front();
     }
-    hostAudioBackendCv_.notify_all();
+    ceAudio_.backendCv().notify_all();
 }
 
 void SyntheticDllRuntime::clearHostAudioBackend(uint32_t guestHandle) {
-    std::lock_guard<std::mutex> lock(hostAudioBackendMutex_);
-    for (auto it = hostAudioBackendChunks_.begin(); it != hostAudioBackendChunks_.end();) {
-        if (it->guestHandle == guestHandle) it = hostAudioBackendChunks_.erase(it);
+    std::lock_guard<std::mutex> lock(ceAudio_.backendMutex());
+    for (auto it = ceAudio_.backendChunks().begin(); it != ceAudio_.backendChunks().end();) {
+        if (it->guestHandle == guestHandle) it = ceAudio_.backendChunks().erase(it);
         else ++it;
     }
 }
 
 void SyntheticDllRuntime::refreshCompletedHostWaveBuffers() {
     for (const CeAudio::Completion& completion : ceAudio_.completeReady(GetTickCount64())) {
-        auto it = hostWaveBuffers_.find(completion.guestHeader);
-        if (it != hostWaveBuffers_.end()) {
+        auto it = ceAudio_.hostWaveBuffers().find(completion.guestHeader);
+        if (it != ceAudio_.hostWaveBuffers().end()) {
             auto* header = reinterpret_cast<WAVEHDR*>(it->second.header.data());
             header->dwFlags |= WHDR_DONE;
             header->dwFlags &= ~WHDR_INQUEUE;
@@ -272,7 +272,7 @@ void SyntheticDllRuntime::refreshCompletedHostWaveBuffers() {
                       completion.completionEvent);
     }
 
-    for (auto& [guestHeader, stored] : hostWaveBuffers_) {
+    for (auto& [guestHeader, stored] : ceAudio_.hostWaveBuffers()) {
         auto* context = static_cast<HostWaveDoneContext*>(stored.completionContext.get());
         if (!context) continue;
 
@@ -419,7 +419,7 @@ bool SyntheticDllRuntime::handleWaveInAddBuffer(SyntheticExportCode code, const 
         ret = MMSYSERR_INVALPARAM;
         return true;
     }
-    auto& stored = hostWaveBuffers_[args.a1];
+    auto& stored = ceAudio_.hostWaveBuffers()[args.a1];
     stored.data.assign(guestLength, 0);
     uc_mem_read(uc_, guestData, stored.data.data(), stored.data.size());
     auto* header = reinterpret_cast<WAVEHDR*>(stored.header.data());
@@ -444,8 +444,8 @@ bool SyntheticDllRuntime::handleWaveInUnprepareHeader(SyntheticExportCode code, 
         ret = MMSYSERR_INVALHANDLE;
         return true;
     }
-    auto it = hostWaveBuffers_.find(args.a1);
-    if (it == hostWaveBuffers_.end() || !winmm.waveInUnprepareHeader) {
+    auto it = ceAudio_.hostWaveBuffers().find(args.a1);
+    if (it == ceAudio_.hostWaveBuffers().end() || !winmm.waveInUnprepareHeader) {
         ret = MMSYSERR_INVALPARAM;
         return true;
     }
@@ -458,7 +458,7 @@ bool SyntheticDllRuntime::handleWaveInUnprepareHeader(SyntheticExportCode code, 
     }
     writeU32(args.a1 + 8, header->dwBytesRecorded);
     writeU32(args.a1 + 16, header->dwFlags);
-    hostWaveBuffers_.erase(it);
+    ceAudio_.hostWaveBuffers().erase(it);
     return true;
 }
 
@@ -502,7 +502,7 @@ bool SyntheticDllRuntime::handleWaveOutOpen(SyntheticExportCode code, const Gues
     const DWORD_PTR hostCallback = 0;
     const DWORD hostFlags = (flags & ~CALLBACK_TYPEMASK) | CALLBACK_NULL;
     const UINT hostDeviceId = args.a1 == 0 ? WAVE_MAPPER : UINT(args.a1);
-    auto cached = std::find_if(cachedWaveOutDevices_.begin(), cachedWaveOutDevices_.end(),
+    auto cached = std::find_if(ceAudio_.cachedWaveOutDevices().begin(), ceAudio_.cachedWaveOutDevices().end(),
                                [&](const CachedWaveOutDevice& candidate) {
                                    return candidate.hostValue &&
                                           candidate.deviceId == hostDeviceId &&
@@ -515,10 +515,10 @@ bool SyntheticDllRuntime::handleWaveOutOpen(SyntheticExportCode code, const Gues
                                           candidate.blockAlign == format.nBlockAlign &&
                                           candidate.bitsPerSample == format.wBitsPerSample;
                                });
-    const bool reused = cached != cachedWaveOutDevices_.end();
+    const bool reused = cached != ceAudio_.cachedWaveOutDevices().end();
     if (reused) {
         host = reinterpret_cast<HWAVEOUT>(cached->hostValue);
-        cachedWaveOutDevices_.erase(cached);
+        ceAudio_.cachedWaveOutDevices().erase(cached);
         ret = MMSYSERR_NOERROR;
     } else {
         ret = winmm.waveOutOpen(&host, hostDeviceId, &format, hostCallback, instance, hostFlags);
@@ -527,7 +527,7 @@ bool SyntheticDllRuntime::handleWaveOutOpen(SyntheticExportCode code, const Gues
                  hostDeviceId, hostFlags, reused, ret);
     if (ret == MMSYSERR_NOERROR) {
         const uint32_t guest = makeGuestHandle({GuestHandle::Kind::HostWaveOut, reinterpret_cast<uintptr_t>(host), 0});
-        waveOutStates_[guest] = {
+        ceAudio_.waveOutStates()[guest] = {
             args.a3,
             uint32_t(instance),
             flags,
@@ -566,13 +566,13 @@ bool SyntheticDllRuntime::handleWaveOutClose(SyntheticExportCode code, const Gue
     auto& winmm = winmmBridge();
     if (handle && handle->kind == GuestHandle::Kind::HostWaveOut && handle->hostValue && winmm.waveOutClose) {
         const uint64_t start = GetTickCount64();
-        auto state = waveOutStates_.find(args.a0);
+        auto state = ceAudio_.waveOutStates().find(args.a0);
         HWAVEOUT host = reinterpret_cast<HWAVEOUT>(handle->hostValue);
         clearHostAudioBackend(args.a0);
         if (winmm.waveOutReset) winmm.waveOutReset(host);
         for (const CeAudio::Completion& completion : ceAudio_.closeStream(args.a0)) {
-            auto it = hostWaveBuffers_.find(completion.guestHeader);
-            if (it != hostWaveBuffers_.end()) {
+            auto it = ceAudio_.hostWaveBuffers().find(completion.guestHeader);
+            if (it != ceAudio_.hostWaveBuffers().end()) {
                 auto* header = reinterpret_cast<WAVEHDR*>(it->second.header.data());
                 header->dwFlags |= WHDR_DONE;
                 header->dwFlags &= ~WHDR_INQUEUE;
@@ -586,7 +586,7 @@ bool SyntheticDllRuntime::handleWaveOutClose(SyntheticExportCode code, const Gue
                 }
             }
         }
-        if (state != waveOutStates_.end()) {
+        if (state != ceAudio_.waveOutStates().end()) {
             CachedWaveOutDevice cached{};
             cached.hostValue = handle->hostValue;
             cached.deviceId = state->second.deviceId;
@@ -598,10 +598,10 @@ bool SyntheticDllRuntime::handleWaveOutClose(SyntheticExportCode code, const Gue
             cached.avgBytesPerSec = state->second.avgBytesPerSec;
             cached.blockAlign = state->second.blockAlign;
             cached.bitsPerSample = state->second.bitsPerSample;
-            cachedWaveOutDevices_.push_back(cached);
-            while (cachedWaveOutDevices_.size() > 4) {
-                CachedWaveOutDevice old = cachedWaveOutDevices_.front();
-                cachedWaveOutDevices_.erase(cachedWaveOutDevices_.begin());
+            ceAudio_.cachedWaveOutDevices().push_back(cached);
+            while (ceAudio_.cachedWaveOutDevices().size() > 4) {
+                CachedWaveOutDevice old = ceAudio_.cachedWaveOutDevices().front();
+                ceAudio_.cachedWaveOutDevices().erase(ceAudio_.cachedWaveOutDevices().begin());
                 if (old.hostValue) winmm.waveOutClose(reinterpret_cast<HWAVEOUT>(old.hostValue));
             }
             ret = MMSYSERR_NOERROR;
@@ -610,10 +610,10 @@ bool SyntheticDllRuntime::handleWaveOutClose(SyntheticExportCode code, const Gue
         }
         const uint64_t elapsed = GetTickCount64() - start;
         spdlog::info("waveOutClose handle=0x{:08x} cached={} cacheSize={} -> {} elapsedMs={}",
-                     args.a0, state != waveOutStates_.end(), cachedWaveOutDevices_.size(), ret, elapsed);
+                     args.a0, state != ceAudio_.waveOutStates().end(), ceAudio_.cachedWaveOutDevices().size(), ret, elapsed);
         if (ret == MMSYSERR_NOERROR) {
             handle->hostValue = 0;
-            waveOutStates_.erase(args.a0);
+            ceAudio_.waveOutStates().erase(args.a0);
         }
     } else {
         ret = MMSYSERR_INVALHANDLE;
@@ -642,8 +642,8 @@ bool SyntheticDllRuntime::handleWaveOutReset(SyntheticExportCode code, const Gue
     clearHostAudioBackend(args.a0);
     if (winmm.waveOutReset) winmm.waveOutReset(reinterpret_cast<HWAVEOUT>(handle->hostValue));
     for (const CeAudio::Completion& completion : ceAudio_.resetStream(args.a0)) {
-        auto it = hostWaveBuffers_.find(completion.guestHeader);
-        if (it != hostWaveBuffers_.end()) {
+        auto it = ceAudio_.hostWaveBuffers().find(completion.guestHeader);
+        if (it != ceAudio_.hostWaveBuffers().end()) {
             auto* header = reinterpret_cast<WAVEHDR*>(it->second.header.data());
             header->dwFlags |= WHDR_DONE;
             header->dwFlags &= ~WHDR_INQUEUE;
@@ -678,7 +678,7 @@ bool SyntheticDllRuntime::handleWaveOutPrepareHeader(SyntheticExportCode code, c
     }
     spdlog::debug("waveOutPrepareHeader hdr=0x{:08x} data=0x{:08x} length={} user=0x{:08x} flags=0x{:08x}",
                   args.a1, guestData, guestLength, readU32(args.a1 + 12), guestFlags);
-    auto& stored = hostWaveBuffers_[args.a1];
+    auto& stored = ceAudio_.hostWaveBuffers()[args.a1];
     if (stored.data.size() != guestLength) stored.data.assign(guestLength, 0);
     uc_mem_read(uc_, guestData, stored.data.data(), stored.data.size());
     auto* header = reinterpret_cast<WAVEHDR*>(stored.header.data());
@@ -698,8 +698,8 @@ bool SyntheticDllRuntime::handleWaveOutUnprepareHeader(SyntheticExportCode code,
     (void)code;
     auto* handle = lookupGuestHandle(args.a0);
     auto& winmm = winmmBridge();
-    auto it = hostWaveBuffers_.find(args.a1);
-    if (!handle || handle->kind != GuestHandle::Kind::HostWaveOut || !handle->hostValue || it == hostWaveBuffers_.end() ||
+    auto it = ceAudio_.hostWaveBuffers().find(args.a1);
+    if (!handle || handle->kind != GuestHandle::Kind::HostWaveOut || !handle->hostValue || it == ceAudio_.hostWaveBuffers().end() ||
         !winmm.waveOutUnprepareHeader) {
         ret = MMSYSERR_INVALHANDLE;
         return true;
@@ -715,7 +715,7 @@ bool SyntheticDllRuntime::handleWaveOutUnprepareHeader(SyntheticExportCode code,
     writeU32(args.a1 + 16, uint32_t(header->dwFlags));
     spdlog::info("waveOutUnprepareHeader hdr=0x{:08x} flags=0x{:08x} -> {} elapsedMs={}",
                  args.a1, uint32_t(header->dwFlags), ret, elapsed);
-    if (ret == MMSYSERR_NOERROR) hostWaveBuffers_.erase(it);
+    if (ret == MMSYSERR_NOERROR) ceAudio_.hostWaveBuffers().erase(it);
     return true;
 }
 
@@ -737,8 +737,8 @@ bool SyntheticDllRuntime::handleWaveOutWrite(SyntheticExportCode code, const Gue
     const uint32_t guestUser = readU32(args.a1 + 12);
     spdlog::info("waveOutWrite hdr=0x{:08x} data=0x{:08x} length={} user=0x{:08x} flags=0x{:08x}",
                  args.a1, guestData, guestLength, guestUser, guestFlags);
-    const bool hadStoredHeader = hostWaveBuffers_.find(args.a1) != hostWaveBuffers_.end();
-    auto& stored = hostWaveBuffers_[args.a1];
+    const bool hadStoredHeader = ceAudio_.hostWaveBuffers().find(args.a1) != ceAudio_.hostWaveBuffers().end();
+    auto& stored = ceAudio_.hostWaveBuffers()[args.a1];
     if (stored.data.size() != guestLength) stored.data.assign(guestLength, 0);
     const bool readOk = uc_mem_read(uc_, guestData, stored.data.data(), stored.data.size()) == UC_ERR_OK;
     logPcmStats("waveOutWrite", guestData, stored.data, readOk);
@@ -758,14 +758,14 @@ bool SyntheticDllRuntime::handleWaveOutWrite(SyntheticExportCode code, const Gue
         header->dwUser = guestUser;
         header->dwLoops = readU32(args.a1 + 20);
     }
-    auto state = waveOutStates_.find(args.a0);
-    if (state != waveOutStates_.end() && (state->second.flags & CALLBACK_TYPEMASK) == CALLBACK_EVENT) {
+    auto state = ceAudio_.waveOutStates().find(args.a0);
+    if (state != ceAudio_.waveOutStates().end() && (state->second.flags & CALLBACK_TYPEMASK) == CALLBACK_EVENT) {
         auto* event = lookupGuestHandle(state->second.callback);
         if (event && event->kind == GuestHandle::Kind::HostEvent && event->hostValue) {
             event->eventSignaled = false;
             ResetEvent(reinterpret_cast<HANDLE>(event->hostValue));
         }
-    } else if (state != waveOutStates_.end() && (state->second.flags & CALLBACK_TYPEMASK) == CALLBACK_FUNCTION) {
+    } else if (state != ceAudio_.waveOutStates().end() && (state->second.flags & CALLBACK_TYPEMASK) == CALLBACK_FUNCTION) {
         auto* event = lookupGuestHandle(guestUser);
         if (event && event->kind == GuestHandle::Kind::HostEvent && event->hostValue) {
             event->eventSignaled = false;
@@ -779,12 +779,12 @@ bool SyntheticDllRuntime::handleWaveOutWrite(SyntheticExportCode code, const Gue
     header->dwFlags = (header->dwFlags & WHDR_PREPARED) | WHDR_INQUEUE | (guestFlags & ~(WHDR_DONE | WHDR_PREPARED | WHDR_INQUEUE));
     writeU32(args.a1 + 16, uint32_t(header->dwFlags));
     std::optional<CeAudio::QueueResult> queued;
-    if (readOk && state != waveOutStates_.end()) {
+    if (readOk && state != ceAudio_.waveOutStates().end()) {
         queued = ceAudio_.queueBuffer(args.a0, args.a1, guestUser, stored.data, GetTickCount64());
     }
     const uint32_t doneBefore = g_waveOutDoneCallbacks.load(std::memory_order_relaxed);
     const uint64_t start = GetTickCount64();
-    if (readOk && state != waveOutStates_.end()) {
+    if (readOk && state != ceAudio_.waveOutStates().end()) {
         queueHostAudioBackend(args.a0,
                               handle->hostValue,
                               stored.data,
@@ -793,8 +793,8 @@ bool SyntheticDllRuntime::handleWaveOutWrite(SyntheticExportCode code, const Gue
     }
     const MMRESULT hostRet = readOk ? MMSYSERR_NOERROR : MMSYSERR_ERROR;
     const uint64_t elapsed = GetTickCount64() - start;
-    const uint32_t callbackMode = state == waveOutStates_.end() ? CALLBACK_NULL : (state->second.flags & CALLBACK_TYPEMASK);
-    const uint32_t durationMs = state != waveOutStates_.end() && state->second.avgBytesPerSec
+    const uint32_t callbackMode = state == ceAudio_.waveOutStates().end() ? CALLBACK_NULL : (state->second.flags & CALLBACK_TYPEMASK);
+    const uint32_t durationMs = state != ceAudio_.waveOutStates().end() && state->second.avgBytesPerSec
         ? uint32_t((uint64_t(guestLength) * 1000u) / state->second.avgBytesPerSec)
         : 0;
     ret = queued ? MMSYSERR_NOERROR : hostRet;

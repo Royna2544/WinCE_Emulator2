@@ -495,6 +495,11 @@ results, or timing thresholds.
   - [x] Move legacy host wave-buffer, host audio backend chunk, guest waveOut
     state, and cached waveOut device type definitions into `CeAudio`, keeping
     runtime aliases and storage unchanged for this buildable step.
+  - [x] Move host wave-buffer storage, guest waveOut state, cached host
+    waveOut devices, and the host WinMM backend queue/thread state behind
+    `CeAudio` while preserving the existing ABI/runtime call paths.
+    Current source anchors: `src/ce_audio.h`,
+    `src/coredll_host_audio.cpp`, and `src/synthetic_dll.cpp`.
 - [ ] Move remote touch/key/audio/serial queues into a remote endpoint state
   helper so `remote_server.cpp` no longer reaches through runtime internals.
   - [x] Add `CeRemote` and move legacy remote touch/key/audio chunk type

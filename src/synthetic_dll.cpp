@@ -680,8 +680,8 @@ uint32_t SyntheticDllRuntime::closeGuestHandle(uint32_t guestHandle) {
     } else if (it->second.kind == GuestHandle::Kind::HostWaveOut) {
         clearHostAudioBackend(guestHandle);
         ceAudio_.closeStream(guestHandle);
-        waveOutStates_.erase(guestHandle);
-        hostWaveBuffers_.clear();
+        ceAudio_.waveOutStates().erase(guestHandle);
+        ceAudio_.hostWaveBuffers().clear();
     } else if (it->second.kind == GuestHandle::Kind::GuestFileMapping) {
         const bool hasMappedView = std::any_of(mappedViews_.begin(), mappedViews_.end(),
                                                [&](const auto& entry) {

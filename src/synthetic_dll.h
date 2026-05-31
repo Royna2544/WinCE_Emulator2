@@ -647,14 +647,6 @@ private:
     std::unordered_map<uint32_t, GuestBitmap> bitmaps_;
     std::unordered_map<int32_t, uint32_t> stockObjects_;
     GuestProcessLauncher guestProcessLauncher_;
-    std::map<uint32_t, HostWaveBuffer> hostWaveBuffers_;
-    std::map<uint32_t, GuestWaveOutState> waveOutStates_;
-    std::vector<CachedWaveOutDevice> cachedWaveOutDevices_;
-    std::mutex hostAudioBackendMutex_;
-    std::condition_variable hostAudioBackendCv_;
-    std::thread hostAudioBackendThread_;
-    std::deque<HostAudioBackendChunk> hostAudioBackendChunks_;
-    bool hostAudioBackendStop_{};
     RemoteServerConfig remoteConfig_;
     std::unique_ptr<RemoteServerHandle, RemoteServerHandleDeleter> remoteServer_;
     std::map<uint32_t, std::string> registryHandles_;
