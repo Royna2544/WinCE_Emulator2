@@ -464,10 +464,11 @@ results, or timing thresholds.
   guest-visible state into CE-shaped owners. Current source anchors:
   `src/synthetic_dll.h`, `src/synthetic_dll.cpp`, and
   `src/synthetic_dll_modules.cpp`.
-- [ ] Add a small handle-storage layer for emulator-owned dense handles while
+- [x] Add a small handle-storage layer for emulator-owned dense handles while
   preserving guest-visible handle values. Use sparse maps only for externally
   supplied keys such as guest addresses, module bases, filesystem paths, and
   imported cross-process handles.
+  Current source anchor: `src/ce_slot_table.h`.
 - [ ] Flatten synthetic ordinal dispatch into per-DLL ordinal-indexed handler
   tables so the hot path is `PC -> ExportEntry -> handler`, while preserving
   SDK ordinal metadata and unknown-ordinal logging.
@@ -480,12 +481,16 @@ results, or timing thresholds.
   cursor behind `CeAudio`; host WinMM and websocket remain backing services.
 - [ ] Move remote touch/key/audio/serial queues into a remote endpoint state
   helper so `remote_server.cpp` no longer reaches through runtime internals.
-- [ ] Add a `CrossProcessBroker` owner for companion window registry paths,
+- [x] Add a `CrossProcessBroker` owner for companion window registry paths,
   imported external HWNDs, cross-process message queue transport, and shared
   mapping backing files.
-- [ ] Add a `RuntimeDiagnostics` owner for rate-limited logs, dump flags,
+  Current source anchors: `src/cross_process_broker.h` and
+  `src/cross_process_broker.cpp`.
+- [x] Add a `RuntimeDiagnostics` owner for rate-limited logs, dump flags,
   message latency watchdogs, route/search timing, GWE owner queue summaries,
   and host-present/mapping-sync counters.
+  Current source anchors: `src/runtime_diagnostics.h` and
+  `src/runtime_diagnostics.cpp`.
 - [ ] Fold the current search-freeze investigation into the new ownership
   shape: track received sent-message depth separately from posted/input/paint
   queues, keep plain waits from pumping posted/paint, and diagnose the known

@@ -189,6 +189,14 @@ Current emulator difference:
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp:2370`. The
   2026-05-31 Release build passed with the existing Boost Beast warning after
   this change.
+- `SyntheticDllRuntime` header decomposition now has build-only scaffolding
+  for the next ownership moves: `CeSlotTable` for dense emulator-owned handle
+  storage, `OrdinalDispatchTable` for ordinal-indexed handler tables,
+  `CrossProcessBroker` for companion/window/message/shared-mapping transport
+  state, and `RuntimeDiagnostics` for rate-limited counters/logging. These
+  scaffolds are wired into `iNavi_Unicorn_Emulator.vcxproj` without changing
+  runtime behavior. The 2026-05-31 Release build passed with the existing
+  vcpkg duplicate-import warning.
 - A follow-up live report showed the startup safety/fullscreen surface could
   visually overlap with the bottom strip again: stale fullscreen-popup pixels
   remained while exposed owner/child UI repainted. Log evidence from Debug run

@@ -71,6 +71,7 @@
     <ClCompile Include="src\ce_gwe.cpp" />
     <ClCompile Include="src\ce_kernel.cpp" />
     <ClCompile Include="src\ce_mgdi.cpp" />
+    <ClCompile Include="src\cross_process_broker.cpp" />
     <ClCompile Include="src\coredll_bitmap.cpp" />
     <ClCompile Include="src\coredll_host_audio.cpp" />
     <ClCompile Include="src\coredll_comm.cpp" />
@@ -96,6 +97,7 @@
     <ClCompile Include="src\coredll_window_runtime.cpp" />
     <ClCompile Include="src\main.cpp" />
     <ClCompile Include="src\remote_server.cpp" />
+    <ClCompile Include="src\runtime_diagnostics.cpp" />
     <ClCompile Include="src\synthetic_dll_commctrl.cpp" />
     <ClCompile Include="src\synthetic_dll.cpp" />
     <ClCompile Include="src\synthetic_dll_modules.cpp" />
@@ -109,6 +111,10 @@
     <ClInclude Include="src\ce_gwe.h" />
     <ClInclude Include="src\ce_kernel.h" />
     <ClInclude Include="src\ce_mgdi.h" />
+    <ClInclude Include="src\ce_slot_table.h" />
+    <ClInclude Include="src\cross_process_broker.h" />
+    <ClInclude Include="src\ordinal_dispatch_table.h" />
+    <ClInclude Include="src\runtime_diagnostics.h" />
     <ClInclude Include="src\synthetic_dll.h" />
     <ClInclude Include="third_party\NVIDIAImageScaling\NIS\NIS_Config.h" />
     <ClInclude Include="third_party\NVIDIAImageScaling\NIS\NIS_Scaler.h" />
