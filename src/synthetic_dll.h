@@ -9,6 +9,7 @@
 #include "ce_ipc.h"
 #include "ce_kernel.h"
 #include "ce_mgdi.h"
+#include "ce_registry.h"
 #include "ce_remote.h"
 #include "cross_process_broker.h"
 #include "ordinal_dispatch_table.h"
@@ -571,6 +572,7 @@ private:
     CeGwe ceGwe_;
     CeIpc ceIpc_;
     CeMgdi ceMgdi_;
+    CeRegistry ceRegistry_;
     CeRemote ceRemote_;
     CrossProcessBroker crossProcessBroker_;
     RuntimeDiagnostics diagnostics_;
@@ -618,7 +620,6 @@ private:
     GuestProcessLauncher guestProcessLauncher_;
     RemoteServerConfig remoteConfig_;
     std::unique_ptr<RemoteServerHandle, RemoteServerHandleDeleter> remoteServer_;
-    std::map<uint32_t, std::string> registryHandles_;
     std::vector<PendingBlockingApi> pendingBlockingApis_;
     bool interactiveSliceActive_{};
     bool interactiveSliceStopRequested_{};
@@ -657,9 +658,6 @@ private:
     bool splashTopBlitDumped_{};
     bool splashBottomBlitDumped_{};
     bool splashFramebufferDumped_{};
-    std::filesystem::path registryPath_;
-    nlohmann::json registry_;
-    bool registryDirty_{};
     std::filesystem::path serialDeviceMapPath_;
     std::map<std::string, SerialDeviceConfig> serialDevicesByGuest_;
     uint32_t defaultSerialBaud_{9600};

@@ -255,6 +255,13 @@ Current emulator difference:
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_crt.cpp`, and
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_comm.cpp`. The 2026-05-31
   Release build passed with the existing vcpkg/Boost warnings.
+- `CeRegistry` now owns the registry JSON database, registry path, dirty flag,
+  and open registry-key handle map. `RegCreateKeyExW`, `RegOpenKeyExW`,
+  `RegQueryValueExW`, `RegSetValueExW`, and registry flushing still use the
+  same behavior through CeRegistry accessors. Current source anchors:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_registry.h` and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_registry.cpp`. The 2026-05-31
+  Release build passed with the existing vcpkg/Boost warnings.
 - Legacy runtime type definitions for windows, timers, pending GWE
   continuations, DCs, bitmaps, brushes, pens, fonts, and bitmap probe stats now
   live in `CeGwe`/`CeMgdi` with `SyntheticDllRuntime` keeping aliases and the

@@ -663,7 +663,7 @@ uint32_t SyntheticDllRuntime::closeGuestHandle(uint32_t guestHandle) {
     } else if (it->second.kind == GuestHandle::Kind::GuestFont) {
         ceMgdi_.fonts().erase(guestHandle);
     } else if (it->second.kind == GuestHandle::Kind::GuestRegistryKey) {
-        registryHandles_.erase(guestHandle);
+        ceRegistry_.handles().erase(guestHandle);
     } else if (it->second.kind == GuestHandle::Kind::HostFile ||
                it->second.kind == GuestHandle::Kind::HostSerialDevice ||
                it->second.kind == GuestHandle::Kind::GuestSerialDevice) {

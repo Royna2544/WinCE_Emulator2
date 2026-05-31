@@ -235,49 +235,49 @@ uint32_t registryTypeId(const nlohmann::json& value) {
 } // namespace
 
 void SyntheticDllRuntime::setRegistryPath(const std::filesystem::path& path) {
-    registryPath_ = path;
-    registry_ = nlohmann::json::object();
-    if (!registryPath_.empty()) {
-        std::ifstream input(registryPath_);
+    ceRegistry_.path() = path;
+    ceRegistry_.database() = nlohmann::json::object();
+    if (!ceRegistry_.path().empty()) {
+        std::ifstream input(ceRegistry_.path());
         if (input) {
             try {
-                input >> registry_;
+                input >> ceRegistry_.database();
             } catch (const std::exception& e) {
-                spdlog::warn("failed to parse registry database {}: {}", pathToUtf8(registryPath_), e.what());
-                registry_ = nlohmann::json::object();
+                spdlog::warn("failed to parse registry database {}: {}", pathToUtf8(ceRegistry_.path()), e.what());
+                ceRegistry_.database() = nlohmann::json::object();
             }
         }
     }
-    if (!registry_.is_object()) registry_ = nlohmann::json::object();
-    if (!registry_.contains("version")) registry_["version"] = 1;
-    normalizeRegistryDatabase(registry_);
+    if (!ceRegistry_.database().is_object()) ceRegistry_.database() = nlohmann::json::object();
+    if (!ceRegistry_.database().contains("version")) ceRegistry_.database()["version"] = 1;
+    normalizeRegistryDatabase(ceRegistry_.database());
     registryEnsureKey("hkcr");
     registryEnsureKey("hkcu");
     registryEnsureKey("hklm");
     registryEnsureKey("hku");
-    registryDirty_ = false;
-    if (!registryPath_.empty()) spdlog::info("registry database: {}", pathToUtf8(registryPath_));
+    ceRegistry_.dirty() = false;
+    if (!ceRegistry_.path().empty()) spdlog::info("registry database: {}", pathToUtf8(ceRegistry_.path()));
 }
 
 void SyntheticDllRuntime::flushRegistry() {
-    if (registryPath_.empty() || !registryDirty_) return;
-    if (!registryPath_.parent_path().empty()) std::filesystem::create_directories(registryPath_.parent_path());
-    std::ofstream output(registryPath_, std::ios::binary | std::ios::trunc);
+    if (ceRegistry_.path().empty() || !ceRegistry_.dirty()) return;
+    if (!ceRegistry_.path().parent_path().empty()) std::filesystem::create_directories(ceRegistry_.path().parent_path());
+    std::ofstream output(ceRegistry_.path(), std::ios::binary | std::ios::trunc);
     if (!output) {
-        spdlog::warn("failed to write registry database {}", pathToUtf8(registryPath_));
+        spdlog::warn("failed to write registry database {}", pathToUtf8(ceRegistry_.path()));
         return;
     }
-    output << registry_.dump(2);
-    registryDirty_ = false;
+    output << ceRegistry_.database().dump(2);
+    ceRegistry_.dirty() = false;
 }
 
 std::optional<std::string> SyntheticDllRuntime::registryPathFromHandle(uint32_t hkey, const std::string& subKey) const {
     std::string base = registryRootName(hkey);
     if (base.empty()) {
         auto handle = ceKernel_.handles().find(hkey);
-        auto path = registryHandles_.find(hkey);
+        auto path = ceRegistry_.handles().find(hkey);
         if (handle == ceKernel_.handles().end() || handle->second.kind != GuestHandle::Kind::GuestRegistryKey ||
-            path == registryHandles_.end()) {
+            path == ceRegistry_.handles().end()) {
             return std::nullopt;
         }
         base = path->second;
@@ -287,32 +287,32 @@ std::optional<std::string> SyntheticDllRuntime::registryPathFromHandle(uint32_t 
 }
 
 bool SyntheticDllRuntime::registryKeyExists(const std::string& path) const {
-    const auto keys = registry_.find("keys");
-    return keys != registry_.end() && keys->is_object() && keys->contains(path);
+    const auto keys = ceRegistry_.database().find("keys");
+    return keys != ceRegistry_.database().end() && keys->is_object() && keys->contains(path);
 }
 
 void SyntheticDllRuntime::registryEnsureKey(const std::string& path) {
-    if (!registry_.contains("keys") || !registry_["keys"].is_object()) registry_["keys"] = nlohmann::json::object();
-    auto& keys = registry_["keys"];
+    if (!ceRegistry_.database().contains("keys") || !ceRegistry_.database()["keys"].is_object()) ceRegistry_.database()["keys"] = nlohmann::json::object();
+    auto& keys = ceRegistry_.database()["keys"];
     if (!keys.contains(path) || !keys[path].is_object()) {
         keys[path] = nlohmann::json{{"values", nlohmann::json::object()}};
-        registryDirty_ = true;
+        ceRegistry_.dirty() = true;
     } else if (!keys[path].contains("values") || !keys[path]["values"].is_object()) {
         keys[path]["values"] = nlohmann::json::object();
-        registryDirty_ = true;
+        ceRegistry_.dirty() = true;
     }
 }
 
 uint32_t SyntheticDllRuntime::makeRegistryHandle(const std::string& path) {
     const uint32_t handle = makeGuestHandle({GuestHandle::Kind::GuestRegistryKey, 0, 0});
-    registryHandles_[handle] = path;
+    ceRegistry_.handles()[handle] = path;
     return handle;
 }
 
 std::vector<std::string> SyntheticDllRuntime::registryChildNames(const std::string& path) const {
     std::set<std::string> names;
-    const auto keys = registry_.find("keys");
-    if (keys == registry_.end() || !keys->is_object()) return {};
+    const auto keys = ceRegistry_.database().find("keys");
+    if (keys == ceRegistry_.database().end() || !keys->is_object()) return {};
     const std::string prefix = path + "\\";
     for (auto it = keys->begin(); it != keys->end(); ++it) {
         const std::string key = it.key();
@@ -327,14 +327,14 @@ std::vector<std::string> SyntheticDllRuntime::registryChildNames(const std::stri
 
 nlohmann::json* SyntheticDllRuntime::registryValue(const std::string& path, const std::string& valueName) {
     if (!registryKeyExists(path)) return nullptr;
-    auto& values = registry_["keys"][path]["values"];
+    auto& values = ceRegistry_.database()["keys"][path]["values"];
     const std::string key = normalizeRegistryValueName(valueName);
     return values.contains(key) ? &values[key] : nullptr;
 }
 
 const nlohmann::json* SyntheticDllRuntime::registryValue(const std::string& path, const std::string& valueName) const {
-    const auto keys = registry_.find("keys");
-    if (keys == registry_.end() || !keys->is_object() || !keys->contains(path)) return nullptr;
+    const auto keys = ceRegistry_.database().find("keys");
+    if (keys == ceRegistry_.database().end() || !keys->is_object() || !keys->contains(path)) return nullptr;
     const auto values = (*keys)[path].find("values");
     if (values == (*keys)[path].end() || !values->is_object()) return nullptr;
     const std::string key = normalizeRegistryValueName(valueName);
@@ -436,7 +436,7 @@ uint32_t SyntheticDllRuntime::handleRegEnumValueW(uint32_t hkey, uint32_t index,
     const auto path = registryPathFromHandle(hkey, {});
     if (!path || !registryKeyExists(*path) || !valueNamePtr || !valueNameSizePtr) return 87;
 
-    auto& values = registry_["keys"][*path]["values"];
+    auto& values = ceRegistry_.database()["keys"][*path]["values"];
     if (index >= values.size()) return 259;
 
     auto it = values.begin();
@@ -581,9 +581,9 @@ bool SyntheticDllRuntime::handleRegSetValueExW(SyntheticExportCode code, const G
                      args.a0, readUtf16(args.a1, 1024), ret);
     } else {
         const std::string valueName = normalizeRegistryValueName(readUtf16(args.a1, 1024));
-        registry_["keys"][*path]["values"][valueName] =
+        ceRegistry_.database()["keys"][*path]["values"][valueName] =
             registryJsonFromBytes(args.a3, stackArg(4), stackArg(5));
-        registryDirty_ = true;
+        ceRegistry_.dirty() = true;
         flushRegistry();
         ret = 0;
         spdlog::info("RegSetValueExW path=\"{}\" value=\"{}\" type={} size={} -> {}",
@@ -599,10 +599,10 @@ bool SyntheticDllRuntime::handleRegDeleteValueW(SyntheticExportCode code, const 
         ret = 6;
     } else {
         const std::string valueName = normalizeRegistryValueName(readUtf16(args.a1, 1024));
-        auto& values = registry_["keys"][*path]["values"];
+        auto& values = ceRegistry_.database()["keys"][*path]["values"];
         ret = values.erase(valueName) ? 0 : 2;
         if (!ret) {
-            registryDirty_ = true;
+            ceRegistry_.dirty() = true;
             flushRegistry();
         }
     }
@@ -616,11 +616,11 @@ bool SyntheticDllRuntime::handleRegDeleteKeyW(SyntheticExportCode code, const Gu
         ret = 2;
     } else {
         std::vector<std::string> doomed;
-        for (auto it = registry_["keys"].begin(); it != registry_["keys"].end(); ++it) {
+        for (auto it = ceRegistry_.database()["keys"].begin(); it != ceRegistry_.database()["keys"].end(); ++it) {
             if (it.key() == *path || it.key().rfind(*path + "\\", 0) == 0) doomed.push_back(it.key());
         }
-        for (const auto& key : doomed) registry_["keys"].erase(key);
-        registryDirty_ = true;
+        for (const auto& key : doomed) ceRegistry_.database()["keys"].erase(key);
+        ceRegistry_.dirty() = true;
         flushRegistry();
         ret = 0;
     }
@@ -660,7 +660,7 @@ bool SyntheticDllRuntime::handleRegQueryInfoKeyW(SyntheticExportCode code, const
     if (!path || !registryKeyExists(*path)) ret = 6;
     else {
         const auto children = registryChildNames(*path);
-        const auto& values = registry_["keys"][*path]["values"];
+        const auto& values = ceRegistry_.database()["keys"][*path]["values"];
         if (stackArg(4)) writeU32(stackArg(4), uint32_t(children.size()));
         if (stackArg(6)) writeU32(stackArg(6), uint32_t(values.size()));
         ret = 0;
@@ -679,7 +679,7 @@ bool SyntheticDllRuntime::handleRegFlushKey(SyntheticExportCode code, const Gues
 bool SyntheticDllRuntime::handleRegCloseKey(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {
     (void)code;
     if (registryRootName(args.a0).empty()) {
-        registryHandles_.erase(args.a0);
+        ceRegistry_.handles().erase(args.a0);
         ceKernel_.handles().erase(args.a0);
     }
     ret = 0;

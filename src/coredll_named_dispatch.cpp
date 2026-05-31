@@ -1988,9 +1988,9 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                     childArgs.emplace_back(L"--sdmmc-path");
                     childArgs.push_back(std::filesystem::absolute(sdmmcHostRoot_).wstring());
                 }
-                if (!registryPath_.empty()) {
+                if (!ceRegistry_.path().empty()) {
                     childArgs.emplace_back(L"--registry");
-                    childArgs.push_back(std::filesystem::absolute(registryPath_).wstring());
+                    childArgs.push_back(std::filesystem::absolute(ceRegistry_.path()).wstring());
                 }
                 if (!serialDeviceMapPath_.empty()) {
                     childArgs.emplace_back(L"--serial-map");

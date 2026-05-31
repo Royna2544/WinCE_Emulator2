@@ -540,6 +540,10 @@ results, or timing thresholds.
   file API behavior.
   Current source anchors: `src/ce_filesystem.h`, `src/coredll_fs.cpp`,
   `src/coredll_crt.cpp`, and `src/coredll_comm.cpp`.
+- [x] Add a `CeRegistry` owner for the registry JSON database, registry path,
+  dirty flag, and open registry-key handle map while preserving current
+  coredll registry API behavior.
+  Current source anchors: `src/ce_registry.h` and `src/coredll_registry.cpp`.
 - [x] Add a `RuntimeDiagnostics` owner for rate-limited logs, dump flags,
   message latency watchdogs, route/search timing, GWE owner queue summaries,
   and host-present/mapping-sync counters.
