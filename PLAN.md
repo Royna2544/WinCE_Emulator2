@@ -492,6 +492,9 @@ results, or timing thresholds.
     for this buildable step.
 - [ ] Move wave-output state, host backend queue state, and live websocket tap
   cursor behind `CeAudio`; host WinMM and websocket remain backing services.
+  - [x] Move legacy host wave-buffer, host audio backend chunk, guest waveOut
+    state, and cached waveOut device type definitions into `CeAudio`, keeping
+    runtime aliases and storage unchanged for this buildable step.
 - [ ] Move remote touch/key/audio/serial queues into a remote endpoint state
   helper so `remote_server.cpp` no longer reaches through runtime internals.
 - [x] Add a `CrossProcessBroker` owner for companion window registry paths,

@@ -1,10 +1,12 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <deque>
 #include <map>
 #include <mutex>
 #include <optional>
+#include <memory>
 #include <string_view>
 #include <vector>
 
@@ -46,6 +48,48 @@ public:
         Format format;
         uint64_t startMs{};
         uint32_t durationMs{};
+    };
+
+    struct HostWaveBuffer {
+        std::vector<uint8_t> data;
+        std::array<uint8_t, 64> header{};
+        std::shared_ptr<void> completionContext;
+    };
+
+    struct HostAudioBackendChunk {
+        uint32_t guestHandle{};
+        uintptr_t hostValue{};
+        std::vector<uint8_t> pcm;
+        uint32_t avgBytesPerSec{};
+        uint16_t blockAlign{};
+    };
+
+    struct GuestWaveOutState {
+        uint32_t callback{};
+        uint32_t instance{};
+        uint32_t flags{};
+        uint32_t avgBytesPerSec{};
+        uint32_t deviceId{};
+        uint32_t hostFlags{};
+        uintptr_t hostCallback{};
+        uint16_t formatTag{};
+        uint16_t channels{};
+        uint32_t samplesPerSec{};
+        uint16_t blockAlign{};
+        uint16_t bitsPerSample{};
+    };
+
+    struct CachedWaveOutDevice {
+        uintptr_t hostValue{};
+        uint32_t deviceId{};
+        uint32_t hostFlags{};
+        uintptr_t hostCallback{};
+        uint16_t formatTag{};
+        uint16_t channels{};
+        uint32_t samplesPerSec{};
+        uint32_t avgBytesPerSec{};
+        uint16_t blockAlign{};
+        uint16_t bitsPerSample{};
     };
 
     static constexpr std::string_view name() noexcept { return "CE audio stream"; }

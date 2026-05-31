@@ -246,6 +246,12 @@ Current emulator difference:
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.h`. The first Release
   build caught a missing `<string>` include in `ce_gwe.h`; after fixing that,
   the 2026-05-31 Release build passed with only the existing vcpkg warning.
+- Legacy host-audio and guest waveOut type definitions now live in `CeAudio`
+  with `SyntheticDllRuntime` keeping aliases and the existing storage for this
+  behavior-preserving step. Current source anchors:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_audio.h` and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.h`. The 2026-05-31
+  Release build passed with the existing vcpkg/Boost warnings.
 - A follow-up live report showed the startup safety/fullscreen surface could
   visually overlap with the bottom strip again: stale fullscreen-popup pixels
   remained while exposed owner/child UI repainted. Log evidence from Debug run
