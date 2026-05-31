@@ -46,10 +46,14 @@ Active refactor checklist: `PLAN.md`.
      found a separate short-click wait priority issue: the `0x5734` menu
      command was posted, then a 91 ms `waveOutWrite` completion event resumed
      about 4.35 s later because cooperative paint/timer dispatch ran before
-     wait-object re-probing. The continuation order is fixed in source; next
-     live validation should click the same menu path and confirm the click
-     event wait resumes near its virtual duration and the UI action is not
-     hidden behind audio/event waiting.
+     wait-object re-probing. The continuation order is fixed in source. A
+     later scheduler fix also avoids double-probing auto-reset host events
+     while completing parked main-thread waits; Debug run
+     `captures/inavi_autodrive_20260531_123407` confirmed the long startup
+     audio wait completed on the virtual timeline. Next live validation should
+     click the same menu path and confirm the short click event wait resumes
+     near its virtual duration and the UI action is not hidden behind
+     audio/event waiting.
 
 1. Finish virtual serial wait semantics and scheduler responsiveness.
    - CE reference:

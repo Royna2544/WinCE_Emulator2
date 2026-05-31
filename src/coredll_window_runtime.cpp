@@ -1080,6 +1080,7 @@ void SyntheticDllRuntime::queueGuestPaint(uint32_t hwnd, bool erase) {
             eraseMessage.hwnd = hwnd;
             eraseMessage.message = kGuestWmEraseBkgnd;
             eraseMessage.wParam = makeGuestDc(hwnd);
+            applyPaintUpdateClip(hwnd, eraseMessage.wParam);
             eraseMessage.time = uint32_t(++tick_ * 16);
             ceGwe_.postPostedMessage(eraseMessage);
         }
@@ -2059,6 +2060,15 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
         uc_reg_read(uc_, UC_MIPS_REG_PC, &pc);
         uc_reg_read(uc_, UC_MIPS_REG_RA, &ra);
         if ((!pc || !isGuestRangeReadable(pc, 4)) && !ceKernel_.activeGuestThread()) {
+            if (!pendingBlockingApis_.empty()) {
+                if (completeReadyPendingBlockingMainContinuation("invalid-pc-ready")) {
+                    uc_reg_read(uc_, UC_MIPS_REG_PC, &pc);
+                    uc_reg_read(uc_, UC_MIPS_REG_RA, &ra);
+                } else {
+                    pumpHostMessages();
+                    return true;
+                }
+            }
             if (restoreMainThreadContextIfRunnable(reason)) {
                 uc_reg_read(uc_, UC_MIPS_REG_PC, &pc);
                 uc_reg_read(uc_, UC_MIPS_REG_RA, &ra);
@@ -2248,6 +2258,19 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
         spdlog::info("guest scheduler diag where={} active=0x{:08x} queued={} timers={} threads=[{}]",
                      where, ceKernel_.activeGuestThread(), ceGwe_.messageCount(), timers_.size(), threads.str());
     };
+    auto resumeReadyBlockingMain = [&]() -> bool {
+        if (ceKernel_.activeGuestThread() ||
+            pendingBlockingApis_.empty()) {
+            return false;
+        }
+        if (!completeReadyPendingBlockingMainContinuation("blocking-main-ready")) {
+            return false;
+        }
+        if (!resumeGuestSlice(250000, "blocking-main-ready")) {
+            return false;
+        }
+        return true;
+    };
     auto resumeQueuedWorkerBurst = [&]() -> bool {
         if (!ceGwe_.hasMessages() || !hasHostWindows() ||
             hasPendingUserInput() || hasPendingSynchronousMessage() ||
@@ -2282,6 +2305,9 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
     };
     while (hasHostWindows()) {
         drainRemoteInputEvents();
+        if (resumeReadyBlockingMain()) {
+            continue;
+        }
         bool remotePaused = false;
         {
             std::lock_guard<std::mutex> lock(remoteMutex_);
@@ -2295,6 +2321,9 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
         }
         pollCrossProcessGuestMessages();
         enqueueDueTimers();
+        if (resumeReadyBlockingMain()) {
+            continue;
+        }
         if (ceGwe_.hasMessages()) {
             beginHostUiBatchPresentDeferral();
         }

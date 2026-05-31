@@ -1,5 +1,6 @@
 #include "synthetic_dll.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdlib>
 #include <vector>
@@ -45,6 +46,7 @@ bool SyntheticDllRuntime::handleBeginPaint(SyntheticExportCode code, const Guest
         ret = 0;
     } else {
         ret = makeGuestDc(args.a0);
+        applyPaintUpdateClip(args.a0, ret);
         if (args.a1) {
             std::array<uint8_t, 64> paint{};
             uc_mem_write(uc_, args.a1, paint.data(), paint.size());
@@ -83,6 +85,27 @@ bool SyntheticDllRuntime::handleEndPaint(SyntheticExportCode code, const GuestCa
         presentHostWindows(false);
     }
     return true;
+}
+
+void SyntheticDllRuntime::applyPaintUpdateClip(uint32_t hwnd, uint32_t hdc) {
+    if (!hwnd || !hdc) return;
+    const CeGwe::WindowRegionState* region = ceGwe_.windowRegionState(hwnd);
+    if (!region || !region->hasClientUpdateRegion) return;
+
+    const auto [originX, originY] = guestWindowOrigin(hwnd);
+    CeMgdi::Rect clip{
+        originX + region->clientUpdateRect.left,
+        originY + region->clientUpdateRect.top,
+        originX + region->clientUpdateRect.right,
+        originY + region->clientUpdateRect.bottom,
+    };
+    if (const auto visible = ceGwe_.visibleRectForWindow(hwnd)) {
+        clip.left = std::max<int32_t>(clip.left, visible->left);
+        clip.top = std::max<int32_t>(clip.top, visible->top);
+        clip.right = std::min<int32_t>(clip.right, visible->right);
+        clip.bottom = std::min<int32_t>(clip.bottom, visible->bottom);
+    }
+    ceMgdi_.setSystemClip(hdc, clip);
 }
 
 bool SyntheticDllRuntime::handleGetDC(SyntheticExportCode code, const GuestCallArgs& args, uint32_t& ret) {

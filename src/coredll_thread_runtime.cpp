@@ -417,6 +417,102 @@ bool SyntheticDllRuntime::restoreMainThreadContextIfRunnable(const char* reason)
     return false;
 }
 
+bool SyntheticDllRuntime::hasReadyPendingBlockingMainContinuation() {
+    if (pendingBlockingApis_.empty() || !ceKernel_.mainThreadContext().valid) return false;
+
+    const PendingBlockingApi& pending = pendingBlockingApis_.back();
+    constexpr uint16_t kSleepOrdinal = 0x01f0;
+    constexpr uint16_t kWaitForSingleObjectOrdinal = 0x01f1;
+    constexpr uint32_t kInfiniteTimeout = 0xffffffffu;
+
+    if (pending.ordinal == kSleepOrdinal) {
+        return pending.deadlineMs && hostTickMilliseconds() >= pending.deadlineMs;
+    }
+
+    if (pending.ordinal != kWaitForSingleObjectOrdinal) return false;
+
+#if defined(_WIN32)
+    auto hostWaitProbe = [](const GuestHandle& handle) {
+        const DWORD wait = ::WaitForSingleObject(reinterpret_cast<HANDLE>(handle.hostValue), 0);
+        if (wait == WAIT_OBJECT_0) return CeKernel::HostWaitResult{true, false, 0};
+        if (wait == WAIT_TIMEOUT) return CeKernel::HostWaitResult{false, false, 0};
+        return CeKernel::HostWaitResult{false, true, GetLastError()};
+    };
+#else
+    CeKernel::HostWaitProbe hostWaitProbe;
+#endif
+    refreshCompletedHostWaveBuffers();
+    const CeKernel::WaitQueryResult wait =
+        ceKernel_.queryWaitObject(pending.args.a0, hostWaitProbe, true);
+    if (wait.result != CeKernel::kWaitTimeout) return true;
+    return pending.args.a1 != kInfiniteTimeout &&
+           pending.deadlineMs &&
+           hostTickMilliseconds() >= pending.deadlineMs;
+}
+
+bool SyntheticDllRuntime::completeReadyPendingBlockingMainContinuation(const char* reason) {
+    if (pendingBlockingApis_.empty() || !ceKernel_.mainThreadContext().valid) return false;
+
+    PendingBlockingApi pending = pendingBlockingApis_.back();
+    constexpr uint16_t kSleepOrdinal = 0x01f0;
+    constexpr uint16_t kWaitForSingleObjectOrdinal = 0x01f1;
+    constexpr uint32_t kInfiniteTimeout = 0xffffffffu;
+    uint32_t ret = 0;
+    uint32_t error = 0;
+
+    if (pending.ordinal == kSleepOrdinal) {
+        if (!pending.deadlineMs || hostTickMilliseconds() < pending.deadlineMs) return false;
+    } else if (pending.ordinal == kWaitForSingleObjectOrdinal) {
+#if defined(_WIN32)
+        auto hostWaitProbe = [](const GuestHandle& handle) {
+            const DWORD wait = ::WaitForSingleObject(reinterpret_cast<HANDLE>(handle.hostValue), 0);
+            if (wait == WAIT_OBJECT_0) return CeKernel::HostWaitResult{true, false, 0};
+            if (wait == WAIT_TIMEOUT) return CeKernel::HostWaitResult{false, false, 0};
+            return CeKernel::HostWaitResult{false, true, GetLastError()};
+        };
+#else
+        CeKernel::HostWaitProbe hostWaitProbe;
+#endif
+        refreshCompletedHostWaveBuffers();
+        const CeKernel::WaitQueryResult wait =
+            ceKernel_.queryWaitObject(pending.args.a0, hostWaitProbe, true);
+        ret = wait.result;
+        error = wait.error;
+        const bool finiteExpired =
+            pending.deadlineMs && hostTickMilliseconds() >= pending.deadlineMs;
+        if (ret == CeKernel::kWaitTimeout &&
+            pending.args.a1 != 0 &&
+            pending.args.a1 != kInfiniteTimeout &&
+            !finiteExpired) {
+            return false;
+        }
+        if (ret == CeKernel::kWaitTimeout && pending.args.a1 == kInfiniteTimeout) {
+            return false;
+        }
+    } else {
+        return false;
+    }
+
+    pendingBlockingApis_.pop_back();
+    updateCurrentThreadKData(ceKernel_.mainThreadPseudoHandle(), ceKernel_.mainThreadTls());
+    restoreGuestCpuContext(ceKernel_.mainThreadContext());
+    ceKernel_.mainThreadContext().valid = false;
+    lastError_ = error;
+    setReg(UC_MIPS_REG_V0, ret);
+    setReg(UC_MIPS_REG_RA, pending.args.ra);
+    setReg(UC_MIPS_REG_GP, guestGpForCodeAddress(pending.args.ra));
+    setReg(UC_MIPS_REG_PC, normalizeGuestCodeAddress(pending.args.ra, reason));
+    spdlog::info("{} completed parked main wait reason={} wait=0x{:08x} timeout=0x{:08x} return=0x{:08x} ra=0x{:08x} queued={}",
+                 pending.name,
+                 reason ? reason : "scheduler",
+                 pending.args.a0,
+                 pending.args.a1,
+                 ret,
+                 pending.args.ra,
+                 ceGwe_.messageCount());
+    return true;
+}
+
 bool SyntheticDllRuntime::hasSchedulableGweMessageOwner() const {
     const std::optional<uint32_t> owner = ceGwe_.oldestPendingOwner();
     if (!owner) return false;
@@ -512,6 +608,13 @@ bool SyntheticDllRuntime::switchToRunnableGuestThread(const char* reason,
                       threadPc, threadRa, threadSp, threadV0);
         return true;
     };
+
+    if (!ceKernel_.activeGuestThread() && !pendingBlockingApis_.empty() &&
+        completeReadyPendingBlockingMainContinuation(reason)) {
+        spdlog::info("guest scheduler blocking-main-ready reason={}",
+                     reason ? reason : "cooperate");
+        return true;
+    }
 
     if (const std::optional<uint32_t> owner = ceGwe_.oldestPendingOwner()) {
         if (*owner == ceKernel_.mainThreadPseudoHandle()) {

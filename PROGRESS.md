@@ -1258,3 +1258,18 @@ Confirmed behavior difference:
   and
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_named_dispatch.cpp:3630`.
   The 2026-05-31 Release build passed with the known Boost Beast warning.
+- A follow-up Debug run showed the parked main-thread audio/event wait could
+  still lose an auto-reset wake: the scheduler first probed readiness, then
+  completed the same wait in a second call. Host `WaitForSingleObject(..., 0)`
+  consumes auto-reset events, so the first readiness probe could reset the
+  event before the completion path wrote the guest return value. The scheduler
+  now attempts parked-main completion directly and treats a not-ready result
+  as a host-message pump/yield, avoiding the double host wait probe. Current
+  source references:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp:2063` and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_thread_runtime.cpp:612`.
+  The 2026-05-31 Release and Debug builds passed with zero warnings.
+  Debug interactive run `captures/inavi_autodrive_20260531_123407` confirmed
+  the long startup `waveOutWrite` wait parked at `12:34:12.500` and completed
+  at `12:34:23.749`, matching the virtual audio duration instead of staying
+  stuck.

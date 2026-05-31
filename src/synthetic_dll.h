@@ -1321,6 +1321,8 @@ private:
     uint32_t normalizeGuestCodeAddress(uint32_t address, const char* why = nullptr) const;
     uint32_t guestGpForCodeAddress(uint32_t address) const;
     bool restoreMainThreadContextIfRunnable(const char* reason);
+    bool hasReadyPendingBlockingMainContinuation();
+    bool completeReadyPendingBlockingMainContinuation(const char* reason);
     bool hasSchedulableGweMessageOwner() const;
     uint32_t createGuestThread(uint32_t startAddress, uint32_t parameter, uint32_t flags);
     uint32_t resumeGuestThread(uint32_t guestHandle);
@@ -1340,6 +1342,7 @@ private:
     bool finishActiveGuestThread(uint32_t exitCode);
     bool cooperateGuestThreadsAfterCall(const std::string& name, uint32_t returnAddress = 0);
     uint32_t makeGuestDc(uint32_t hwnd);
+    void applyPaintUpdateClip(uint32_t hwnd, uint32_t hdc);
     GuestDc* lookupGuestDc(uint32_t hdc);
     uint32_t makeGuestBrush(uint32_t colorRef, bool stock = false);
     uint32_t makeGuestPen(uint32_t style, uint32_t width, uint32_t colorRef, bool stock = false);

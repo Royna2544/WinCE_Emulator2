@@ -183,7 +183,12 @@ Status:
   presenter lagging behind the remote framebuffer during long synchronous
   `UpdateWindow`/message-transfer spans; `hwnd=0x0001004c` paints take about
   1.1-1.3 seconds. Treat this as a host-present/paint-batching issue until CE
-  visible/update-region comparison says otherwise.
+  visible/update-region comparison says otherwise. A separate parked-main wait
+  regression is fixed: the scheduler no longer readiness-probes and then
+  completes the same auto-reset host event in two calls, because the first
+  zero-time host wait can consume the event. Debug run
+  `captures/inavi_autodrive_20260531_123407` confirmed the long startup audio
+  wait now completes after its virtual duration.
 
 ## Partially Resolved: Remote Audio WebSocket And Host Audio Timing
 

@@ -1542,10 +1542,15 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                 waitStillBlocked = true;
             }
             if (waitStillBlocked) {
-                if (dispatchQueuedPaintForBlockingApi(pending, "while blocked")) {
-                    return;
-                }
                 setReg(UC_MIPS_REG_PC, blockingApiContinuationStub_);
+                ceKernel_.mainThreadContext() = captureGuestCpuContext();
+                updateCurrentThreadKData(ceKernel_.mainThreadPseudoHandle(), ceKernel_.mainThreadTls());
+                spdlog::debug("{} remains parked wait=0x{:08x} timeout=0x{:08x} queued={} activeThread=0x{:08x}",
+                              pendingCall.name,
+                              pendingCall.args.a0,
+                              pendingCall.args.a1,
+                              ceGwe_.messageCount(),
+                              ceKernel_.activeGuestThread());
                 pumpHostMessages();
                 if (!switchToRunnableGuestThread(pendingCall.name.c_str())) {
                     uc_emu_stop(uc_);
@@ -1843,6 +1848,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
             }
             ensureHostWindow(a0, it->second);
             const uint32_t eraseDc = makeGuestDc(a0);
+            applyPaintUpdateClip(a0, eraseDc);
             const bool deferredHostPresent = beginHostErasePresentDeferral(a0);
             pendingUpdateWindows_.push_back(PendingUpdateWindow{
                 a0, wndProc, ra, reg(UC_MIPS_REG_GP), eraseDc, 0, deferredHostPresent, "UpdateWindow"});
@@ -2085,6 +2091,28 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
             }
             uint32_t immediate = kWaitFailed;
             uint32_t preferredThread = 0;
+            auto parkMainWaitAndRunWorker = [&](const char* reason) {
+                if (!blockingApiContinuationStub_) return false;
+                PendingBlockingApi pending{name, ordinal, args};
+                if (a1 != kInfiniteTimeout) {
+                    pending.deadlineMs = hostTickMilliseconds() + uint64_t(a1);
+                }
+                pendingBlockingApis_.push_back(std::move(pending));
+                setReg(UC_MIPS_REG_PC, blockingApiContinuationStub_);
+                ceKernel_.mainThreadContext() = captureGuestCpuContext();
+                updateCurrentThreadKData(ceKernel_.mainThreadPseudoHandle(), ceKernel_.mainThreadTls());
+                spdlog::info("WaitForSingleObject parked main wait wait=0x{:08x} timeout=0x{:08x} reason={} queued={} preferred=0x{:08x}",
+                             a0,
+                             a1,
+                             reason ? reason : "worker",
+                             ceGwe_.messageCount(),
+                             preferredThread);
+                if (!switchToRunnableGuestThread(name.c_str(), 0, preferredThread)) {
+                    uc_emu_stop(uc_);
+                }
+                pumpHostMessages();
+                return true;
+            };
             pollSingleWait(immediate, preferredThread);
             if (immediate != kWaitTimeout || a1 == 0) {
                 setReg(UC_MIPS_REG_V0, a1 == 0 && immediate == kWaitTimeout ? kWaitTimeout : immediate);
@@ -2092,13 +2120,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                 pumpHostMessages();
                 return;
             }
-            if (!ceGwe_.hasMessages() && hasRunnableGuestThread()) {
-                spdlog::info("WaitForSingleObject cooperative guest-thread slice wait=0x{:08x} timeout=0x{:08x} retry=1",
-                             a0, a1);
-                switchToRunnableGuestThread(name.c_str(), 0, preferredThread);
-                pumpHostMessages();
-                return;
-            }
+            if (parkMainWaitAndRunWorker("initial")) return;
 
             if (blockingApiContinuationStub_) {
                 PendingBlockingApi pending{name, ordinal, args};
@@ -2121,11 +2143,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                 return;
             }
             if (!ceGwe_.hasMessages() && hasRunnableGuestThread()) {
-                spdlog::info("WaitForSingleObject cooperative guest-thread slice wait=0x{:08x} timeout=0x{:08x} retry=1",
-                             a0, a1);
-                switchToRunnableGuestThread(name.c_str(), 0, preferredThread);
-                pumpHostMessages();
-                return;
+                if (parkMainWaitAndRunWorker("after-paint")) return;
             }
             if (a1 == kInfiniteTimeout || ceGwe_.hasMessages() || !timers_.empty()) {
                 spdlog::debug("WaitForSingleObject parking main context wait=0x{:08x} timeout=0x{:08x} pc=0x{:08x} queued={} timers={}",
