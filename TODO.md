@@ -53,7 +53,13 @@ Active refactor checklist: `PLAN.md`.
      audio wait completed on the virtual timeline. Next live validation should
      click the same menu path and confirm the short click event wait resumes
      near its virtual duration and the UI action is not hidden behind
-     audio/event waiting.
+     audio/event waiting. A later log review showed one remaining pressed
+     duration was spent inside the guest `WM_LBUTTONDOWN` handler before the
+     queued `WM_LBUTTONUP` could be retrieved by the same owner thread; the
+     interactive watchdog is now allowed to timeslice message transfers so the
+     host/remote loop stays live while that guest handler runs. Next click
+     validation should distinguish host responsiveness from guest-visible
+     same-thread handler duration.
 
 1. Finish virtual serial wait semantics and scheduler responsiveness.
    - CE reference:

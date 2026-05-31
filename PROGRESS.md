@@ -1273,3 +1273,17 @@ Confirmed behavior difference:
   the long startup `waveOutWrite` wait parked at `12:34:12.500` and completed
   at `12:34:23.749`, matching the virtual audio duration instead of staying
   stuck.
+- The same investigation found one remaining pressed-state delay was inside a
+  long guest `WM_LBUTTONDOWN` message transfer: the matching `WM_LBUTTONUP`
+  had already been queued by the host, but the same CE owner thread could not
+  retrieve it until the down handler returned. The interactive basic-block
+  watchdog previously refused to stop while `pendingMessageTransfers_` was
+  non-empty, letting a single window-procedure transfer monopolize the host
+  loop. The watchdog now may stop during message transfers; the transfer stack
+  remains intact and the same guest WndProc resumes on the next slice, but
+  host/remote/presenter work is no longer starved. Current source reference:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp:586`. The
+  2026-05-31 Release and Debug builds passed with zero warnings. Debug run
+  `captures/inavi_autodrive_20260531_123932` confirms
+  `guest slice watchdog stop reason=message-transfer` now appears during long
+  startup/message work.

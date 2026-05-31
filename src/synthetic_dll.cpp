@@ -594,20 +594,6 @@ void SyntheticDllRuntime::hookBasicBlock(uc_engine* uc, uint64_t address, uint32
     hostQueuePending = HIWORD(GetQueueStatus(QS_ALLINPUT)) != 0;
 #endif
     if (!hostQueuePending && std::chrono::steady_clock::now() < runtime->interactiveSliceDeadline_) return;
-    if (!runtime->pendingMessageTransfers_.empty()) {
-        if (!runtime->interactiveSliceStopRequested_) {
-            uint32_t pc = 0;
-            uint32_t ra = 0;
-            uc_reg_read(uc, UC_MIPS_REG_PC, &pc);
-            uc_reg_read(uc, UC_MIPS_REG_RA, &ra);
-            spdlog::debug("guest slice watchdog deferred during message transfer reason={} activeThread=0x{:08x} "
-                          "budget={} block=0x{:08x} pc=0x{:08x} ra=0x{:08x} pendingTransfers={} queued={}",
-                          runtime->interactiveSliceReason_, runtime->ceKernel_.activeGuestThread(),
-                          runtime->interactiveSliceInstructionBudget_, uint32_t(address), pc, ra,
-                          runtime->pendingMessageTransfers_.size(), runtime->ceGwe_.messageCount());
-        }
-        return;
-    }
 
     if (!runtime->interactiveSliceStopRequested_) {
         uint32_t pc = 0;

@@ -188,7 +188,14 @@ Status:
   completes the same auto-reset host event in two calls, because the first
   zero-time host wait can consume the event. Debug run
   `captures/inavi_autodrive_20260531_123407` confirmed the long startup audio
-  wait now completes after its virtual duration.
+  wait now completes after its virtual duration. Another log slice from the
+  same run showed the host queued `WM_LBUTTONUP` quickly, but the guest owner
+  thread stayed inside the preceding `WM_LBUTTONDOWN` message transfer for
+  about 2.4 seconds. The interactive watchdog now timeslices message transfers
+  instead of deferring all stops while `pendingMessageTransfers_` is non-empty;
+  this should keep host/remote presentation responsive, but CE-style
+  same-thread delivery still means `WM_LBUTTONUP` cannot be dispatched until
+  the guest down handler yields or returns.
 
 ## Partially Resolved: Remote Audio WebSocket And Host Audio Timing
 
