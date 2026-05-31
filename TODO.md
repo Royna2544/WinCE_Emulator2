@@ -145,6 +145,14 @@ Active refactor checklist: `PLAN.md`.
      live remote route-calculation path that previously showed 30s-scale
      `message-transfer` spans, because the scripted route preset did not
      reproduce that exact long calculation.
+     Debug interactive run `captures/inavi_autodrive_20260531_130929`
+     exposed a CE/MFC source mismatch in that validation path: blocking
+     `Sleep`/wait continuations were dispatching synthetic paint/timer work,
+     then the guest crashed in MFC with `UC_ERR_MAP`. The synthetic
+     blocking-wait paint pump is now disabled, and fresh Debug run
+     `captures/inavi_autodrive_20260531_131703` is live on
+     `192.168.0.39:8765`. Next validation should repeat the same remote route
+     UI path and confirm the host no longer wedges or cuts the endpoint.
 
 2. Introduce a CE-shaped internal `MsgQueue` model.
    - CE reference:

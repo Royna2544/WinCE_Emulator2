@@ -146,6 +146,21 @@ Current emulator difference:
   `PC == 0` signatures; the scripted route-preset did not reproduce the long
   live route-calculation span, so remote interactive route validation remains
   next.
+- Blocking waits no longer perform synthetic GWE paint/timer dispatch before
+  parking or resuming the guest wait. Debug interactive run
+  `captures/inavi_autodrive_20260531_130929` died with
+  `UC_ERR_MAP` in `mfcce400.dll+0x0001f53c` during a `message-transfer` after
+  route UI work, with repeated `Sleep resumed after cooperative paint` entries
+  immediately before the crash. That reentrant path was not CE/MFC-shaped:
+  plain `Sleep` and `WaitForSingleObject` do not pump window messages, while
+  MFC pumps through `GetMessage`/`DispatchMessage` or modal loops. The
+  blocking-wait helper now leaves queued paint, timer, and input on the GWE
+  owner queue until the guest reaches a real message retrieval or message wait.
+  Current source anchor:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp:1345`. The
+  2026-05-31 Release and Debug builds passed after this change, and a fresh
+  Debug remote run `captures/inavi_autodrive_20260531_131703` launched on
+  `192.168.0.39:8765` for live route/UI validation.
 - Remote-server audio is enabled by default for `tools/autodrive_inavi.ps1`
   remote runs unless `-NoRemoteAudio` is passed. Remote PCM is now queued only
   while at least one audio websocket client is connected; the queue is cleared

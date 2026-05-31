@@ -1342,50 +1342,11 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                          hwnd, exposed);
         }
     };
-    auto dispatchQueuedPaintForBlockingApi = [&](PendingBlockingApi& pending, const char* reason) {
-        // Only dispatch paint/timer maintenance from a synthetic blocking wait
-        // boundary.  Posted private messages and pointer input must stay in the
-        // normal GetMessage/DispatchMessage path; reentering them from an
-        // unrelated Sleep/Wait hook can leave MFC/iNavi state transitions
-        // half-applied, which shows up as buttons painting pressed but not
-        // switching views.
-        if (pending.paintDispatches >= 64) return false;
-        auto isPaintish = [](uint32_t msg) {
-            return msg == 0x000f || // WM_PAINT
-                   msg == 0x0014 || // WM_ERASEBKGND
-                   msg == 0x0018 || // WM_SHOWWINDOW
-                   msg == 0x0113;   // WM_TIMER
-        };
-        auto queued = ceGwe_.firstMatching([&](const GuestMessage& message) {
-            if (!isPaintish(message.message)) return false;
-            auto window = windows_.find(message.hwnd);
-            if (window == windows_.end() || window->second.destroyed || !window->second.wndProc) {
-                return false;
-            }
-            const bool paintMessage = message.message == 0x0014 || message.message == 0x000f;
-            return !paintMessage || !hasCoveringRootPopup(message.hwnd);
-        }, true);
-        if (!queued) return false;
-        const GuestMessage message = *queued;
-        auto window = windows_.find(message.hwnd);
-        uint32_t wndProc = translatedWndProc(window->second.wndProc, pending.name.c_str());
-        if (message.message == 0x0014) {
-            beginHostErasePresentDeferral(message.hwnd);
-        } else if (message.message == 0x000f && hasHostErasePresentDeferral(message.hwnd)) {
-            pending.releaseHostPresentAfterPaintHwnd = message.hwnd;
-        }
-        ++pending.paintDispatches;
-        spdlog::debug("{} cooperative paint dispatch {} hwnd=0x{:08x} msg=0x{:08x} wndproc=0x{:08x} count={}",
-                      pending.name, reason, message.hwnd, message.message, wndProc, pending.paintDispatches);
-        setReg(UC_MIPS_REG_A0, message.hwnd);
-        setReg(UC_MIPS_REG_A1, message.message);
-        setReg(UC_MIPS_REG_A2, message.wParam);
-        setReg(UC_MIPS_REG_A3, message.lParam);
-        setReg(UC_MIPS_REG_GP, guestGpForCodeAddress(wndProc));
-        setReg(UC_MIPS_REG_T9, wndProc);
-        setReg(UC_MIPS_REG_RA, blockingApiContinuationStub_);
-        setReg(UC_MIPS_REG_PC, wndProc);
-        return true;
+    auto dispatchQueuedPaintForBlockingApi = [&](PendingBlockingApi&, const char*) {
+        // CE/MFC Sleep and wait APIs do not pump GWE messages by themselves.
+        // Keep queued paint/timer/input on the owner queue until the guest
+        // returns to GetMessage/DispatchMessage or enters a real message wait.
+        return false;
     };
 
     if (isCoredll && pc == destroyWindowContinuationStub_) {
@@ -1576,7 +1537,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
         setReg(UC_MIPS_REG_RA, pendingCall.args.ra);
         setReg(UC_MIPS_REG_GP, guestGpForCodeAddress(pendingCall.args.ra));
         setReg(UC_MIPS_REG_PC, normalizeGuestCodeAddress(pendingCall.args.ra, name.c_str()));
-        spdlog::info("{} resumed after cooperative paint wait=0x{:08x} timeout=0x{:08x} return=0x{:08x} ra=0x{:08x} queued={} activeThread=0x{:08x}",
+        spdlog::info("{} resumed after blocking wait handle=0x{:08x} timeout=0x{:08x} return=0x{:08x} ra=0x{:08x} queued={} activeThread=0x{:08x}",
                      pendingCall.name, pendingCall.args.a0, pendingCall.args.a1, ret,
                      pendingCall.args.ra, ceGwe_.messageCount(), ceKernel_.activeGuestThread());
         pumpHostMessages();

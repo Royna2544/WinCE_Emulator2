@@ -204,7 +204,17 @@ Status:
   instead of deferring all stops while `pendingMessageTransfers_` is non-empty;
   this should keep host/remote presentation responsive, but CE-style
   same-thread delivery still means `WM_LBUTTONUP` cannot be dispatched until
-  the guest down handler yields or returns.
+  the guest down handler yields or returns. Debug interactive run
+  `captures/inavi_autodrive_20260531_130929` then exposed a separate
+  source-mismatch regression: the synthetic blocking-wait continuation pumped
+  queued paint/timer work while the guest was inside plain `Sleep`/wait, and
+  the process crashed with `UC_ERR_MAP` in `mfcce400.dll+0x0001f53c` after
+  route UI work. CE/MFC message pumping belongs to `GetMessage`/
+  `DispatchMessage` and modal loops, not plain waits, so that synthetic
+  reentrant paint pump is now disabled. Current source:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp:1345`. The bug
+  remains open until fresh remote route validation confirms the host window and
+  remote endpoint survive the same path.
 
 ## Partially Resolved: Remote Audio WebSocket And Host Audio Timing
 
