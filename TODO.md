@@ -169,14 +169,15 @@ Active refactor checklist: `PLAN.md`.
      main-worker slices now use a larger CPU budget when no input is pending.
      The CE-shaped received-send wait path is now partially implemented:
      main-owned message transfers are not deferred solely because a main wait
-     is parked, and `WaitForSingleObject` main waits dispatch pending received
-     sent messages before yielding to workers. Debug run
-     `captures/inavi_autodrive_20260531_160231` shows `ownerSent=1` draining
-     through `WaitForSingleObject dispatching received sent message while main
-     wait parked`. Next step is to validate the full interactive route/search
-     completion path and then separate remaining posted-message backlog from
-     pure guest route CPU / emulator throughput cost. Do not synthesize route
-     UI updates or force `0x10021`.
+     is parked, and both initial `WaitForSingleObject` parking and still-blocked
+     wait continuations dispatch pending received sent messages before yielding
+     to workers. Debug run `captures/inavi_autodrive_20260531_160231` showed
+     the first `ownerSent=1` drain, then a second still-blocked continuation
+     issue where worker `0x124df` repeatedly sent `msg=0x52e8`; the continuation
+     now checks the received-send lane too. Next step is to validate the full
+     interactive route/search completion path and then separate remaining
+     posted-message backlog from pure guest route CPU / emulator throughput
+     cost. Do not synthesize route UI updates or force `0x10021`.
      A host-only freeze was also found in the presenter batching path: remote
      API/framebuffer output could continue while the local host window stayed
      stale because long `message-transfer` work deferred batch release. Source

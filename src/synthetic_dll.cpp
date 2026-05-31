@@ -1569,6 +1569,10 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                 setReg(UC_MIPS_REG_PC, blockingApiContinuationStub_);
                 ceKernel_.mainThreadContext() = captureGuestCpuContext();
                 updateCurrentThreadKData(ceKernel_.mainThreadPseudoHandle(), ceKernel_.mainThreadTls());
+                if (dispatchReceivedSendForMainWait(pendingBlockingApis_.back(), "continuation")) {
+                    pumpHostMessages();
+                    return;
+                }
                 spdlog::debug("{} remains parked wait=0x{:08x} timeout=0x{:08x} queued={} activeThread=0x{:08x}",
                               pendingCall.name,
                               pendingCall.args.a0,

@@ -162,14 +162,17 @@ Status:
   slices while main is legally parked, and the first CE-shaped received-send
   wait handling is implemented. A main-owned message transfer is no longer
   deferred solely because a main wait is parked, and main-thread
-  `WaitForSingleObject` parking now dispatches a queued received sent message
-  for that owner before yielding to workers. Debug run
+  `WaitForSingleObject` parking plus still-blocked wait continuations now
+  dispatch queued received sent messages for that owner before yielding to
+  workers. Debug run
   `captures/inavi_autodrive_20260531_160231/emulator.stdout.log` showed
   `ownerSent=1` followed by
   `WaitForSingleObject dispatching received sent message while main wait
-  parked`, and later watchdog lines returned to `ownerSent=0`. The remaining
-  risk is now posted-message backlog and/or genuine route CPU dominance, not
-  the dead received-send lane observed in
+  parked`; the same run then exposed a second still-blocked continuation case
+  where worker `0x124df` repeatedly sent `msg=0x52e8` with `ownerSent=0`, which
+  is now covered by the continuation-side received-send check. The remaining
+  risk is posted-message backlog and/or genuine route CPU dominance, not the
+  original dead received-send lane observed in
   `captures/inavi_autodrive_20260531_154920`.
 
 ## UI Can Stall During Host Waits Or Shared Mapping Storms

@@ -1575,3 +1575,13 @@ Confirmed behavior difference:
   parked`, after which subsequent watchdog lines returned to `ownerSent=0`.
   The remaining visible delay is still posted-message backlog / route CPU work,
   not the dead received-send lane.
+- The same `160231` run then narrowed the hang one step further: once the first
+  received-send was drained, a later send could arrive while the main thread
+  was already sitting on the parked `WaitForSingleObject` continuation. That
+  continuation re-parked and yielded without checking the received-send lane,
+  leaving worker `0x124df` repeatedly sending `msg=0x52e8` while owner queues
+  stayed at `ownerPosted=85 ownerSent=0`. The blocking continuation now checks
+  for a pending received sent message before yielding again. Current source
+  reference:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp:1569`.
+  Release build passed with the known vcpkg duplicate import warning.
