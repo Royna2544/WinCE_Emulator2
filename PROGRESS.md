@@ -197,6 +197,18 @@ Current emulator difference:
   scaffolds are wired into `iNavi_Unicorn_Emulator.vcxproj` without changing
   runtime behavior. The 2026-05-31 Release build passed with the existing
   vcpkg duplicate-import warning.
+- Synthetic DLL handler registration now stores per-DLL ordinal handlers in an
+  ordinal-indexed table instead of an unordered map. Export metadata and the
+  `PC -> ExportEntry` dispatch shape are unchanged, but first-call handler
+  resolution no longer does an integer-key hash lookup. Current source
+  anchors: `/mnt/d/GitHub/WinCE_Emulator_v2/src/ordinal_dispatch_table.h`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.h`, and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll_modules.cpp`. The
+  2026-05-31 Release build passed with the existing vcpkg duplicate-import
+  warning and the existing Boost Beast warning from `remote_server.cpp`.
+  Bounded Release startup smoke `captures/inavi_autodrive_20260531_144707`
+  captured the initial window and log scan found no fatal, unsupported-ordinal,
+  `UC_ERR`, or false-`PC == 0` signatures.
 - A follow-up live report showed the startup safety/fullscreen surface could
   visually overlap with the bottom strip again: stale fullscreen-popup pixels
   remained while exposed owner/child UI repainted. Log evidence from Debug run

@@ -285,7 +285,7 @@ void SyntheticDllRuntime::registerHandlers(SyntheticModule& module,
     auto& dll = registeredDllsByName_[lowerAscii(module.moduleName)];
     if (dll.name.empty()) dll.name = module.moduleName;
     for (const auto& [ordinal, handler] : handlers) {
-        dll.handlers[ordinal] = handler;
+        dll.handlers.set(ordinal, handler);
         registerExport(module, ordinal, handler.name ? handler.name : "", handler.code, handler.handler);
     }
 }
@@ -314,9 +314,7 @@ const SyntheticDllRuntime::OrdinalHandlerSpec*
 SyntheticDllRuntime::findOrdinalHandler(const ExportEntry& entry) const {
     const auto dllIt = registeredDllsByName_.find(lowerAscii(entry.moduleName));
     if (dllIt == registeredDllsByName_.end()) return nullptr;
-    const auto handlerIt = dllIt->second.handlers.find(entry.ordinal);
-    if (handlerIt == dllIt->second.handlers.end()) return nullptr;
-    return &handlerIt->second;
+    return dllIt->second.handlers.get(entry.ordinal);
 }
 
 SyntheticDllRuntime::SyntheticModuleKind

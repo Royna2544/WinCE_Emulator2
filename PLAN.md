@@ -469,9 +469,11 @@ results, or timing thresholds.
   supplied keys such as guest addresses, module bases, filesystem paths, and
   imported cross-process handles.
   Current source anchor: `src/ce_slot_table.h`.
-- [ ] Flatten synthetic ordinal dispatch into per-DLL ordinal-indexed handler
+- [x] Flatten synthetic ordinal dispatch into per-DLL ordinal-indexed handler
   tables so the hot path is `PC -> ExportEntry -> handler`, while preserving
   SDK ordinal metadata and unknown-ordinal logging.
+  Current source anchors: `src/ordinal_dispatch_table.h`,
+  `src/synthetic_dll.h`, and `src/synthetic_dll_modules.cpp`.
 - [ ] Move window classes, `GuestWindow`, focus/capture/pointer state, timers,
   z-order, and pending window lifecycle state behind `CeGwe`. CE source
   anchors: `gweapiset1.hpp`, `cmsgque.h`, and `window.hpp`.

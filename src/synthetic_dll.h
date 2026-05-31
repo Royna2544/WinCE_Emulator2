@@ -7,6 +7,7 @@
 #include "ce_gwe.h"
 #include "ce_kernel.h"
 #include "ce_mgdi.h"
+#include "ordinal_dispatch_table.h"
 
 #include <nlohmann/json.hpp>
 
@@ -492,7 +493,7 @@ private:
     };
     struct RegisteredSyntheticDll {
         std::string name;
-        OrdinalHandlerMap handlers;
+        OrdinalDispatchTable<OrdinalHandlerSpec> handlers;
     };
     struct SyntheticDllSpec {
         const char* name{};
