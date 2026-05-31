@@ -255,6 +255,15 @@ Current emulator difference:
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_crt.cpp`, and
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_comm.cpp`. The 2026-05-31
   Release build passed with the existing vcpkg/Boost warnings.
+- `CeDevice` now owns the configured serial-device map path, parsed guest
+  serial-device configs, and default serial baud/mode state. Serial map
+  loading, virtual serial registration, COM state fallback defaults, and
+  remote GPS target selection still use the same behavior through CeDevice
+  accessors. Current source anchors:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_device.h`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp`, and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/remote_server.cpp`. The 2026-05-31
+  Release build passed with the existing vcpkg/Boost warnings.
 - `CeRegistry` now owns the registry JSON database, registry path, dirty flag,
   and open registry-key handle map. `RegCreateKeyExW`, `RegOpenKeyExW`,
   `RegQueryValueExW`, `RegSetValueExW`, and registry flushing still use the

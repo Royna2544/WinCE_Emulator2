@@ -1327,7 +1327,7 @@ std::vector<std::string> SyntheticDllRuntime::recentRemoteLogLines(size_t maxLin
 
 std::string SyntheticDllRuntime::remoteGpsTarget() const {
     std::string fallback;
-    for (const auto& [guest, device] : serialDevicesByGuest_) {
+    for (const auto& [guest, device] : ceDevice_.serialDeviceConfigs()) {
         if (device.type == "serial" && device.enabled) {
             if (device.backend == "win32_com" && !device.host.empty()) return device.host;
             if (fallback.empty()) fallback = device.guest.empty() ? guest : device.guest;

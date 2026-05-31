@@ -112,7 +112,7 @@ bool SyntheticDllRuntime::handleGetCommState(SyntheticExportCode code, const Gue
         if (serial) {
             applyCeSerialModeToDcb(dcb, serial->mode);
         } else {
-            applyGuestSerialConfigToDcb(dcb, defaultSerialBaud_, defaultSerialMode_);
+            applyGuestSerialConfigToDcb(dcb, ceDevice_.defaultSerialBaud(), ceDevice_.defaultSerialMode());
         }
         if (args.a1) {
             uint32_t guestLength = readU32(args.a1);

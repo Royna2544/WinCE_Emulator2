@@ -423,24 +423,24 @@ void SyntheticDllRuntime::setSdmmcHostPath(const std::filesystem::path& path) {
 }
 
 void SyntheticDllRuntime::setSerialDeviceMapPath(const std::filesystem::path& path) {
-    serialDeviceMapPath_ = path;
-    serialDevicesByGuest_.clear();
-    defaultSerialBaud_ = 9600;
-    defaultSerialMode_ = "8N1";
-    if (serialDeviceMapPath_.empty()) return;
+    ceDevice_.serialDeviceMapPath() = path;
+    ceDevice_.serialDeviceConfigs().clear();
+    ceDevice_.defaultSerialBaud() = 9600;
+    ceDevice_.defaultSerialMode() = "8N1";
+    if (ceDevice_.serialDeviceMapPath().empty()) return;
 
-    std::ifstream input(serialDeviceMapPath_);
+    std::ifstream input(ceDevice_.serialDeviceMapPath());
     if (!input) {
-        throw std::runtime_error("failed to open serial device map: " + pathToUtf8(serialDeviceMapPath_));
+        throw std::runtime_error("failed to open serial device map: " + pathToUtf8(ceDevice_.serialDeviceMapPath()));
     }
 
     nlohmann::json doc;
     input >> doc;
     if (!doc.is_object()) {
-        throw std::runtime_error("serial device map must be a JSON object: " + pathToUtf8(serialDeviceMapPath_));
+        throw std::runtime_error("serial device map must be a JSON object: " + pathToUtf8(ceDevice_.serialDeviceMapPath()));
     }
     if (!doc.contains("version") || !doc["version"].is_number_integer() || doc["version"].get<int>() != 1) {
-        throw std::runtime_error("unsupported serial device map version in " + pathToUtf8(serialDeviceMapPath_));
+        throw std::runtime_error("unsupported serial device map version in " + pathToUtf8(ceDevice_.serialDeviceMapPath()));
     }
 
     const std::set<std::string> rootFields{"version", "defaults", "devices"};
@@ -460,12 +460,12 @@ void SyntheticDllRuntime::setSerialDeviceMapPath(const std::filesystem::path& pa
                 throw std::runtime_error("unknown serial device map defaults field: " + item.key());
             }
         }
-        if (doc["defaults"].contains("baud")) defaultSerialBaud_ = doc["defaults"]["baud"].get<uint32_t>();
-        if (doc["defaults"].contains("mode")) defaultSerialMode_ = doc["defaults"]["mode"].get<std::string>();
+        if (doc["defaults"].contains("baud")) ceDevice_.defaultSerialBaud() = doc["defaults"]["baud"].get<uint32_t>();
+        if (doc["defaults"].contains("mode")) ceDevice_.defaultSerialMode() = doc["defaults"]["mode"].get<std::string>();
     }
 
     if (!doc.contains("devices")) {
-        spdlog::info("serial device map: {} devices=0", pathToUtf8(serialDeviceMapPath_));
+        spdlog::info("serial device map: {} devices=0", pathToUtf8(ceDevice_.serialDeviceMapPath()));
         return;
     }
     if (!doc["devices"].is_array()) {
@@ -497,8 +497,8 @@ void SyntheticDllRuntime::setSerialDeviceMapPath(const std::filesystem::path& pa
         config.host = device.value("host", std::string{});
         config.enabled = device.value("enabled", false);
         config.note = device.value("note", std::string{});
-        config.baud = device.value("baud", defaultSerialBaud_);
-        config.mode = device.value("mode", defaultSerialMode_);
+        config.baud = device.value("baud", ceDevice_.defaultSerialBaud());
+        config.mode = device.value("mode", ceDevice_.defaultSerialMode());
 
         if (config.type != "serial" && config.type != "ioctl_device") {
             throw std::runtime_error("unsupported serial device map type for " + config.guest + ": " + config.type);
@@ -515,11 +515,11 @@ void SyntheticDllRuntime::setSerialDeviceMapPath(const std::filesystem::path& pa
         }
 
         const std::string key = normalizeGuestDeviceName(config.guest);
-        serialDevicesByGuest_[key] = std::move(config);
+        ceDevice_.serialDeviceConfigs()[key] = std::move(config);
     }
     spdlog::info("serial device map: {} devices={} defaults={} {}",
-                 pathToUtf8(serialDeviceMapPath_), serialDevicesByGuest_.size(),
-                 defaultSerialBaud_, defaultSerialMode_);
+                 pathToUtf8(ceDevice_.serialDeviceMapPath()), ceDevice_.serialDeviceConfigs().size(),
+                 ceDevice_.defaultSerialBaud(), ceDevice_.defaultSerialMode());
 }
 
 void SyntheticDllRuntime::setFramebuffer(uint32_t* bgra, int width, int height) {
@@ -758,7 +758,7 @@ uint32_t SyntheticDllRuntime::openGuestSerialDevice(const std::string& guestPath
         state.deviceType = config ? config->type : std::string{"serial"};
         state.hostName = config ? config->host : std::string{};
         state.backend = config ? config->backend : std::string{"virtual"};
-        state.mode.baud = config && config->baud ? config->baud : defaultSerialBaud_;
+        state.mode.baud = config && config->baud ? config->baud : ceDevice_.defaultSerialBaud();
         state.mode.byteSize = 8;
         state.mode.parity = 0;
         state.mode.stopBits = 0;
@@ -767,8 +767,8 @@ uint32_t SyntheticDllRuntime::openGuestSerialDevice(const std::string& guestPath
         ceDevice_.registerSerial(std::move(state));
         ceFilesystem_.fileHandleDebugNames()[guest] = std::move(debugName);
     };
-    const auto mapped = serialDevicesByGuest_.find(deviceKey);
-    if (mapped != serialDevicesByGuest_.end()) {
+    const auto mapped = ceDevice_.serialDeviceConfigs().find(deviceKey);
+    if (mapped != ceDevice_.serialDeviceConfigs().end()) {
         const SerialDeviceConfig& config = mapped->second;
         const std::string note = config.note.empty() ? std::string{} : " (" + config.note + ")";
         if (!config.enabled || config.backend == "stub" || config.type == "ioctl_device") {

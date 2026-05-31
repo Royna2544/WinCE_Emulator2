@@ -540,6 +540,10 @@ results, or timing thresholds.
   file API behavior.
   Current source anchors: `src/ce_filesystem.h`, `src/coredll_fs.cpp`,
   `src/coredll_crt.cpp`, and `src/coredll_comm.cpp`.
+- [x] Move configured serial-device map path, parsed guest serial-device
+  configs, and default serial mode/baud state behind `CeDevice`.
+  Current source anchors: `src/ce_device.h`, `src/synthetic_dll.cpp`,
+  and `src/remote_server.cpp`.
 - [x] Add a `CeRegistry` owner for the registry JSON database, registry path,
   dirty flag, and open registry-key handle map while preserving current
   coredll registry API behavior.

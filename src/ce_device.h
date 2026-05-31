@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
 #include <map>
 #include <optional>
 #include <string>
@@ -39,6 +40,17 @@ public:
         uint64_t emptyReadWaitUntilMs{};
         bool virtualNoDataBackend{};
         bool open{};
+    };
+
+    struct SerialDeviceConfig {
+        std::string guest;
+        std::string type;
+        std::string backend;
+        std::string host;
+        bool enabled{};
+        uint32_t baud{9600};
+        std::string mode{"8N1"};
+        std::string note;
     };
 
     enum class NoDataReadAction {
@@ -81,8 +93,22 @@ public:
     std::optional<PendingSerialRead> pendingSerialRead(uint32_t threadHandle) const;
     std::vector<PendingSerialRead> pendingSerialReads() const;
     bool completePendingSerialRead(uint32_t threadHandle);
+    std::filesystem::path& serialDeviceMapPath() noexcept { return serialDeviceMapPath_; }
+    const std::filesystem::path& serialDeviceMapPath() const noexcept { return serialDeviceMapPath_; }
+    std::map<std::string, SerialDeviceConfig>& serialDeviceConfigs() noexcept { return serialDevicesByGuest_; }
+    const std::map<std::string, SerialDeviceConfig>& serialDeviceConfigs() const noexcept {
+        return serialDevicesByGuest_;
+    }
+    uint32_t& defaultSerialBaud() noexcept { return defaultSerialBaud_; }
+    uint32_t defaultSerialBaud() const noexcept { return defaultSerialBaud_; }
+    std::string& defaultSerialMode() noexcept { return defaultSerialMode_; }
+    const std::string& defaultSerialMode() const noexcept { return defaultSerialMode_; }
 
 private:
     std::map<uint32_t, SerialState> serialStates_;
     std::map<uint32_t, PendingSerialRead> pendingSerialReadsByThread_;
+    std::filesystem::path serialDeviceMapPath_;
+    std::map<std::string, SerialDeviceConfig> serialDevicesByGuest_;
+    uint32_t defaultSerialBaud_{9600};
+    std::string defaultSerialMode_{"8N1"};
 };

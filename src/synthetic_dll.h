@@ -495,16 +495,7 @@ private:
         OrdinalHandlerMap handlers;
     };
     using GuestHandle = CeKernel::GuestHandle;
-    struct SerialDeviceConfig {
-        std::string guest;
-        std::string type;
-        std::string backend;
-        std::string host;
-        bool enabled{};
-        uint32_t baud{9600};
-        std::string mode{"8N1"};
-        std::string note;
-    };
+    using SerialDeviceConfig = CeDevice::SerialDeviceConfig;
     using GuestWindowClass = CeGwe::GuestWindowClass;
     using GuestWindow = CeGwe::GuestWindow;
     using GuestDc = CeMgdi::GuestDc;
@@ -658,11 +649,6 @@ private:
     bool splashTopBlitDumped_{};
     bool splashBottomBlitDumped_{};
     bool splashFramebufferDumped_{};
-    std::filesystem::path serialDeviceMapPath_;
-    std::map<std::string, SerialDeviceConfig> serialDevicesByGuest_;
-    uint32_t defaultSerialBaud_{9600};
-    std::string defaultSerialMode_{"8N1"};
-
     std::optional<SyntheticModule> createCoredll();
     std::optional<SyntheticModule> createCommctrl();
     std::optional<SyntheticModule> createWinsock(const std::string& dllName);

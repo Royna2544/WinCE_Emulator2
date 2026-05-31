@@ -1992,9 +1992,9 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
                     childArgs.emplace_back(L"--registry");
                     childArgs.push_back(std::filesystem::absolute(ceRegistry_.path()).wstring());
                 }
-                if (!serialDeviceMapPath_.empty()) {
+                if (!ceDevice_.serialDeviceMapPath().empty()) {
                     childArgs.emplace_back(L"--serial-map");
-                    childArgs.push_back(std::filesystem::absolute(serialDeviceMapPath_).wstring());
+                    childArgs.push_back(std::filesystem::absolute(ceDevice_.serialDeviceMapPath()).wstring());
                 }
                 if (!commandLine.empty()) {
                     childArgs.emplace_back(L"--guest-command-line");
