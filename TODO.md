@@ -27,15 +27,17 @@ Active refactor checklist: `PLAN.md`.
      slices. Websocket clients now join active playback near the current
      offset instead of receiving stale startup PCM or silence until the next
      `waveOutWrite`. Guest completion is virtual; host WinMM is a backend
-     opened with `CALLBACK_NULL`, and local WinMM playback is fed from a
-     backend chunk queue that waits for `WHDR_DONE` before freeing each copied
-     buffer. The websocket tap now drops a chunk if conversion to the remote
-     advertised format fails instead of sending mismatched raw guest PCM.
+     opened with `CALLBACK_NULL`, and local WinMM playback submits one copied
+     backend buffer per guest `waveOutWrite` while waiting for `WHDR_DONE`
+     before freeing it. The websocket tap now drops a chunk if conversion to
+     the remote advertised format fails instead of sending mismatched raw
+     guest PCM.
      Next step is Debug interactive validation after closing the old Debug
-     emulator process: confirm no buzzing/distortion, test a mid-startup
-     websocket connect, and test short button-click sounds. Also verify the
-     old route-guide signature no longer appears: `WaitForSingleObject(...,
-     INFINITE)` must not resume with `WAIT_TIMEOUT`, and
+     emulator process: confirm the latest no-stitching local backend removes
+     the pops, test a mid-startup websocket connect, and test short
+     button-click sounds. Also verify the old route-guide signature no longer
+     appears: `WaitForSingleObject(..., INFINITE)` must not resume with
+     `WAIT_TIMEOUT`, and
      `waveOutUnprepareHeader` must not run while `WHDR_INQUEUE` is still set
      just because cooperative paint drained.
 

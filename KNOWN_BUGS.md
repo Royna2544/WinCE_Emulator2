@@ -213,7 +213,10 @@ Status:
   duration estimate instead of waiting for WinMM to mark the `WAVEHDR` done.
   The backend now waits for `WHDR_DONE`/successful unprepare before freeing
   the copied chunk, and the websocket path now refuses to send raw guest PCM as
-  the configured remote format if miniaudio conversion fails.
+  the configured remote format if miniaudio conversion fails. A follow-up pop
+  report showed the local backend should not stitch many tiny WinMM buffers
+  together; it now submits one copied host buffer per guest `waveOutWrite`
+  while keeping guest-visible completion on the virtual `CeAudio` timeline.
 - A later route-guide run found that cooperative paint around a blocking
   `WaitForSingleObject(..., INFINITE)` could still return `WAIT_TIMEOUT` from
   the named wait shim. That caused audio buffers to be unprepared while still

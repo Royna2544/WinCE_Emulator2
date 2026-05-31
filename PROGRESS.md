@@ -165,9 +165,14 @@ Current emulator difference:
   the `WAVEHDR` done/unpreparable instead of freeing it after an estimated
   sleep, and the websocket tap no longer falls back to sending raw guest PCM
   while advertising the configured remote format if miniaudio conversion
-  fails. The 2026-05-31 Release build passed with the existing Boost Beast
-  warning from `remote_server.cpp`; a later Debug build compiled but could not
-  link because the old Debug emulator process was still running.
+  fails. A later live run still had audible pops, which pointed to gaps from
+  stitching many small local WinMM chunks. Local host playback now submits one
+  copied backend buffer per guest `waveOutWrite` while still waiting for
+  `WHDR_DONE` before freeing it; websocket audio remains a live `CeAudio`
+  timeline tap. The 2026-05-31 Release and Debug builds passed with zero
+  warnings after this adjustment, and Debug interactive run
+  `captures/inavi_autodrive_20260531_105702` was relaunched on
+  `192.168.0.39:8765` for validation.
 - CE GWE/MGDI source comparison for the route-guide visual artifacts found
   missing region/rounded drawing exports in the emulator boundary:
   `RoundRect`, `FillRgn`, `SetRectRgn`, `SelectClipRgn`, `PtInRegion`, and
