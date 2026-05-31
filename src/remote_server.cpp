@@ -681,14 +681,14 @@ struct RemoteServerHandle {
                                                    {{"ok", true}, {"lines", runtime.recentRemoteLogLines(lines)}}));
         } else if (req.method() == http::verb::post && path == "/api/v1/control/pause") {
             {
-                std::lock_guard<std::mutex> lock(runtime.remoteMutex_);
-                runtime.remotePaused_ = true;
+                std::lock_guard<std::mutex> lock(runtime.ceRemote_.mutex());
+                runtime.ceRemote_.paused() = true;
             }
             writeResponse(socket, makeJsonResponse(req, http::status::ok, {{"ok", true}, {"paused", true}}));
         } else if (req.method() == http::verb::post && path == "/api/v1/control/resume") {
             {
-                std::lock_guard<std::mutex> lock(runtime.remoteMutex_);
-                runtime.remotePaused_ = false;
+                std::lock_guard<std::mutex> lock(runtime.ceRemote_.mutex());
+                runtime.ceRemote_.paused() = false;
             }
             writeResponse(socket, makeJsonResponse(req, http::status::ok, {{"ok", true}, {"paused", false}}));
         } else {
@@ -872,15 +872,15 @@ struct RemoteServerHandle {
             }
             if (type == "pause") {
                 {
-                    std::lock_guard<std::mutex> lock(runtime.remoteMutex_);
-                    runtime.remotePaused_ = true;
+                    std::lock_guard<std::mutex> lock(runtime.ceRemote_.mutex());
+                    runtime.ceRemote_.paused() = true;
                 }
                 return {{"type", "status"}, {"ok", true}, {"paused", true}};
             }
             if (type == "resume") {
                 {
-                    std::lock_guard<std::mutex> lock(runtime.remoteMutex_);
-                    runtime.remotePaused_ = false;
+                    std::lock_guard<std::mutex> lock(runtime.ceRemote_.mutex());
+                    runtime.ceRemote_.paused() = false;
                 }
                 return {{"type", "status"}, {"ok", true}, {"paused", false}};
             }
@@ -1008,9 +1008,9 @@ void SyntheticDllRuntime::drainRemoteInputEvents() {
     std::deque<RemoteTouchEvent> events;
     std::deque<RemoteKeyEvent> keyEvents;
     {
-        std::lock_guard<std::mutex> lock(remoteMutex_);
-        events.swap(remoteTouchEvents_);
-        keyEvents.swap(remoteKeyEvents_);
+        std::lock_guard<std::mutex> lock(ceRemote_.mutex());
+        events.swap(ceRemote_.touchEvents());
+        keyEvents.swap(ceRemote_.keyEvents());
     }
     for (const auto& event : events) {
         queueHostMouseMessage(hostPresenterGuestHwnd_, event.message, event.x, event.y);
@@ -1053,8 +1053,8 @@ bool SyntheticDllRuntime::enqueueRemoteTouch(const std::string& phase, int32_t x
         return false;
     }
     {
-        std::lock_guard<std::mutex> lock(remoteMutex_);
-        remoteTouchEvents_.push_back({message, x, y});
+        std::lock_guard<std::mutex> lock(ceRemote_.mutex());
+        ceRemote_.touchEvents().push_back({message, x, y});
     }
     return true;
 }
@@ -1074,40 +1074,40 @@ bool SyntheticDllRuntime::enqueueRemoteKey(const std::string& phase, uint32_t vk
         return false;
     }
     {
-        std::lock_guard<std::mutex> lock(remoteMutex_);
-        remoteKeyEvents_.push_back({message, vk});
+        std::lock_guard<std::mutex> lock(ceRemote_.mutex());
+        ceRemote_.keyEvents().push_back({message, vk});
     }
     return true;
 }
 
 void SyntheticDllRuntime::updateRemoteImuState(const nlohmann::json& state) {
-    std::lock_guard<std::mutex> lock(remoteMutex_);
-    remoteImuState_ = state;
+    std::lock_guard<std::mutex> lock(ceRemote_.mutex());
+    ceRemote_.imuState() = state;
 }
 
 void SyntheticDllRuntime::injectRemoteSerialBytes(const std::string& bytes) {
     if (bytes.empty()) return;
-    std::lock_guard<std::mutex> lock(remoteMutex_);
-    for (char ch : bytes) remoteSerialBytes_.push_back(static_cast<uint8_t>(ch));
+    std::lock_guard<std::mutex> lock(ceRemote_.mutex());
+    for (char ch : bytes) ceRemote_.serialBytes().push_back(static_cast<uint8_t>(ch));
     constexpr size_t kMaxRemoteSerialBytes = 64 * 1024;
-    while (remoteSerialBytes_.size() > kMaxRemoteSerialBytes) remoteSerialBytes_.pop_front();
-    spdlog::info("remote injected serial bytes={} queued={}", bytes.size(), remoteSerialBytes_.size());
+    while (ceRemote_.serialBytes().size() > kMaxRemoteSerialBytes) ceRemote_.serialBytes().pop_front();
+    spdlog::info("remote injected serial bytes={} queued={}", bytes.size(), ceRemote_.serialBytes().size());
 }
 
 size_t SyntheticDllRuntime::readRemoteSerialBytes(uint8_t* dst, size_t maxBytes) {
     if (!dst || !maxBytes) return 0;
-    std::lock_guard<std::mutex> lock(remoteMutex_);
-    const size_t count = std::min(maxBytes, remoteSerialBytes_.size());
+    std::lock_guard<std::mutex> lock(ceRemote_.mutex());
+    const size_t count = std::min(maxBytes, ceRemote_.serialBytes().size());
     for (size_t i = 0; i < count; ++i) {
-        dst[i] = remoteSerialBytes_.front();
-        remoteSerialBytes_.pop_front();
+        dst[i] = ceRemote_.serialBytes().front();
+        ceRemote_.serialBytes().pop_front();
     }
     return count;
 }
 
 size_t SyntheticDllRuntime::remoteSerialByteCount() const {
-    std::lock_guard<std::mutex> lock(remoteMutex_);
-    return remoteSerialBytes_.size();
+    std::lock_guard<std::mutex> lock(ceRemote_.mutex());
+    return ceRemote_.serialBytes().size();
 }
 
 void SyntheticDllRuntime::publishRemoteAudioChunk(const std::vector<uint8_t>& pcm,
@@ -1122,8 +1122,8 @@ void SyntheticDllRuntime::publishRemoteAudioChunk(const std::vector<uint8_t>& pc
     uint16_t targetChannels = 0;
     std::string targetFormatName;
     {
-        std::lock_guard<std::mutex> lock(remoteMutex_);
-        if (!remoteConfig_.audioEnabled || remoteAudioClientCount_ == 0) return;
+        std::lock_guard<std::mutex> lock(ceRemote_.mutex());
+        if (!remoteConfig_.audioEnabled || ceRemote_.audioClientCount() == 0) return;
         targetSampleRate = static_cast<uint32_t>(std::max(1, remoteConfig_.audioSampleRate));
         targetChannels = static_cast<uint16_t>(std::max(1, remoteConfig_.audioChannels));
         targetFormatName = remoteConfig_.audioFormat;
@@ -1157,37 +1157,37 @@ void SyntheticDllRuntime::publishRemoteAudioChunk(const std::vector<uint8_t>& pc
         remoteFrameBytes,
         (size_t(targetSampleRate) * remoteFrameBytes * kRemoteAudioChunkDurationMs) / 1000u);
 
-    std::lock_guard<std::mutex> lock(remoteMutex_);
-    if (remoteAudioClientCount_ == 0) {
-        remoteAudioChunks_.clear();
+    std::lock_guard<std::mutex> lock(ceRemote_.mutex());
+    if (ceRemote_.audioClientCount() == 0) {
+        ceRemote_.audioChunks().clear();
         return;
     }
-    const bool wasEmpty = remoteAudioChunks_.empty();
+    const bool wasEmpty = ceRemote_.audioChunks().empty();
     for (size_t offset = 0; offset < payload.size(); offset += chunkBytes) {
         const size_t count = std::min(chunkBytes, payload.size() - offset);
         RemoteAudioChunk chunk;
         chunk.payload.assign(payload.begin() + offset, payload.begin() + offset + count);
-        chunk.sequence = ++remoteAudioSequence_;
-        chunk.ptsMs = remoteAudioNextPtsMs_;
+        chunk.sequence = ++ceRemote_.audioSequence();
+        chunk.ptsMs = ceRemote_.audioNextPtsMs();
         chunk.durationMs = static_cast<uint32_t>(
             std::max<uint64_t>(1, (uint64_t(count / remoteFrameBytes) * 1000ull) / targetSampleRate));
-        remoteAudioNextPtsMs_ += chunk.durationMs;
-        remoteAudioChunks_.push_back(std::move(chunk));
+        ceRemote_.audioNextPtsMs() += chunk.durationMs;
+        ceRemote_.audioChunks().push_back(std::move(chunk));
     }
-    while (remoteAudioChunks_.size() > kMaxRemoteAudioQueuedChunks) remoteAudioChunks_.pop_front();
-    if (wasEmpty && !remoteAudioChunks_.empty()) remoteAudioCv_.notify_all();
+    while (ceRemote_.audioChunks().size() > kMaxRemoteAudioQueuedChunks) ceRemote_.audioChunks().pop_front();
+    if (wasEmpty && !ceRemote_.audioChunks().empty()) ceRemote_.audioCv().notify_all();
 }
 
 bool SyntheticDllRuntime::materializeRemoteAudioChunkLocked(uint32_t durationMs) {
-    if (!remoteConfig_.audioEnabled || remoteAudioClientCount_ == 0) return false;
+    if (!remoteConfig_.audioEnabled || ceRemote_.audioClientCount() == 0) return false;
 
     const uint64_t nowMs = GetTickCount64();
-    if (!remoteAudioNextPtsMs_ || remoteAudioNextPtsMs_ + 250 < nowMs) {
-        remoteAudioNextPtsMs_ = nowMs;
+    if (!ceRemote_.audioNextPtsMs() || ceRemote_.audioNextPtsMs() + 250 < nowMs) {
+        ceRemote_.audioNextPtsMs() = nowMs;
     }
 
     const std::optional<CeAudio::LiveSlice> slice =
-        ceAudio_.liveSlice(remoteAudioNextPtsMs_, std::max<uint32_t>(1, durationMs));
+        ceAudio_.liveSlice(ceRemote_.audioNextPtsMs(), std::max<uint32_t>(1, durationMs));
     if (!slice || slice->pcm.empty()) return false;
 
     const uint32_t targetSampleRate = static_cast<uint32_t>(std::max(1, remoteConfig_.audioSampleRate));
@@ -1227,69 +1227,69 @@ bool SyntheticDllRuntime::materializeRemoteAudioChunkLocked(uint32_t durationMs)
 
     RemoteAudioChunk chunk;
     chunk.payload = payload;
-    chunk.sequence = ++remoteAudioSequence_;
-    chunk.ptsMs = remoteAudioNextPtsMs_;
+    chunk.sequence = ++ceRemote_.audioSequence();
+    chunk.ptsMs = ceRemote_.audioNextPtsMs();
     chunk.durationMs = pcmDurationMs(chunk.payload.size(), targetSampleRate, targetChannels, targetFormat);
-    remoteAudioNextPtsMs_ = slice->startMs + std::max<uint32_t>(1, slice->durationMs);
-    remoteAudioChunks_.push_back(std::move(chunk));
-    while (remoteAudioChunks_.size() > kMaxRemoteAudioQueuedChunks) remoteAudioChunks_.pop_front();
+    ceRemote_.audioNextPtsMs() = slice->startMs + std::max<uint32_t>(1, slice->durationMs);
+    ceRemote_.audioChunks().push_back(std::move(chunk));
+    while (ceRemote_.audioChunks().size() > kMaxRemoteAudioQueuedChunks) ceRemote_.audioChunks().pop_front();
     return true;
 }
 
 void SyntheticDllRuntime::registerRemoteAudioClient() {
-    std::lock_guard<std::mutex> lock(remoteMutex_);
-    if (remoteAudioClientCount_ == 0) {
-        remoteAudioChunks_.clear();
-        remoteAudioNextPtsMs_ = GetTickCount64();
+    std::lock_guard<std::mutex> lock(ceRemote_.mutex());
+    if (ceRemote_.audioClientCount() == 0) {
+        ceRemote_.audioChunks().clear();
+        ceRemote_.audioNextPtsMs() = GetTickCount64();
         resetRemoteAudioConverter(this);
     }
-    ++remoteAudioClientCount_;
+    ++ceRemote_.audioClientCount();
     materializeRemoteAudioChunkLocked(kRemoteAudioChunkDurationMs);
-    remoteAudioCv_.notify_all();
+    ceRemote_.audioCv().notify_all();
 }
 
 void SyntheticDllRuntime::unregisterRemoteAudioClient() {
     {
-        std::lock_guard<std::mutex> lock(remoteMutex_);
-        if (remoteAudioClientCount_ > 0) --remoteAudioClientCount_;
-        if (remoteAudioClientCount_ == 0) {
-            remoteAudioChunks_.clear();
-            remoteAudioNextPtsMs_ = 0;
+        std::lock_guard<std::mutex> lock(ceRemote_.mutex());
+        if (ceRemote_.audioClientCount() > 0) --ceRemote_.audioClientCount();
+        if (ceRemote_.audioClientCount() == 0) {
+            ceRemote_.audioChunks().clear();
+            ceRemote_.audioNextPtsMs() = 0;
             resetRemoteAudioConverter(this);
         }
     }
-    remoteAudioCv_.notify_all();
+    ceRemote_.audioCv().notify_all();
 }
 
 void SyntheticDllRuntime::clearRemoteAudioChunks() {
-    std::lock_guard<std::mutex> lock(remoteMutex_);
-    remoteAudioChunks_.clear();
-    remoteAudioNextPtsMs_ = GetTickCount64();
+    std::lock_guard<std::mutex> lock(ceRemote_.mutex());
+    ceRemote_.audioChunks().clear();
+    ceRemote_.audioNextPtsMs() = GetTickCount64();
     resetRemoteAudioConverter(this);
 }
 
 bool SyntheticDllRuntime::waitForRemoteAudioChunks(uint32_t timeoutMs) {
-    std::unique_lock<std::mutex> lock(remoteMutex_);
-    if (remoteAudioChunks_.empty()) materializeRemoteAudioChunkLocked(kRemoteAudioChunkDurationMs);
-    if (!remoteAudioChunks_.empty() || remoteAudioClientCount_ == 0) return !remoteAudioChunks_.empty();
-    remoteAudioCv_.wait_for(lock,
+    std::unique_lock<std::mutex> lock(ceRemote_.mutex());
+    if (ceRemote_.audioChunks().empty()) materializeRemoteAudioChunkLocked(kRemoteAudioChunkDurationMs);
+    if (!ceRemote_.audioChunks().empty() || ceRemote_.audioClientCount() == 0) return !ceRemote_.audioChunks().empty();
+    ceRemote_.audioCv().wait_for(lock,
                             std::chrono::milliseconds(std::max<uint32_t>(1, timeoutMs)),
                             [&] {
-                                if (remoteAudioChunks_.empty()) {
+                                if (ceRemote_.audioChunks().empty()) {
                                     materializeRemoteAudioChunkLocked(kRemoteAudioChunkDurationMs);
                                 }
-                                return !remoteAudioChunks_.empty() || remoteAudioClientCount_ == 0;
+                                return !ceRemote_.audioChunks().empty() || ceRemote_.audioClientCount() == 0;
                             });
-    return !remoteAudioChunks_.empty();
+    return !ceRemote_.audioChunks().empty();
 }
 
 std::vector<SyntheticDllRuntime::RemoteAudioChunk> SyntheticDllRuntime::takeRemoteAudioChunks(size_t maxChunks) {
     std::vector<RemoteAudioChunk> chunks;
-    std::lock_guard<std::mutex> lock(remoteMutex_);
-    if (remoteAudioChunks_.empty()) materializeRemoteAudioChunkLocked(kRemoteAudioChunkDurationMs);
-    while (!remoteAudioChunks_.empty() && chunks.size() < maxChunks) {
-        chunks.push_back(std::move(remoteAudioChunks_.front()));
-        remoteAudioChunks_.pop_front();
+    std::lock_guard<std::mutex> lock(ceRemote_.mutex());
+    if (ceRemote_.audioChunks().empty()) materializeRemoteAudioChunkLocked(kRemoteAudioChunkDurationMs);
+    while (!ceRemote_.audioChunks().empty() && chunks.size() < maxChunks) {
+        chunks.push_back(std::move(ceRemote_.audioChunks().front()));
+        ceRemote_.audioChunks().pop_front();
     }
     return chunks;
 }
@@ -1302,7 +1302,7 @@ std::vector<uint32_t> SyntheticDllRuntime::copyRemoteFramebuffer(int& width, int
 }
 
 nlohmann::json SyntheticDllRuntime::remoteStatusJson() const {
-    std::lock_guard<std::mutex> lock(remoteMutex_);
+    std::lock_guard<std::mutex> lock(ceRemote_.mutex());
     return {
         {"running", true},
         {"guestWidth", framebufferWidth_},
@@ -1317,7 +1317,7 @@ nlohmann::json SyntheticDllRuntime::remoteStatusJson() const {
         {"audioFormat", remoteConfig_.audioFormat},
         {"gpsEnabled", true},
         {"gpsTarget", remoteGpsTarget()},
-        {"paused", remotePaused_},
+        {"paused", ceRemote_.paused()},
     };
 }
 

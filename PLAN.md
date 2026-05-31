@@ -500,6 +500,9 @@ results, or timing thresholds.
   - [x] Add `CeRemote` and move legacy remote touch/key/audio chunk type
     definitions there, keeping runtime aliases and queue storage unchanged for
     this buildable step.
+  - [x] Move remote mutex, audio condition variable, touch/key queues, serial
+    injection queue, audio chunk queue/cursors/client count, IMU state, and
+    pause flag behind `CeRemote`.
 - [x] Add a `CrossProcessBroker` owner for companion window registry paths,
   imported external HWNDs, cross-process message queue transport, and shared
   mapping backing files.

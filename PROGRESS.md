@@ -259,6 +259,15 @@ Current emulator difference:
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_remote.h` and
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.h`. The 2026-05-31
   Release build passed with the existing vcpkg/Boost warnings.
+- Remote endpoint storage now also lives behind `CeRemote`: the remote mutex,
+  audio condition variable, touch/key queues, serial injection queue, audio
+  chunk queue/cursors/client count, IMU JSON, and pause flag moved out of
+  `SyntheticDllRuntime`. Remote API behavior and audio/live-tap behavior are
+  unchanged. Current source anchors:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_remote.h`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/remote_server.cpp`, and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_host_audio.cpp`. The
+  2026-05-31 Release build passed with the existing vcpkg/Boost warnings.
 - A follow-up live report showed the startup safety/fullscreen surface could
   visually overlap with the bottom strip again: stale fullscreen-popup pixels
   remained while exposed owner/child UI repainted. Log evidence from Debug run

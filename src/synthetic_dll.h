@@ -657,17 +657,6 @@ private:
     bool hostAudioBackendStop_{};
     RemoteServerConfig remoteConfig_;
     std::unique_ptr<RemoteServerHandle, RemoteServerHandleDeleter> remoteServer_;
-    mutable std::mutex remoteMutex_;
-    mutable std::condition_variable remoteAudioCv_;
-    std::deque<RemoteTouchEvent> remoteTouchEvents_;
-    std::deque<RemoteKeyEvent> remoteKeyEvents_;
-    std::deque<uint8_t> remoteSerialBytes_;
-    std::deque<RemoteAudioChunk> remoteAudioChunks_;
-    size_t remoteAudioClientCount_{};
-    uint64_t remoteAudioSequence_{};
-    uint64_t remoteAudioNextPtsMs_{};
-    nlohmann::json remoteImuState_;
-    bool remotePaused_{};
     std::map<uint32_t, std::string> registryHandles_;
     std::map<uint32_t, std::string> fileHandleDebugNames_;
     std::map<std::wstring, CachedFileAttributes> fileAttributeCache_;

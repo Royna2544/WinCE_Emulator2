@@ -798,7 +798,7 @@ bool SyntheticDllRuntime::handleWaveOutWrite(SyntheticExportCode code, const Gue
         ? uint32_t((uint64_t(guestLength) * 1000u) / state->second.avgBytesPerSec)
         : 0;
     ret = queued ? MMSYSERR_NOERROR : hostRet;
-    if (queued) remoteAudioCv_.notify_all();
+    if (queued) ceRemote_.audioCv().notify_all();
     spdlog::info("waveOutWrite virtual={} hostBackend={} callbackMode=0x{:08x} durationMs={} flags=0x{:08x} doneCallbacksBefore={} doneCallbacksAfter={} lastDoneTick={} elapsedMs={}",
                  queued ? 1 : 0,
                  hostRet,

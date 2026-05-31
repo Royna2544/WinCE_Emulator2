@@ -2406,8 +2406,8 @@ void SyntheticDllRuntime::runHostMessageLoopUntilClosed(bool showHostWindows) {
         }
         bool remotePaused = false;
         {
-            std::lock_guard<std::mutex> lock(remoteMutex_);
-            remotePaused = remotePaused_;
+            std::lock_guard<std::mutex> lock(ceRemote_.mutex());
+            remotePaused = ceRemote_.paused();
         }
         if (remotePaused) {
             pumpHostMessages();
