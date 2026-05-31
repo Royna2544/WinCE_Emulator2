@@ -1585,3 +1585,18 @@ Confirmed behavior difference:
   reference:
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp:1569`.
   Release build passed with the known vcpkg duplicate import warning.
+- Debug interactive run `captures/inavi_autodrive_20260531_162456` showed the
+  bottom bar window existed and was visible (`hwnd=0x00010143`, title
+  `양천구 목동`), but full-screen popup teardown restored saved framebuffer
+  backing and then queued exposed-window repaint requests from unordered window
+  map iteration. That can let a later owner/root repaint become the final
+  visible state over an already-visible child such as the bottom bar. The
+  exposed-window path now queues repaint requests in CE-shaped visible-stack
+  order: ancestors/root windows first, then child/overlay windows by depth and
+  z-order. CE source anchors: `cmsgque.h` paint requests are separate from
+  normal posted messages, and `window.hpp` tracks visible/update regions
+  (`m_hrgnVisible`, `m_hrgnUpdate`) rather than treating map iteration as paint
+  truth. Current source references:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp:1229` and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp:1337`. Release and
+  Debug builds passed with the known vcpkg/Boost warnings.

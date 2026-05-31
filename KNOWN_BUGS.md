@@ -134,6 +134,36 @@ Status:
   The bug remains open until the queue model, wake categories, and
   send-message edge cases are the behavioral truth.
 
+### Bottom Bar Can Be Hidden After Full-Screen Popup Teardown
+
+Symptom:
+
+- The bottom bar window can be visible in the GWE/window state but missing or
+  overwritten on the framebuffer after a full-screen owned popup is destroyed.
+
+Evidence:
+
+- Debug run:
+  `captures/inavi_autodrive_20260531_162456/emulator.stdout.log`.
+- The bottom bar `hwnd=0x00010143` is shown, receives text
+  `양천구 목동`, and receives `WM_PAINT`, but later `DestroyWindow` for
+  full-screen popup `0x00013e24` restores saved backing and queues exposed
+  repaints from unordered map iteration.
+- CE reference: paint requests are a separate GWE queue component and windows
+  own visible/update regions rather than relying on container iteration order:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/cmsgque.h:471`
+  and
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/window.hpp:1352`.
+
+Status:
+
+- Mitigated in source on 2026-05-31 by queuing exposed repaint requests in
+  visible-stack order: owner/root windows first, then visible children and
+  overlays by stack depth and z-order. Current source:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp:1229`.
+  Release and Debug builds passed. Needs live validation in the next
+  interactive run before this entry can be marked resolved.
+
 ### Current Search Freeze Signature
 
 Symptom:

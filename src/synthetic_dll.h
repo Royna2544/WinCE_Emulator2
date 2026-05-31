@@ -1131,6 +1131,7 @@ private:
     void queueVisibleFullScreenPopupPaint(uint32_t hwnd);
     void queueVisiblePopupPaint(uint32_t hwnd);
     void queueVisiblePopupPaintsAbove(uint32_t hwnd);
+    size_t queueExposedWindowRepaints(uint32_t destroyedHwnd);
     std::pair<int32_t, int32_t> guestWindowOrigin(uint32_t hwnd) const;
     void noteGuestWindowPaint(uint32_t hwnd,
                               int32_t left,

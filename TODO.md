@@ -189,8 +189,12 @@ Active refactor checklist: `PLAN.md`.
      Another overlap regression was fixed in source: full-screen owned popup
      teardown now restores captured backing before exposed owner/child repaint,
      instead of discarding backing and leaving stale popup pixels under the
-     bottom strip. Next validation should confirm the startup safety screen no
-     longer visually overlaps with the bottom bar during the transition.
+     bottom strip. A follow-up bottom-bar-missing report showed exposed-window
+     repaint requests were still queued from unordered window-map iteration;
+     exposed repaint now queues owner/root windows before visible children and
+     overlays by stack depth/z-order. Next validation should confirm the
+     startup safety screen no longer visually overlaps with the bottom bar and
+     the bottom bar remains visible after the fullscreen popup is destroyed.
 
 2. Introduce a CE-shaped internal `MsgQueue` model.
    - CE reference:

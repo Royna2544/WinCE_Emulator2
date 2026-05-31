@@ -1230,6 +1230,48 @@ void SyntheticDllRuntime::queueVisiblePopupPaintsAbove(uint32_t hwnd) {
                  popups.size(), hwnd);
 }
 
+size_t SyntheticDllRuntime::queueExposedWindowRepaints(uint32_t destroyedHwnd) {
+    std::vector<uint32_t> exposed;
+    exposed.reserve(ceGwe_.windows().size());
+    for (const auto& [otherHwnd, window] : ceGwe_.windows()) {
+        if (otherHwnd == destroyedHwnd || window.destroyed || !window.visible) continue;
+        if (coveringFullScreenOwnedPopup(otherHwnd)) continue;
+        exposed.push_back(otherHwnd);
+    }
+
+    const auto depth = [&](uint32_t hwnd) {
+        size_t result = 0;
+        for (uint32_t current = hwnd; current;) {
+            auto it = ceGwe_.windows().find(current);
+            if (it == ceGwe_.windows().end()) break;
+            const uint32_t next = (it->second.style & kWindowStyleChild)
+                ? it->second.parent
+                : inferredWindowOwner(current);
+            if (!next) break;
+            ++result;
+            current = next;
+        }
+        return result;
+    };
+
+    std::sort(exposed.begin(), exposed.end(), [&](uint32_t left, uint32_t right) {
+        if (isWindowInGweStack(right, left)) return true;
+        if (isWindowInGweStack(left, right)) return false;
+        const size_t leftDepth = depth(left);
+        const size_t rightDepth = depth(right);
+        if (leftDepth != rightDepth) return leftDepth < rightDepth;
+        const uint64_t leftZ = windowZOrder(left);
+        const uint64_t rightZ = windowZOrder(right);
+        if (leftZ != rightZ) return leftZ < rightZ;
+        return left < right;
+    });
+
+    for (uint32_t hwnd : exposed) {
+        queueGuestPaint(hwnd, true);
+    }
+    return exposed.size();
+}
+
 std::pair<int32_t, int32_t> SyntheticDllRuntime::guestWindowOrigin(uint32_t hwnd) const {
     int32_t x = 0;
     int32_t y = 0;

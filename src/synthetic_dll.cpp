@@ -1334,12 +1334,7 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
             queueGuestPaint(parent, true);
         }
         if (exposesCoveredWindows) {
-            size_t exposed = 0;
-            for (const auto& [otherHwnd, window] : ceGwe_.windows()) {
-                if (otherHwnd == hwnd || window.destroyed || !window.visible) continue;
-                queueGuestPaint(otherHwnd, true);
-                ++exposed;
-            }
+            const size_t exposed = queueExposedWindowRepaints(hwnd);
             spdlog::info("DestroyWindow exposed full-screen popup hwnd=0x{:08x}; queued repaint for {} visible windows",
                          hwnd, exposed);
         }
