@@ -333,6 +333,22 @@ ma_format guestWaveFormat(uint16_t formatTag, uint16_t bitsPerSample) {
     return ma_format_unknown;
 }
 
+bool remotePcmFormatsMatch(uint16_t sourceFormatTag,
+                           uint32_t sourceSampleRate,
+                           uint16_t sourceChannels,
+                           uint16_t sourceBlockAlign,
+                           uint16_t sourceBitsPerSample,
+                           std::string_view targetFormatName,
+                           uint32_t targetSampleRate,
+                           uint16_t targetChannels) {
+    const ma_format sourceFormat = guestWaveFormat(sourceFormatTag, sourceBitsPerSample);
+    const ma_format targetFormat = remoteAudioFormat(targetFormatName);
+    if (sourceFormat == ma_format_unknown || sourceFormat != targetFormat) return false;
+    if (sourceSampleRate != targetSampleRate || sourceChannels != targetChannels) return false;
+    const size_t frameBytes = size_t(sourceChannels) * ma_get_bytes_per_sample(sourceFormat);
+    return frameBytes != 0 && (!sourceBlockAlign || sourceBlockAlign == frameBytes);
+}
+
 std::vector<uint8_t> convertRemotePcm(const std::vector<uint8_t>& pcm,
                                       uint16_t sourceFormatTag,
                                       uint32_t sourceSampleRate,
@@ -993,7 +1009,16 @@ void SyntheticDllRuntime::publishRemoteAudioChunk(const std::vector<uint8_t>& pc
                                                       targetFormatName,
                                                       targetSampleRate,
                                                       targetChannels);
-    const std::vector<uint8_t>& payload = converted.empty() ? pcm : converted;
+    const bool exactRemoteFormat = remotePcmFormatsMatch(sourceFormatTag,
+                                                        sourceSampleRate,
+                                                        sourceChannels,
+                                                        sourceBlockAlign,
+                                                        sourceBitsPerSample,
+                                                        targetFormatName,
+                                                        targetSampleRate,
+                                                        targetChannels);
+    const std::vector<uint8_t>& payload = converted.empty() && exactRemoteFormat ? pcm : converted;
+    if (payload.empty()) return;
     const size_t remoteFrameBytes = size_t(targetChannels) * targetSampleBytes;
     const size_t chunkBytes = std::max<size_t>(
         remoteFrameBytes,
@@ -1048,7 +1073,15 @@ bool SyntheticDllRuntime::materializeRemoteAudioChunkLocked(uint32_t durationMs)
                                                       targetFormatName,
                                                       targetSampleRate,
                                                       targetChannels);
-    const std::vector<uint8_t>& payload = converted.empty() ? slice->pcm : converted;
+    const bool exactRemoteFormat = remotePcmFormatsMatch(slice->format.formatTag,
+                                                        slice->format.samplesPerSec,
+                                                        slice->format.channels,
+                                                        slice->format.blockAlign,
+                                                        slice->format.bitsPerSample,
+                                                        targetFormatName,
+                                                        targetSampleRate,
+                                                        targetChannels);
+    const std::vector<uint8_t>& payload = converted.empty() && exactRemoteFormat ? slice->pcm : converted;
     if (payload.empty()) return false;
 
     RemoteAudioChunk chunk;

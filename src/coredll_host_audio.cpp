@@ -168,9 +168,21 @@ void SyntheticDllRuntime::startHostAudioBackend() {
                 const uint32_t durationMs = chunk.avgBytesPerSec
                     ? static_cast<uint32_t>(std::max<uint64_t>(1, (uint64_t(chunk.pcm.size()) * 1000ull) / chunk.avgBytesPerSec))
                     : 1;
-                std::this_thread::sleep_for(std::chrono::milliseconds(durationMs + 2));
+                const uint64_t deadline = GetTickCount64() + uint64_t(durationMs) + 1000ull;
+                while (!(header.dwFlags & WHDR_DONE) && GetTickCount64() < deadline) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                }
+                while (winmm.waveOutUnprepareHeader(host, &header, sizeof(header)) == WAVERR_STILLPLAYING &&
+                       GetTickCount64() < deadline) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                }
+                if (header.dwFlags & WHDR_PREPARED) {
+                    if (winmm.waveOutReset) winmm.waveOutReset(host);
+                    winmm.waveOutUnprepareHeader(host, &header, sizeof(header));
+                }
+            } else {
+                winmm.waveOutUnprepareHeader(host, &header, sizeof(header));
             }
-            winmm.waveOutUnprepareHeader(host, &header, sizeof(header));
         }
     });
 }
@@ -191,7 +203,7 @@ void SyntheticDllRuntime::queueHostAudioBackend(uint32_t guestHandle,
                                                 uint32_t avgBytesPerSec,
                                                 uint16_t blockAlign) {
     if (!hostValue || pcm.empty()) return;
-    constexpr uint32_t kBackendChunkDurationMs = 20;
+    constexpr uint32_t kBackendChunkDurationMs = 100;
     const size_t align = std::max<size_t>(1, blockAlign);
     const size_t rawChunkBytes = avgBytesPerSec
         ? std::max<size_t>(align, (size_t(avgBytesPerSec) * kBackendChunkDurationMs) / 1000u)
