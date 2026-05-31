@@ -206,11 +206,10 @@ Status:
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_host_audio.cpp:135`,
   and
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/remote_server.cpp:1022`.
-- Remaining open piece: local WinMM playback is now a backend and no longer
-  the guest-visible clock, but it is still fed as host buffers rather than a
-  fully chunked backend timeline. Validate whether local playback still stacks
-  behind long startup audio, then split host backend submission into smaller
-  chunks if needed.
+- Local WinMM playback is now a backend and no longer the guest-visible
+  clock; it is fed through a small backend chunk queue instead of a single
+  whole-buffer host submission. Remaining open piece: validate a real
+  interactive run with mid-startup websocket connect and short click sounds.
 
 ## Resolved: Missing Host Serial Port Added Startup Delay
 

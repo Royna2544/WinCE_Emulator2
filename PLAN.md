@@ -487,7 +487,7 @@ results, or timing thresholds.
   `CeAudio` timeline. A client connecting mid-buffer starts from the current
   playback offset, not from stale startup PCM and not only from the next
   `waveOutWrite`.
-- [ ] Feed host/local WinMM from smaller backend chunks instead of submitting
+- [x] Feed host/local WinMM from smaller backend chunks instead of submitting
   the whole guest buffer as one host buffer. Guest-visible timing is now
   virtual, but local host playback still uses WinMM as the playback backend.
 - [x] Audit the current host-audio shim and wait loop before changing

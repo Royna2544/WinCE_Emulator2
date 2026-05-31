@@ -670,6 +670,7 @@ uint32_t SyntheticDllRuntime::closeGuestHandle(uint32_t guestHandle) {
                it->second.kind == GuestHandle::Kind::GuestFind) {
         fileHandleDebugNames_.erase(guestHandle);
     } else if (it->second.kind == GuestHandle::Kind::HostWaveOut) {
+        clearHostAudioBackend(guestHandle);
         ceAudio_.closeStream(guestHandle);
         waveOutStates_.erase(guestHandle);
         hostWaveBuffers_.clear();

@@ -145,7 +145,10 @@ Current emulator difference:
   client connecting mid-buffer starts near the current playback offset instead
   of hearing stale startup PCM or waiting for a future `waveOutWrite`. Host
   WinMM is opened with `CALLBACK_NULL`, so local playback remains a backend
-  rather than the guest-visible clock. CE references:
+  rather than the guest-visible clock. Local host playback is now fed through
+  a small backend chunk queue instead of one whole guest buffer submission, so
+  a long startup sound should not sit inside WinMM as a single giant backend
+  buffer. CE references:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/CORE/DLL/core_common.def:944`,
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COMM/BLUETOOTH/AV/A2DP/wavemain.cpp:396`,
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COMM/BLUETOOTH/AV/A2DP/strmctxt.cpp:130`,
@@ -157,9 +160,8 @@ Current emulator difference:
   and
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/remote_server.cpp:1022`.
   The 2026-05-31 Release build passed with the existing Boost Beast warning
-  from `remote_server.cpp`. Remaining follow-up: feed host/local WinMM from
-  smaller backend chunks instead of submitting the full guest buffer as one
-  local playback buffer.
+  from `remote_server.cpp`; a later Debug build compiled but could not link
+  because the old Debug emulator process was still running.
 - Remote input press/release now wakes a window-owner thread parked in a
   non-`waitAll` multi-object wait when that owner has pending GWE messages.
   This models CE `MsgQueue::m_hNewEvents` enough to avoid button-up messages

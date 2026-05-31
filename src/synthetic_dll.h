@@ -607,6 +607,13 @@ private:
         std::array<uint8_t, 64> header{};
         std::shared_ptr<void> completionContext;
     };
+    struct HostAudioBackendChunk {
+        uint32_t guestHandle{};
+        uintptr_t hostValue{};
+        std::vector<uint8_t> pcm;
+        uint32_t avgBytesPerSec{};
+        uint16_t blockAlign{};
+    };
     struct GuestWaveOutState {
         uint32_t callback{};
         uint32_t instance{};
@@ -812,6 +819,11 @@ private:
     std::map<uint32_t, HostWaveBuffer> hostWaveBuffers_;
     std::map<uint32_t, GuestWaveOutState> waveOutStates_;
     std::vector<CachedWaveOutDevice> cachedWaveOutDevices_;
+    std::mutex hostAudioBackendMutex_;
+    std::condition_variable hostAudioBackendCv_;
+    std::thread hostAudioBackendThread_;
+    std::deque<HostAudioBackendChunk> hostAudioBackendChunks_;
+    bool hostAudioBackendStop_{};
     RemoteServerConfig remoteConfig_;
     std::unique_ptr<RemoteServerHandle, RemoteServerHandleDeleter> remoteServer_;
     mutable std::mutex remoteMutex_;
@@ -1269,6 +1281,14 @@ private:
     void updateCurrentThreadKData(uint32_t currentThreadValue, uint32_t tlsBase);
     void startRemoteServer();
     void stopRemoteServer();
+    void startHostAudioBackend();
+    void stopHostAudioBackend();
+    void queueHostAudioBackend(uint32_t guestHandle,
+                               uintptr_t hostValue,
+                               const std::vector<uint8_t>& pcm,
+                               uint32_t avgBytesPerSec,
+                               uint16_t blockAlign);
+    void clearHostAudioBackend(uint32_t guestHandle);
     void drainRemoteInputEvents();
     bool enqueueRemoteTouch(const std::string& phase, int32_t x, int32_t y, std::string& error);
     bool enqueueRemoteKey(const std::string& phase, uint32_t vk, std::string& error);

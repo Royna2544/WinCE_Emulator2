@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <optional>
+#include <thread>
 #include <spdlog/spdlog.h>
 
 namespace {
@@ -133,6 +134,95 @@ void SyntheticDllRuntime::closeHostWaveInHandle(uintptr_t hostValue) {
 void SyntheticDllRuntime::closeHostWaveOutHandle(uintptr_t hostValue) {
     auto& winmm = winmmBridge();
     if (winmm.waveOutClose) winmm.waveOutClose(reinterpret_cast<HWAVEOUT>(hostValue));
+}
+
+void SyntheticDllRuntime::startHostAudioBackend() {
+    std::lock_guard<std::mutex> lock(hostAudioBackendMutex_);
+    if (hostAudioBackendThread_.joinable()) return;
+    hostAudioBackendStop_ = false;
+    hostAudioBackendThread_ = std::thread([this] {
+        for (;;) {
+            HostAudioBackendChunk chunk;
+            {
+                std::unique_lock<std::mutex> lock(hostAudioBackendMutex_);
+                hostAudioBackendCv_.wait(lock, [&] {
+                    return hostAudioBackendStop_ || !hostAudioBackendChunks_.empty();
+                });
+                if (hostAudioBackendStop_ && hostAudioBackendChunks_.empty()) break;
+                chunk = std::move(hostAudioBackendChunks_.front());
+                hostAudioBackendChunks_.pop_front();
+            }
+
+            if (!chunk.hostValue || chunk.pcm.empty()) continue;
+            auto& winmm = winmmBridge();
+            if (!winmm.waveOutPrepareHeader || !winmm.waveOutWrite || !winmm.waveOutUnprepareHeader) continue;
+
+            WAVEHDR header{};
+            header.lpData = reinterpret_cast<LPSTR>(chunk.pcm.data());
+            header.dwBufferLength = static_cast<DWORD>(chunk.pcm.size());
+            HWAVEOUT host = reinterpret_cast<HWAVEOUT>(chunk.hostValue);
+            const MMRESULT prepare = winmm.waveOutPrepareHeader(host, &header, sizeof(header));
+            if (prepare != MMSYSERR_NOERROR) continue;
+            const MMRESULT write = winmm.waveOutWrite(host, &header, sizeof(header));
+            if (write == MMSYSERR_NOERROR) {
+                const uint32_t durationMs = chunk.avgBytesPerSec
+                    ? static_cast<uint32_t>(std::max<uint64_t>(1, (uint64_t(chunk.pcm.size()) * 1000ull) / chunk.avgBytesPerSec))
+                    : 1;
+                std::this_thread::sleep_for(std::chrono::milliseconds(durationMs + 2));
+            }
+            winmm.waveOutUnprepareHeader(host, &header, sizeof(header));
+        }
+    });
+}
+
+void SyntheticDllRuntime::stopHostAudioBackend() {
+    {
+        std::lock_guard<std::mutex> lock(hostAudioBackendMutex_);
+        hostAudioBackendStop_ = true;
+        hostAudioBackendChunks_.clear();
+    }
+    hostAudioBackendCv_.notify_all();
+    if (hostAudioBackendThread_.joinable()) hostAudioBackendThread_.join();
+}
+
+void SyntheticDllRuntime::queueHostAudioBackend(uint32_t guestHandle,
+                                                uintptr_t hostValue,
+                                                const std::vector<uint8_t>& pcm,
+                                                uint32_t avgBytesPerSec,
+                                                uint16_t blockAlign) {
+    if (!hostValue || pcm.empty()) return;
+    constexpr uint32_t kBackendChunkDurationMs = 20;
+    const size_t align = std::max<size_t>(1, blockAlign);
+    const size_t rawChunkBytes = avgBytesPerSec
+        ? std::max<size_t>(align, (size_t(avgBytesPerSec) * kBackendChunkDurationMs) / 1000u)
+        : pcm.size();
+    const size_t chunkBytes = std::max<size_t>(align, rawChunkBytes - (rawChunkBytes % align));
+
+    startHostAudioBackend();
+    {
+        std::lock_guard<std::mutex> lock(hostAudioBackendMutex_);
+        for (size_t offset = 0; offset < pcm.size(); offset += chunkBytes) {
+            const size_t count = std::min(chunkBytes, pcm.size() - offset);
+            HostAudioBackendChunk chunk;
+            chunk.guestHandle = guestHandle;
+            chunk.hostValue = hostValue;
+            chunk.avgBytesPerSec = avgBytesPerSec;
+            chunk.blockAlign = blockAlign;
+            chunk.pcm.assign(pcm.begin() + offset, pcm.begin() + offset + count);
+            hostAudioBackendChunks_.push_back(std::move(chunk));
+        }
+        constexpr size_t kMaxBackendChunks = 2048;
+        while (hostAudioBackendChunks_.size() > kMaxBackendChunks) hostAudioBackendChunks_.pop_front();
+    }
+    hostAudioBackendCv_.notify_all();
+}
+
+void SyntheticDllRuntime::clearHostAudioBackend(uint32_t guestHandle) {
+    std::lock_guard<std::mutex> lock(hostAudioBackendMutex_);
+    for (auto it = hostAudioBackendChunks_.begin(); it != hostAudioBackendChunks_.end();) {
+        if (it->guestHandle == guestHandle) it = hostAudioBackendChunks_.erase(it);
+        else ++it;
+    }
 }
 
 void SyntheticDllRuntime::refreshCompletedHostWaveBuffers() {
@@ -470,6 +560,7 @@ bool SyntheticDllRuntime::handleWaveOutClose(SyntheticExportCode code, const Gue
         const uint64_t start = GetTickCount64();
         auto state = waveOutStates_.find(args.a0);
         HWAVEOUT host = reinterpret_cast<HWAVEOUT>(handle->hostValue);
+        clearHostAudioBackend(args.a0);
         if (winmm.waveOutReset) winmm.waveOutReset(host);
         for (const CeAudio::Completion& completion : ceAudio_.closeStream(args.a0)) {
             auto it = hostWaveBuffers_.find(completion.guestHeader);
@@ -539,6 +630,7 @@ bool SyntheticDllRuntime::handleWaveOutReset(SyntheticExportCode code, const Gue
         ret = MMSYSERR_INVALHANDLE;
         return true;
     }
+    clearHostAudioBackend(args.a0);
     if (winmm.waveOutReset) winmm.waveOutReset(reinterpret_cast<HWAVEOUT>(handle->hostValue));
     for (const CeAudio::Completion& completion : ceAudio_.resetStream(args.a0)) {
         auto it = hostWaveBuffers_.find(completion.guestHeader);
@@ -680,9 +772,14 @@ bool SyntheticDllRuntime::handleWaveOutWrite(SyntheticExportCode code, const Gue
     }
     const uint32_t doneBefore = g_waveOutDoneCallbacks.load(std::memory_order_relaxed);
     const uint64_t start = GetTickCount64();
-    const MMRESULT hostRet = winmm.waveOutWrite
-        ? winmm.waveOutWrite(reinterpret_cast<HWAVEOUT>(handle->hostValue), header, sizeof(*header))
-        : MMSYSERR_ERROR;
+    if (readOk && state != waveOutStates_.end()) {
+        queueHostAudioBackend(args.a0,
+                              handle->hostValue,
+                              stored.data,
+                              state->second.avgBytesPerSec,
+                              state->second.blockAlign);
+    }
+    const MMRESULT hostRet = readOk ? MMSYSERR_NOERROR : MMSYSERR_ERROR;
     const uint64_t elapsed = GetTickCount64() - start;
     const uint32_t callbackMode = state == waveOutStates_.end() ? CALLBACK_NULL : (state->second.flags & CALLBACK_TYPEMASK);
     const uint32_t durationMs = state != waveOutStates_.end() && state->second.avgBytesPerSec
@@ -690,7 +787,7 @@ bool SyntheticDllRuntime::handleWaveOutWrite(SyntheticExportCode code, const Gue
         : 0;
     ret = queued ? MMSYSERR_NOERROR : hostRet;
     if (queued) remoteAudioCv_.notify_all();
-    spdlog::info("waveOutWrite virtual={} hostRet={} callbackMode=0x{:08x} durationMs={} flags=0x{:08x} doneCallbacksBefore={} doneCallbacksAfter={} lastDoneTick={} elapsedMs={}",
+    spdlog::info("waveOutWrite virtual={} hostBackend={} callbackMode=0x{:08x} durationMs={} flags=0x{:08x} doneCallbacksBefore={} doneCallbacksAfter={} lastDoneTick={} elapsedMs={}",
                  queued ? 1 : 0,
                  hostRet,
                  callbackMode,

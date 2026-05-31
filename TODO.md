@@ -27,10 +27,10 @@ Active refactor checklist: `PLAN.md`.
      slices. Websocket clients now join active playback near the current
      offset instead of receiving stale startup PCM or silence until the next
      `waveOutWrite`. Guest completion is virtual; host WinMM is a backend
-     opened with `CALLBACK_NULL`. Next step is Debug interactive validation
-     with a mid-startup websocket connect and short button-click sounds, then
-     a follow-up pass to feed local WinMM from smaller backend chunks if local
-     playback still stacks behind a long guest buffer.
+     opened with `CALLBACK_NULL`, and local WinMM playback is fed from a small
+     backend chunk queue instead of one whole guest buffer. Next step is Debug
+     interactive validation with a mid-startup websocket connect and short
+     button-click sounds.
 
 1. Finish virtual serial wait semantics and scheduler responsiveness.
    - CE reference:

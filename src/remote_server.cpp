@@ -828,6 +828,7 @@ void RemoteServerHandleDeleter::operator()(RemoteServerHandle* handle) const {
 }
 
 SyntheticDllRuntime::~SyntheticDllRuntime() {
+    stopHostAudioBackend();
     stopRemoteServer();
 }
 
