@@ -469,6 +469,11 @@ results, or timing thresholds.
   supplied keys such as guest addresses, module bases, filesystem paths, and
   imported cross-process handles.
   Current source anchor: `src/ce_slot_table.h`.
+  - [x] Convert lookup-only hot integer maps in the runtime header to
+    `std::unordered_map` where call sites do not depend on ordered iteration:
+    synthetic exports by address, allocation metadata, TLS/critical-section
+    depths, GDI object maps, stock-object cache, and file read/seek counters.
+    Current source anchor: `src/synthetic_dll.h`.
 - [x] Flatten synthetic ordinal dispatch into per-DLL ordinal-indexed handler
   tables so the hot path is `PC -> ExportEntry -> handler`, while preserving
   SDK ordinal metadata and unknown-ordinal logging.

@@ -209,6 +209,16 @@ Current emulator difference:
   Bounded Release startup smoke `captures/inavi_autodrive_20260531_144707`
   captured the initial window and log scan found no fatal, unsupported-ordinal,
   `UC_ERR`, or false-`PC == 0` signatures.
+- Lookup-only hot integer maps in `SyntheticDllRuntime` now use
+  `std::unordered_map` instead of ordered maps where iteration order is not
+  guest-visible: synthetic exports by address, allocation metadata, TLS and
+  critical-section depth state, GDI object maps, stock-object cache, and file
+  read/seek counters. Ordering-sensitive window and module-base iteration is
+  intentionally unchanged for later subsystem migration. The 2026-05-31
+  Release build passed with the existing vcpkg/Boost warnings, and bounded
+  Release startup smoke `captures/inavi_autodrive_20260531_145009` captured
+  the initial window with no fatal, unsupported-ordinal, `UC_ERR`, or
+  false-`PC == 0` log signatures.
 - A follow-up live report showed the startup safety/fullscreen surface could
   visually overlap with the bottom strip again: stale fullscreen-popup pixels
   remained while exposed owner/child UI repainted. Log evidence from Debug run
