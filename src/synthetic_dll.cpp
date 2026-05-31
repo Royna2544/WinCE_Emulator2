@@ -2376,10 +2376,10 @@ void SyntheticDllRuntime::dispatch(ExportEntry& entry) {
                     uc_mem_read(uc_, a0 + 4, &msg, sizeof(msg));
                     uc_mem_read(uc_, a0 + 8, &wParam, sizeof(wParam));
                     uc_mem_read(uc_, a0 + 12, &lParam, sizeof(lParam));
-                    auto syncSender = retrievedSyncSendersByMsgPtr_.find(a0);
-                    if (syncSender != retrievedSyncSendersByMsgPtr_.end()) {
+                    auto syncSender = ceGwe_.retrievedSyncSendersByMsgPtr().find(a0);
+                    if (syncSender != ceGwe_.retrievedSyncSendersByMsgPtr().end()) {
                         synchronousSender = syncSender->second;
-                        retrievedSyncSendersByMsgPtr_.erase(syncSender);
+                        ceGwe_.retrievedSyncSendersByMsgPtr().erase(syncSender);
                     }
                 }
                 if (msg == 0x0113 && lParam) {

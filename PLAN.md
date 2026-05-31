@@ -490,6 +490,10 @@ results, or timing thresholds.
     preserving current runtime orchestration and call-site behavior.
     Current source anchors: `src/ce_gwe.h`, `src/synthetic_dll.cpp`,
     `src/coredll_named_dispatch.cpp`, and `src/coredll_window_runtime.cpp`.
+  - [x] Move retrieved synchronous-sender message bookkeeping behind `CeGwe`
+    as part of the sent-message owner lane/freeze investigation cleanup.
+    Current source anchors: `src/ce_gwe.h`, `src/coredll_named_dispatch.cpp`,
+    and `src/synthetic_dll.cpp`.
 - [ ] Move `GuestDc`, `GuestBitmap`, GDI objects, stock objects, palettes,
   clip state, and window bitmap state behind `CeMgdi`.
   - [x] Move legacy runtime DC, bitmap, brush, pen, font, and bitmap-probe type

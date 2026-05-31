@@ -634,7 +634,6 @@ private:
     std::unordered_map<uint32_t, uint32_t> fileReadCounts_;
     std::unordered_map<uint32_t, uint32_t> fileSeekCounts_;
     std::vector<PendingBlockingApi> pendingBlockingApis_;
-    std::map<uint32_t, uint32_t> retrievedSyncSendersByMsgPtr_;
     bool interactiveSliceActive_{};
     bool interactiveSliceStopRequested_{};
     uint32_t interactiveSliceBlockCounter_{};

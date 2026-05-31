@@ -264,6 +264,14 @@ Current emulator difference:
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_named_dispatch.cpp`, and
   `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_window_runtime.cpp`. The
   2026-05-31 Release build passed with the existing vcpkg/Boost warnings.
+- Retrieved synchronous-sender bookkeeping for dispatched guest message
+  pointers now lives behind `CeGwe`, keeping the sent-message/freeze
+  investigation state with the GWE owner lane instead of the runtime header.
+  Current source anchors:
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/ce_gwe.h`,
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/coredll_named_dispatch.cpp`, and
+  `/mnt/d/GitHub/WinCE_Emulator_v2/src/synthetic_dll.cpp`. The 2026-05-31
+  Release build passed with the existing vcpkg/Boost warnings.
 - MGDI storage for DCs, bitmaps, brushes, pens, fonts, and stock-object
   handles now lives behind `CeMgdi`. Runtime drawing functions still perform
   the same guest-memory and host-framebuffer work through CeMgdi accessors, so

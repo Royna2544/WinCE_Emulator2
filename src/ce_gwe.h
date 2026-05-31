@@ -219,6 +219,12 @@ public:
     const std::vector<PendingUpdateWindow>& pendingUpdateWindows() const noexcept { return pendingUpdateWindows_; }
     std::vector<PendingMessageTransfer>& pendingMessageTransfers() noexcept { return pendingMessageTransfers_; }
     const std::vector<PendingMessageTransfer>& pendingMessageTransfers() const noexcept { return pendingMessageTransfers_; }
+    std::map<uint32_t, uint32_t>& retrievedSyncSendersByMsgPtr() noexcept {
+        return retrievedSyncSendersByMsgPtr_;
+    }
+    const std::map<uint32_t, uint32_t>& retrievedSyncSendersByMsgPtr() const noexcept {
+        return retrievedSyncSendersByMsgPtr_;
+    }
     size_t messageCount() const noexcept { return messages_.size(); }
     bool hasMessages() const noexcept { return !messages_.empty(); }
     void ensureThreadQueue(uint32_t ownerThread) {
@@ -697,6 +703,7 @@ private:
     std::vector<PendingCreateWindow> pendingCreateWindows_;
     std::vector<PendingUpdateWindow> pendingUpdateWindows_;
     std::vector<PendingMessageTransfer> pendingMessageTransfers_;
+    std::map<uint32_t, uint32_t> retrievedSyncSendersByMsgPtr_;
     std::map<uint32_t, ThreadQueue> threadQueues_;
     std::map<uint32_t, uint32_t> windowOwners_;
     std::map<uint32_t, WindowRegionState> windowRegions_;

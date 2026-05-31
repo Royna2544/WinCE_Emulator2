@@ -4220,9 +4220,9 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             writeGuestMessage(a0, message);
             if ((!peek || (removeFlags & kRemoveMessageFlag)) && a0) {
                 if (message.synchronousSender) {
-                    retrievedSyncSendersByMsgPtr_[a0] = message.synchronousSender;
+                    ceGwe_.retrievedSyncSendersByMsgPtr()[a0] = message.synchronousSender;
                 } else {
-                    retrievedSyncSendersByMsgPtr_.erase(a0);
+                    ceGwe_.retrievedSyncSendersByMsgPtr().erase(a0);
                 }
             }
             ret = 0;
@@ -4241,9 +4241,9 @@ bool SyntheticDllRuntime::dispatchLargeHostWin32(uint16_t ordinal,
             writeGuestMessage(a0, message);
             if ((!peek || (removeFlags & kRemoveMessageFlag)) && a0) {
                 if (message.synchronousSender) {
-                    retrievedSyncSendersByMsgPtr_[a0] = message.synchronousSender;
+                    ceGwe_.retrievedSyncSendersByMsgPtr()[a0] = message.synchronousSender;
                 } else {
-                    retrievedSyncSendersByMsgPtr_.erase(a0);
+                    ceGwe_.retrievedSyncSendersByMsgPtr().erase(a0);
                 }
             }
             ret = 1;
